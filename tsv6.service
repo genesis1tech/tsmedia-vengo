@@ -1,0 +1,59 @@
+[Unit]
+Description=TSV6 Raspberry Pi Video Player
+After=network-online.target pigpiod.service time-sync.target tsv6-wifi-provisioning.service
+Wants=network-online.target
+Requires=pigpiod.service tsv6-wifi-provisioning.service
+# Document all dependencies
+Documentation=file:///home/%i/ts_uscup/README.md
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/ts_uscup
+
+# Environment
+Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/%i/.Xauthority"
+Environment="TSV6_ENVIRONMENT=production"
+Environment="TSV6_SERVICE_NAME=tsv6@%i.service"
+Environment="SDL_AUDIODRIVER=dummy"
+Environment="PYGAME_HIDE_SUPPORT_PROMPT=1"
+Environment="ALSA_PCM_CARD=0"
+Environment="ALSA_PCM_DEVICE=0"
+Environment="ALSA_CONFIG_PATH=/dev/null"
+Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
+Environment="PULSE_SERVER="
+
+# Simplified security for compatibility
+PrivateTmp=no
+ReadWritePaths=/var/log/tsv6 /var/lib/tsv6 /home/%i/ts_uscup/logs /home/%i/ts_uscup/data /home/%i/ts_uscup/assets/certs /home/%i/logs /tmp /home/%i/.cache/uv
+ReadWritePaths=/home/%i/.config /home/%i/.cache
+
+# Startup - Simple startup without complex checks
+ExecStart=/home/%i/.local/bin/uv run python run_production.py
+
+# Restart policy - only restart on failure, not on clean exit
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Watchdog - disabled (application handles its own monitoring via error recovery)
+# WatchdogSec=0 disables watchdog
+WatchdogSec=0
+RuntimeMaxSec=infinity
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsv6
+
+# Resource limits
+TasksMax=100
+MemoryMax=2G
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target

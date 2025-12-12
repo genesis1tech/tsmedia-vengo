@@ -1,0 +1,62 @@
+# macOS
+.DS_Store
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Virtual environments
+venv/
+barcode_env/
+
+# Installation files
+*.zip
+
+# Media files
+*.mp4
+*.avi
+*.mov
+
+# AI/ML model files
+.qwen/
+
+# Environment files
+.env
+.env.*
+
+# Backup and temporary files
+*.backup
+*.backup*
+*.debug
+*.ota-temp
+*.pre-ota
+*~
+.*.swp
+
+# OTA staging directories
+/tmp/ota_staging/
+/tmp/ota_backup/
+/tmp/media_staging/
+
+# Image cache
+image_cache/
+event_images/*.jpg
+event_images/*.png
+
+# Certificates and private keys - SECURITY CRITICAL
+assets/certs/*.pem
+assets/certs/*.key
+assets/certs/*.crt
+assets/certs/secrets.json
+!assets/certs/.gitkeep
+assets/certs/device-config.json
+
+# Documentation
+*.md

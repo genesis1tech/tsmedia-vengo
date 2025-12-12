@@ -1,0 +1,36 @@
+[Unit]
+Description=TSV6 WiFi Provisioning Service
+Documentation=file:///home/%i/ts_uscup/README.md
+# Run before main TSV6 service
+Before=tsv6.service
+# Run after basic system services
+After=pigpiod.service time-sync.target
+# Don't require network - we create our own if needed
+
+[Service]
+Type=oneshot
+# Run as root for network configuration
+User=root
+Group=root
+WorkingDirectory=/home/%i/ts_uscup
+
+# Environment
+Environment="PATH=/home/%i/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Run provisioning check and captive portal if needed
+ExecStart=/home/%i/.local/bin/uv run python -m tsv6.provisioning.wifi_provisioner
+
+# Allow up to 12 minutes (10 min timeout + 2 min buffer)
+TimeoutStartSec=720
+
+# Don't restart - this is a one-shot service
+RemainAfterExit=no
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsv6-wifi-provision
+
+[Install]
+WantedBy=multi-user.target

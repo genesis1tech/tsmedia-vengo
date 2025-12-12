@@ -1,0 +1,28 @@
+[Unit]
+Description=Video Watchdog Service - Ensures continuous video playback
+After=graphical.target tsv6.service
+Wants=graphical.target
+BindsTo=tsv6.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/video-watchdog.sh
+Restart=always
+RestartSec=30
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=video-watchdog
+
+# Resource limits
+MemoryLimit=128M
+CPUQuota=10%
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log /proc/sys/vm
+
+[Install]
+WantedBy=multi-user.target

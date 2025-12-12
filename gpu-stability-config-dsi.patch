@@ -1,0 +1,26 @@
+--- gpu-stability-config.sh.orig
++++ gpu-stability-config.sh
+@@ -47,12 +47,15 @@
+         log "Configured VC4 with increased CMA allocation"
+     fi
+     
+-    # Force stable pixel clock and disable adaptive refresh
+-    if ! grep -q "hdmi_force_hotplug=1" /boot/config.txt; then
+-        echo "hdmi_force_hotplug=1" >> /boot/config.txt
+-        echo "hdmi_group=2" >> /boot/config.txt
+-        echo "hdmi_mode=82" >> /boot/config.txt  # 1920x1080 60Hz
+-        echo "hdmi_pixel_freq_limit=400000000" >> /boot/config.txt
+-        log "Configured stable HDMI output settings"
++    # Disable HDMI outputs since using DSI ribbon cable display
++    if ! grep -q "hdmi_ignore_hotplug=1" /boot/config.txt; then
++        echo "hdmi_ignore_hotplug=1" >> /boot/config.txt
++        echo "hdmi_ignore_composite=1" >> /boot/config.txt
++        echo "hdmi_blanking=1" >> /boot/config.txt
++        log "Disabled HDMI outputs for DSI-only operation"
++    fi
++    
++    # Optimize for DSI display
++    if ! grep -q "display_auto_detect=0" /boot/config.txt; then
++        echo "display_auto_detect=0" >> /boot/config.txt
++        log "Disabled automatic display detection"
+     fi

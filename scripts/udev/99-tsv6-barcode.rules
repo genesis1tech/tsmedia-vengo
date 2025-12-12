@@ -1,0 +1,5 @@
+# TSV6 Barcode Scanner Udev Rules
+# Grants input group access to input devices for barcode scanning
+# This allows non-root users in the 'input' group to read from /dev/input/event*
+
+SUBSYSTEM=="input", KERNEL=="event*", MODE="0660", GROUP="input"

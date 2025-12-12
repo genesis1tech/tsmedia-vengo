@@ -1,0 +1,62 @@
+[Unit]
+Description=TSV6 Soft Network Recovery (WPA reconfigure + DHCP refresh)
+Documentation=man:systemd.service(7)
+
+# This service is a oneshot helper that performs privileged network recovery actions.
+# It is intended to be called by the main tsv6 application via D-Bus.
+# It runs as root but is heavily hardened to minimize risk.
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+
+# Security Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run /var/run /tmp
+
+# Network capabilities only
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+
+# Restrict address families to network-related ones
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Restrict system calls to a minimal set
+SystemCallFilter=@system-service @network-io
+SystemCallErrorNumber=EPERM
+
+# Device access restrictions
+PrivateDevices=true
+DevicePolicy=closed
+DeviceAllow=/dev/null rw
+
+# Filesystem restrictions
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# Execution
+ExecStart=/usr/bin/env bash -c '\
+    INTERFACE=${1:-wlan0}; \
+    echo "[TSV6-RECOVERY-SOFT] Starting soft recovery for interface $INTERFACE"; \
+    /usr/bin/wpa_cli -i "$INTERFACE" reconfigure; \
+    /bin/sleep 3; \
+    /sbin/dhclient -r "$INTERFACE" || true; \
+    /bin/sleep 2; \
+    /sbin/dhclient "$INTERFACE"; \
+    echo "[TSV6-RECOVERY-SOFT] Soft recovery completed for $INTERFACE"'
+
+# Pass the interface name as an argument
+ExecStart=/usr/bin/env bash -c '\
+    %i %j'
+
+# Timeout and reliability
+TimeoutStartSec=30
+TimeoutStopSec=10

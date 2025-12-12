@@ -1,0 +1,62 @@
+# TSV6 Log Rotation Configuration - Issue #25
+# Prevents unbounded log growth that would fill SD card
+# This configuration handles both tmpfs and direct filesystem logging
+
+# TSV6 Application logs (main and error logs)
+/var/log/tsv6/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0644 pi pi
+    copytruncate
+    maxsize 50M
+    
+    # Post-rotation hook for persistent backup (optional)
+    postrotate
+        # Create persistent log backup directory if it doesn't exist
+        [ ! -d /home/pi/persistent_logs ] && mkdir -p /home/pi/persistent_logs
+        
+        # Copy compressed rotated logs to persistent storage for analysis
+        # Only keep last 3 rotated logs in persistent storage
+        find /var/log/tsv6 -name "*.log.*.gz" -newer /home/pi/persistent_logs/.last_sync 2>/dev/null | \
+            head -3 | xargs -I {} cp {} /home/pi/persistent_logs/ 2>/dev/null || true
+        
+        # Update sync marker
+        touch /home/pi/persistent_logs/.last_sync
+        
+        # Cleanup old persistent logs (keep only 14 days)
+        find /home/pi/persistent_logs -name "*.log.*.gz" -mtime +14 -delete 2>/dev/null || true
+    endscript
+}
+
+# Fallback log location (if application logs to home directory)
+/home/pi/logs/tsv6/*.log {
+    daily  
+    missingok
+    rotate 5
+    compress
+    delaycompress
+    notifempty
+    create 0644 pi pi
+    copytruncate
+    maxsize 25M
+}
+
+# System logs that could be affected by TSV6 (lighter rotation for SD card protection)
+/var/log/syslog
+/var/log/daemon.log
+/var/log/kern.log
+{
+    daily
+    missingok
+    rotate 3
+    compress
+    delaycompress
+    notifempty
+    create 0640 syslog adm
+    copytruncate
+    maxsize 100M
+}

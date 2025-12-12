@@ -1,0 +1,76 @@
+[Unit]
+Description=TSV6 Hard Network Recovery (Interface restart + full networking restart)
+Documentation=man:systemd.service(7)
+
+# This service is a oneshot helper that performs privileged network recovery actions.
+# It is intended to be called by the main tsv6 application via D-Bus.
+# It runs as root but is heavily hardened to minimize risk.
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+
+# Security Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run /var/run /tmp /var/log
+
+# Network and service management capabilities
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+
+# Restrict address families to network-related ones
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Restrict system calls
+SystemCallFilter=@system-service @network-io @system-service-management
+SystemCallErrorNumber=EPERM
+
+# Device access restrictions
+PrivateDevices=true
+DevicePolicy=closed
+DeviceAllow=/dev/null rw
+
+# Filesystem restrictions
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# Execution
+ExecStart=/usr/bin/env bash -c '\
+    INTERFACE=${1:-wlan0}; \
+    echo "[TSV6-RECOVERY-HARD] Starting hard recovery for interface $INTERFACE"; \
+    # Bring interface down \
+    echo "[TSV6-RECOVERY-HARD] Bringing interface $INTERFACE down"; \
+    /sbin/ip link set "$INTERFACE" down; \
+    /bin/sleep 2; \
+    # Stop networking services \
+    echo "[TSV6-RECOVERY-HARD] Stopping wpa_supplicant and networking"; \
+    /usr/bin/systemctl stop wpa_supplicant || true; \
+    /usr/bin/systemctl stop networking || true; \
+    /bin/sleep 3; \
+    # Bring interface up \
+    echo "[TSV6-RECOVERY-HARD] Bringing interface $INTERFACE up"; \
+    /sbin/ip link set "$INTERFACE" up; \
+    /bin/sleep 2; \
+    # Start networking services \
+    echo "[TSV6-RECOVERY-HARD] Starting networking and wpa_supplicant"; \
+    /usr/bin/systemctl start networking; \
+    /bin/sleep 3; \
+    /usr/bin/systemctl start wpa_supplicant || true; \
+    /bin/sleep 5; \
+    # Acquire new DHCP lease \
+    echo "[TSV6-RECOVERY-HARD] Acquiring new DHCP lease"; \
+    /sbin/dhclient "$INTERFACE" || true; \
+    /bin/sleep 5; \
+    echo "[TSV6-RECOVERY-HARD] Hard recovery completed for $INTERFACE"'
+
+# Timeout and reliability
+TimeoutStartSec=90
+TimeoutStopSec=10

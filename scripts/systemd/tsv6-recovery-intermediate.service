@@ -1,0 +1,75 @@
+[Unit]
+Description=TSV6 Intermediate Network Recovery (WiFi driver reload + networking restart)
+Documentation=man:systemd.service(7)
+
+# This service is a oneshot helper that performs privileged network recovery actions.
+# It is intended to be called by the main tsv6 application via D-Bus.
+# It runs as root but is heavily hardened to minimize risk.
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+
+# Security Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run /var/run /tmp /var/log
+
+# Network and module management capabilities
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_MODULE
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_MODULE
+
+# Restrict address families to network-related ones
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Restrict system calls
+SystemCallFilter=@system-service @network-io @module-control
+SystemCallErrorNumber=EPERM
+
+# Device access restrictions
+PrivateDevices=true
+DevicePolicy=closed
+DeviceAllow=/dev/null rw
+
+# Filesystem restrictions
+ProtectKernelTunables=true
+ProtectKernelModules=false # Needed for modprobe
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# Execution
+ExecStart=/usr/bin/env bash -c '\
+    INTERFACE=${1:-wlan0}; \
+    echo "[TSV6-RECOVERY-INTERMEDIATE] Starting intermediate recovery for interface $INTERFACE"; \
+    # Detect and unload WiFi modules in reverse order \
+    WIFI_MODULES=(); \
+    for module in brcmfmac brcmutil cfg80211; do \
+        if /sbin/lsmod | grep -q "^$module "; then \
+            WIFI_MODULES+=("$module"); \
+        fi; \
+    done; \
+    for module in $(printf "%s\n" "${WIFI_MODULES[@]}" | tac); do \
+        echo "[TSV6-RECOVERY-INTERMEDIATE] Unloading module: $module"; \
+        /sbin/modprobe -r "$module" || true; \
+    done; \
+    /bin/sleep 3; \
+    # Reload modules in original order \
+    for module in "${WIFI_MODULES[@]}"; do \
+        echo "[TSV6-RECOVERY-INTERMEDIATE] Reloading module: $module"; \
+        /sbin/modprobe "$module" || true; \
+    done; \
+    /bin/sleep 5; \
+    # Restart networking service \
+    echo "[TSV6-RECOVERY-INTERMEDIATE] Restarting networking service"; \
+    /usr/bin/systemctl restart networking; \
+    /bin/sleep 5; \
+    echo "[TSV6-RECOVERY-INTERMEDIATE] Intermediate recovery completed for $INTERFACE"'
+
+# Timeout and reliability
+TimeoutStartSec=60
+TimeoutStopSec=10

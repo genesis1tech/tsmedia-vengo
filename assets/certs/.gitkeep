@@ -1,0 +1,3 @@
+# This file preserves the assets/certs directory structure in git
+# Certificate files (*.pem, *.key, *.crt) are excluded from git for security
+# Actual certificates should be deployed outside the repository to /etc/tsv6/certs

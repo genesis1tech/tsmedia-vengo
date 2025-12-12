@@ -1,0 +1,58 @@
+# TSV6 Sleep Service
+#
+# SETUP REQUIRED: This service requires passwordless sudo for systemctl commands.
+# Create /etc/sudoers.d/tsv6-sleep with the following content:
+#
+#   # Allow sleep service to manage tsv6 service
+#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tsv6@*.service
+#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tsv6@*.service
+#
+# Then set permissions:
+#   sudo chmod 440 /etc/sudoers.d/tsv6-sleep
+#   sudo visudo -c  # Validate syntax
+#
+# INSTALLATION:
+#   sudo cp sleep.service /etc/systemd/system/sleep@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable sleep@$(whoami).service
+#   sudo systemctl start sleep@$(whoami).service
+
+[Unit]
+Description=TSV6 Sleep Service - Power Saving Mode Manager
+After=network-online.target
+Wants=network-online.target
+Documentation=file:///home/%i/ts_uscup/README.md
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/ts_uscup
+
+# Environment
+Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/%i/.Xauthority"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+Environment="TSV6_ENVIRONMENT=production"
+Environment="PYTHONPATH=/home/%i/ts_uscup/src"
+Environment="SDL_AUDIODRIVER=dummy"
+Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
+Environment="PULSE_SERVER="
+
+# Startup
+ExecStart=/home/%i/.local/bin/uv run python src/tsv6/core/sleep_service.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sleep
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,235 @@
+name: Version and Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.github/**'
+
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  version-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install semver gitpython packaging
+      
+      - name: Determine version bump
+        id: version_bump
+        run: |
+          # Get the latest tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v6.0.0")
+          echo "Latest tag: $LATEST_TAG"
+          
+          # Remove 'v' prefix if present
+          CURRENT_VERSION=${LATEST_TAG#v}
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Determine bump type
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BUMP_TYPE="${{ github.event.inputs.version_type }}"
+          else
+            # Auto-detect from commit messages
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s")
+            echo "Commits since last tag:"
+            echo "$COMMITS"
+            
+            if echo "$COMMITS" | grep -iE "^BREAKING|^feat!:|^fix!:"; then
+              BUMP_TYPE="major"
+            elif echo "$COMMITS" | grep -iE "^feat|^feature|^enhancement"; then
+              BUMP_TYPE="minor"
+            else
+              BUMP_TYPE="patch"
+            fi
+          fi
+          
+          echo "Bump type: $BUMP_TYPE"
+          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Calculate new version
+        id: new_version
+        run: |
+          python << EOF
+          import sys
+          from packaging import version as pkg_version
+          
+          current = "${{ steps.version_bump.outputs.current_version }}"
+          bump_type = "${{ steps.version_bump.outputs.bump_type }}"
+          
+          # Parse current version
+          v = pkg_version.parse(current)
+          major, minor, patch = v.major, v.minor, v.micro
+          
+          # Bump version
+          if bump_type == "major":
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump_type == "minor":
+              minor += 1
+              patch = 0
+          else:  # patch
+              patch += 1
+          
+          new_version = f"{major}.{minor}.{patch}"
+          print(f"New version: {new_version}")
+          
+          with open("$GITHUB_OUTPUT", "a") as f:
+              f.write(f"version={new_version}\n")
+              f.write(f"tag=v{new_version}\n")
+          EOF
+      
+      - name: Update CHANGELOG.md
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          
+          # Create release notes from commits
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          else
+            COMMITS=$(git log --pretty=format:"- %s" --no-merges | head -20)
+          fi
+          
+          # Prepare new changelog entry
+          cat << EOF > /tmp/changelog_entry.md
+          ## [${NEW_VERSION}] - ${DATE}
+          
+          ### Changed
+          ${COMMITS}
+          
+          EOF
+          
+          # Insert into CHANGELOG.md after [Unreleased] section
+          if [ -f CHANGELOG.md ]; then
+            # Find line number of first version header
+            LINE=$(grep -n "^## \[" CHANGELOG.md | head -1 | cut -d: -f1)
+            if [ -n "$LINE" ]; then
+              # Insert before first version
+              head -n $((LINE-1)) CHANGELOG.md > /tmp/changelog_new.md
+              cat /tmp/changelog_entry.md >> /tmp/changelog_new.md
+              tail -n +${LINE} CHANGELOG.md >> /tmp/changelog_new.md
+              mv /tmp/changelog_new.md CHANGELOG.md
+            else
+              # Append to end
+              cat /tmp/changelog_entry.md >> CHANGELOG.md
+            fi
+          fi
+          
+          echo "CHANGELOG.md updated"
+      
+      - name: Update version in pyproject.toml
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          if [ -f pyproject.toml ]; then
+            sed -i "s/^version = .*/version = \"${NEW_VERSION}\"/" pyproject.toml
+            echo "Updated pyproject.toml to version ${NEW_VERSION}"
+          fi
+      
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add CHANGELOG.md pyproject.toml
+          git commit -m "chore: bump version to ${{ steps.new_version.outputs.tag }}
+          
+          - Updated CHANGELOG.md
+          - Updated version in pyproject.toml
+          
+          Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>" || echo "No changes to commit"
+          
+          git push origin ${{ github.ref_name }}
+      
+      - name: Create Git tag
+        run: |
+          git tag -a "${{ steps.new_version.outputs.tag }}" -m "Release ${{ steps.new_version.outputs.tag }}"
+          git push origin "${{ steps.new_version.outputs.tag }}"
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -n "$LATEST_TAG" ]; then
+            NOTES=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          else
+            NOTES=$(git log --pretty=format:"- %s (%h)" --no-merges | head -20)
+          fi
+          
+          # Save to file for multiline
+          cat << EOF > /tmp/release_notes.md
+          ## What's Changed
+          
+          ${NOTES}
+          
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${{ steps.new_version.outputs.tag }}
+          EOF
+          
+          echo "Release notes generated"
+      
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.new_version.outputs.tag }}
+          name: Release ${{ steps.new_version.outputs.tag }}
+          bodyFile: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Comment on related issues
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          
+          # Get commit messages since last tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s")
+          else
+            COMMITS=$(git log --pretty=format:"%s" | head -20)
+          fi
+          
+          # Extract issue numbers from commits (e.g., "fix #123", "closes #456")
+          ISSUES=$(echo "$COMMITS" | grep -oE "#[0-9]+" | sort -u | tr -d '#')
+          
+          # Comment on each issue
+          for ISSUE in $ISSUES; do
+            gh issue comment "$ISSUE" --body "🎉 This issue has been addressed in release [v${NEW_VERSION}](https://github.com/${{ github.repository }}/releases/tag/v${NEW_VERSION})" || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
