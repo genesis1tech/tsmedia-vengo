@@ -1053,19 +1053,37 @@ class EnhancedVideoPlayer:
     
     def check_video_status(self):
         """Check video status and handle end of video with memory cleanup"""
-        if not self.is_playing:
-            return
-        
-        state = self.player.get_state()
-        
-        if state == vlc.State.Ended:
-            print("🔄 Video ended, playing next...")
-            self.next_video()
-        elif state == vlc.State.Error:
-            print("❌ Video error, skipping to next...")
-            self.next_video()
-        else:
-            self.root.after(2000, self.check_video_status)  # Slower checks for less CPU usage
+        try:
+            # Always check the actual player state, even if is_playing is False
+            state = self.player.get_state()
+
+            if self.is_playing:
+                if state == vlc.State.Ended:
+                    print("🔄 Video ended, playing next...")
+                    self.next_video()
+                elif state == vlc.State.Error:
+                    print("❌ Video error, skipping to next...")
+                    self.next_video()
+                elif state == vlc.State.Stopped:
+                    # Video stopped unexpectedly - restart it
+                    print("⚠️ Video stopped unexpectedly, restarting...")
+                    self.play_current_video(restart=True)
+                    return  # play_current_video schedules its own check
+            else:
+                # is_playing is False - check if video actually stopped and we need to restart
+                # This handles cases where overlay hide didn't properly resume video
+                if state == vlc.State.Stopped and self.video_files and not self.is_showing_image:
+                    print("⚠️ Video stopped while is_playing=False, restarting...")
+                    self.is_playing = True
+                    self.play_current_video(restart=True)
+                    return  # play_current_video schedules its own check
+
+        except Exception as e:
+            print(f"⚠️ Error checking video status: {e}")
+
+        # CRITICAL: Always reschedule to keep monitoring loop alive
+        # This prevents the black screen issue when the check loop stops
+        self.root.after(2000, self.check_video_status)
     
     def next_video(self, event=None):
         """Play next video in sequence with proper cleanup"""
@@ -1631,6 +1649,13 @@ class EnhancedVideoPlayer:
         except Exception as e:
             print(f"❌ Error hiding image overlay: {e}")
             self.is_showing_image = False
+            # CRITICAL: Ensure video restarts even on error to prevent black screen
+            try:
+                if self.video_files:
+                    self.is_playing = True
+                    self.play_current_video(restart=True)
+            except Exception as restart_error:
+                print(f"❌ Failed to restart video after overlay error: {restart_error}")
 
     def _hide_processing_overlay(self, resume_video=False):
         """
@@ -1667,6 +1692,14 @@ class EnhancedVideoPlayer:
 
         except Exception as e:
             print(f"❌ Error hiding processing overlay: {e}")
+            # If resume was requested but failed, try to restart video
+            if resume_video:
+                try:
+                    if self.video_files:
+                        self.is_playing = True
+                        self.play_current_video(restart=True)
+                except Exception as restart_error:
+                    print(f"❌ Failed to restart video after processing overlay error: {restart_error}")
 
     def _cleanup_current_media(self):
         """Clean up current media resources, keep player for efficiency"""
