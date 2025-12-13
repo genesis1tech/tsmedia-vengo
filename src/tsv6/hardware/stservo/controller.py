@@ -48,7 +48,7 @@ class STServoController:
     def __init__(
         self,
         port: Optional[str] = None,
-        baudrate: int = 115200,
+        baudrate: int = 1000000,  # ST3020 default is 1Mbps
         servo_id: int = 1,
         open_position: int = 1365,      # 120 degrees
         closed_position: int = 0,       # 0 degrees

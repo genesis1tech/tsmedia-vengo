@@ -3,7 +3,7 @@
 """
 Simple Barcode Reader for Raspberry Pi
 Optimized for continuous scanning of numeric barcodes
-Reads directly from USB-HID-KBW scanner input device
+Supports both USB-HID-KBW scanner input devices and serial scanners
 """
 
 import sys
@@ -17,47 +17,192 @@ import os
 import grp
 import pwd
 
+# Try to import serial for serial scanner support
+try:
+    import serial
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+
 class BarcodeReader:
-    def __init__(self, quiet=False):
+    def __init__(self, quiet=False, serial_port=None, baud_rate=9600):
         self.scan_count = 0
         self.running = True
         self.current_barcode = ""
         self.quiet = quiet
-        
-        # Persistent device handle management
+
+        # Scanner mode: 'hid', 'serial', or None (auto-detect)
+        self.scanner_mode = None
+
+        # Serial scanner settings
+        self.serial_port = serial_port
+        self.baud_rate = baud_rate
+        self._serial_handle = None
+
+        # Persistent device handle management (for HID mode)
         self._device_handle = None
         self._device_path = None
         self._last_access_time = 0
         self._handle_timeout = 30  # Close handle after 30 seconds of inactivity
-        
+
         # Updated keycode mapping - focusing on numbers and common barcode characters
         self.keycode_map = {
             # Number keys (main keyboard)
             2: '1', 3: '2', 4: '3', 5: '4', 6: '5',
             7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
-            
+
             # Keypad numbers (alternative) - more common on USB barcode scanners
             79: '1', 80: '2', 81: '3', 75: '4', 76: '5',
             77: '6', 71: '7', 72: '8', 73: '9', 82: '0',
-            
+
             # Common barcode special characters
             12: '-',    # Minus/dash (common in some barcodes)
             52: '.',    # Period/dot
             53: '/',    # Forward slash
-            
+
             # Space key (for some barcode formats)
             57: ' ',    # Spacebar
         }
-        
+
+        # Auto-detect scanner mode on initialization
+        self._detect_scanner_mode()
+
         # Setup signal handler for clean exit
         signal.signal(signal.SIGINT, self.signal_handler)
+
+    def _detect_scanner_mode(self):
+        """Auto-detect the scanner type (serial or HID)"""
+        # First, check for serial scanner (preferred for reliability)
+        serial_port = self._find_serial_scanner()
+        if serial_port:
+            self.scanner_mode = 'serial'
+            self.serial_port = serial_port
+            if not self.quiet:
+                self.log_message(f"Detected serial scanner at {serial_port}")
+            return
+
+        # Fall back to HID keyboard scanner
+        hid_device = self.find_scanner_device()
+        if hid_device:
+            self.scanner_mode = 'hid'
+            if not self.quiet:
+                self.log_message(f"Detected HID scanner at {hid_device}")
+            return
+
+        if not self.quiet:
+            self.log_message("No scanner detected", "WARNING")
+
+    def _find_serial_scanner(self):
+        """Find serial scanner port (not servo controllers)"""
+        if not SERIAL_AVAILABLE:
+            return None
+
+        # If a specific serial port was provided, use it
+        if self.serial_port and os.path.exists(self.serial_port):
+            return self.serial_port
+
+        # Check using pyserial's port detection
+        # Look for devices that are explicitly barcode scanners, not servo controllers
+        try:
+            ports = serial.tools.list_ports.comports()
+            for port in ports:
+                desc = str(port.description).lower() if port.description else ''
+                # Skip known servo controller adapters (115200 baud, Waveshare Bus Servo Adapter)
+                # The QinHeng 1a86:55d3 with product "USB Single Serial" is typically a servo adapter
+                if port.vid == 0x1a86 and port.pid == 0x55d3:
+                    # This is likely the Waveshare Bus Servo Adapter - skip it
+                    continue
+                # Look for devices that are explicitly scanners
+                if 'scanner' in desc or 'barcode' in desc:
+                    return port.device
+        except Exception:
+            pass
+
+        return None
+
+    def _open_serial(self):
+        """Open serial connection to scanner"""
+        if not SERIAL_AVAILABLE or not self.serial_port:
+            return False
+
+        try:
+            if self._serial_handle and self._serial_handle.is_open:
+                return True
+
+            self._serial_handle = serial.Serial(
+                port=self.serial_port,
+                baudrate=self.baud_rate,
+                timeout=0.01,  # 10ms timeout for responsive scanning
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+
+            if not self.quiet:
+                self.log_message(f"Opened serial port: {self.serial_port}")
+            return True
+
+        except Exception as e:
+            self.log_message(f"Failed to open serial port: {e}", "ERROR")
+            return False
+
+    def _close_serial(self):
+        """Close serial connection"""
+        if self._serial_handle and self._serial_handle.is_open:
+            try:
+                self._serial_handle.close()
+            except Exception:
+                pass
+            self._serial_handle = None
+
+    def _read_serial_barcode(self, timeout_sec=None):
+        """Read barcode from serial scanner"""
+        if not self._open_serial():
+            return None
+
+        start_time = time.time()
+        buffer = ""
+
+        try:
+            while self.running:
+                # Check timeout
+                if timeout_sec and (time.time() - start_time) > timeout_sec:
+                    break
+
+                # Check for available data
+                if self._serial_handle.in_waiting > 0:
+                    data = self._serial_handle.read(self._serial_handle.in_waiting)
+                    try:
+                        text = data.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text = data.decode('latin-1', errors='ignore')
+
+                    buffer += text
+
+                    # Check for line ending (barcode complete)
+                    if '\r' in buffer or '\n' in buffer:
+                        # Extract the barcode
+                        barcode = buffer.strip('\r\n').strip()
+                        if barcode:
+                            return barcode
+                        buffer = ""
+
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.001)
+
+        except Exception as e:
+            self.log_message(f"Serial read error: {e}", "ERROR")
+
+        return None
     
     def signal_handler(self, sig, frame):
         """Handle Ctrl+C gracefully"""
         if not self.quiet:
             print(f"\nScan session ended. Total scans: {self.scan_count}", file=sys.stderr)
         self.running = False
-        self._close_device_handle()  # Clean up persistent handle
+        self._close_device_handle()  # Clean up persistent HID handle
+        self._close_serial()  # Clean up serial handle
         sys.exit(0)
     
     def log_message(self, message, level="INFO"):
@@ -345,12 +490,17 @@ class BarcodeReader:
         """Scan a single barcode and return it"""
         # Clear any existing barcode buffer to prevent concatenation
         self.current_barcode = ""
-        
+
+        # Use serial mode if detected
+        if self.scanner_mode == 'serial':
+            return self._read_serial_barcode(timeout_sec)
+
+        # Fall back to HID keyboard mode
         device = self.find_scanner_device()
         if not device:
             self.log_message("Scanner device not found or not accessible", "ERROR")
             return None
-        
+
         try:
             for barcode in self.read_input_events(device, timeout_sec):
                 if barcode:
@@ -363,46 +513,79 @@ class BarcodeReader:
         except Exception as e:
             self.log_message(f"Error during scanning: {e}", "ERROR")
             return None
-        
+
         return None
     
     def scan_continuous(self, timeout_sec=None, logfile=None):
         """Continuous barcode scanning"""
+        self.log_message(f"Starting continuous barcode scanning (mode: {self.scanner_mode})")
+        self.log_message("Press Ctrl+C to exit")
+
+        # Use serial mode if detected
+        if self.scanner_mode == 'serial':
+            self._scan_continuous_serial(timeout_sec, logfile)
+            return
+
+        # Fall back to HID keyboard mode
         device = self.find_scanner_device()
         if not device:
             self.log_message("Scanner device not found or not accessible", "ERROR")
             return
-        
-        self.log_message("Starting continuous barcode scanning")
-        self.log_message("Press Ctrl+C to exit")
-        
+
         try:
             for barcode in self.read_input_events(device, timeout_sec):
                 if barcode:
-                    self.scan_count += 1
-                    
-                    # Output only the barcode
-                    print(barcode)
-                    sys.stdout.flush()  # Ensure immediate output
-                    
-                    # Log to file if specified
-                    if logfile:
-                        try:
-                            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            with open(logfile, 'a') as f:
-                                f.write(f"{timestamp} - {barcode}\n")
-                        except Exception as e:
-                            self.log_message(f"Failed to log to file: {e}", "ERROR")
-                    
+                    self._process_continuous_scan(barcode, logfile)
+
         except KeyboardInterrupt:
             pass
         except Exception as e:
             self.log_message(f"Error during scanning: {e}", "ERROR")
+
+    def _scan_continuous_serial(self, timeout_sec=None, logfile=None):
+        """Continuous scanning in serial mode"""
+        start_time = time.time()
+
+        try:
+            while self.running:
+                # Check timeout
+                if timeout_sec and (time.time() - start_time) > timeout_sec:
+                    break
+
+                barcode = self._read_serial_barcode(timeout_sec=1)  # 1 second timeout per read
+                if barcode:
+                    self._process_continuous_scan(barcode, logfile)
+                    start_time = time.time()  # Reset timeout after successful scan
+
+        except KeyboardInterrupt:
+            pass
+        except Exception as e:
+            self.log_message(f"Error during serial scanning: {e}", "ERROR")
+
+    def _process_continuous_scan(self, barcode, logfile=None):
+        """Process a barcode in continuous scanning mode"""
+        self.scan_count += 1
+
+        # Output only the barcode
+        print(barcode)
+        sys.stdout.flush()  # Ensure immediate output
+
+        # Log to file if specified
+        if logfile:
+            try:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with open(logfile, 'a') as f:
+                    f.write(f"{timestamp} - {barcode}\n")
+            except Exception as e:
+                self.log_message(f"Failed to log to file: {e}", "ERROR")
     
     def display_header(self):
         """Display startup header (only if not quiet)"""
         if not self.quiet:
-            print("Barcode Scanner v2.3 - Ready", file=sys.stderr)
+            print("Barcode Scanner v2.4 - Ready", file=sys.stderr)
+            print(f"Scanner mode: {self.scanner_mode or 'not detected'}", file=sys.stderr)
+            if self.scanner_mode == 'serial':
+                print(f"Serial port: {self.serial_port}", file=sys.stderr)
             has_access, _ = self.check_input_access()
             if has_access:
                 print("Input access: OK", file=sys.stderr)
