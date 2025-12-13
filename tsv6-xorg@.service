@@ -2,7 +2,7 @@
 Description=TSV6 X11 Server (no display manager)
 After=systemd-user-sessions.service
 ConditionPathExists=/dev/tty7
-Documentation=file:///home/%i/ts_uscup/README.md
+Documentation=file:///home/%i/tsrpi5/README.md
 
 [Service]
 Type=simple

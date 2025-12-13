@@ -1,23 +1,23 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
-After=network-online.target time-sync.target tsv6-wifi-provisioning.service tsv6-xorg@%i.service
-Wants=network-online.target tsv6-xorg@%i.service
-Requires=tsv6-wifi-provisioning.service
+After=network-online.target time-sync.target tsv6-xorg@g1tech.service
+Wants=network-online.target
+Requires=tsv6-xorg@g1tech.service
 # Document all dependencies
-Documentation=file:///home/%i/ts_uscup/README.md
+Documentation=file:///home/g1tech/tsrpi5/README.md
 
 [Service]
 Type=simple
-User=%i
-Group=%i
-WorkingDirectory=/home/%i/ts_uscup
+User=g1tech
+Group=g1tech
+WorkingDirectory=/home/g1tech/tsrpi5
 
 # Environment
-Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/home/g1tech/.local/bin:/home/g1tech/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/home/%i/.Xauthority"
+Environment="XAUTHORITY=/home/g1tech/.Xauthority"
 Environment="TSV6_ENVIRONMENT=production"
-Environment="TSV6_SERVICE_NAME=tsv6@%i.service"
+Environment="TSV6_SERVICE_NAME=tsv6.service"
 Environment="SDL_AUDIODRIVER=dummy"
 Environment="PYGAME_HIDE_SUPPORT_PROMPT=1"
 Environment="ALSA_PCM_CARD=0"
@@ -26,19 +26,12 @@ Environment="ALSA_CONFIG_PATH=/dev/null"
 Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
 Environment="PULSE_SERVER="
 
-# Simplified security for compatibility
-PrivateTmp=no
-ReadWritePaths=/var/log/tsv6 /var/lib/tsv6 /home/%i/ts_uscup/logs /home/%i/ts_uscup/data /home/%i/ts_uscup/assets/certs /home/%i/logs /tmp /home/%i/.cache/uv
-ReadWritePaths=/home/%i/.config /home/%i/.cache
-
 # Startup - Simple startup without complex checks
-ExecStart=/home/%i/.local/bin/uv run python run_production.py
+ExecStart=/home/g1tech/.local/bin/uv run python run_production.py
 
 # Restart policy - only restart on failure, not on clean exit
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Watchdog - disabled (application handles its own monitoring via error recovery)
 # WatchdogSec=0 disables watchdog
