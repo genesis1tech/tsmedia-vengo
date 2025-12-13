@@ -299,7 +299,7 @@ class VideoConfig:
     network_caching_ms: int = 300  # 300ms for network streams
     
     # Video output settings
-    vout_mode: str = "drm"  # Direct Rendering Manager (faster than X11 on Pi)
+    vout_mode: str = "x11"  # X11 output for tkinter embedding (drm bypasses X11)
     
     # MediaListPlayer settings
     use_medialist_player: bool = True  # Use playlist for seamless transitions
