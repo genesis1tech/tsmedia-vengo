@@ -141,7 +141,7 @@ class ScannerConfig:
 
 @dataclass
 class ServoConfig:
-    """Servo motor configuration"""
+    """Servo motor configuration (legacy - for DFRobot HAT)"""
     # DFRobot HAT PWM channel (0-3)
     SERVO_PIN: int = 0  # DFRobot HAT PWM 0
 
@@ -152,6 +152,44 @@ class ServoConfig:
     # Timing
     DOOR_OPEN_DURATION: int = 3000  # milliseconds
     SERVO_SETTLE_TIME: int = 500  # milliseconds
+
+
+@dataclass
+class BusServoConfig:
+    """
+    Waveshare ST3020 Bus Servo configuration.
+
+    Used with Bus Servo Adapter (A) via USB serial.
+    Position values: 0-4095 (4096 steps per 360 degrees)
+    """
+    # Driver type
+    driver: str = "stservo"
+
+    # Serial port settings
+    port: str = "/dev/ttyUSB0"
+    baudrate: int = 115200
+
+    # Servo identification
+    servo_id: int = 1
+
+    # Position settings (0-4095 range)
+    # 120 degrees = 1365, 90 degrees = 1024
+    open_position: int = 1365   # 120 degrees
+    closed_position: int = 0    # 0 degrees
+
+    # Speed and timing
+    moving_speed: int = 0       # 0 = maximum speed (fastest)
+    acceleration: int = 50      # Acceleration value
+    hold_seconds: float = 3.0   # Time to hold door open
+    timeout_seconds: float = 1.0  # Command timeout
+
+    def degrees_to_position(self, degrees: float) -> int:
+        """Convert degrees to position value."""
+        return int(degrees * 4096.0 / 360.0)
+
+    def position_to_degrees(self, position: int) -> float:
+        """Convert position value to degrees."""
+        return position * 360.0 / 4096.0
 
 
 @dataclass
@@ -384,6 +422,7 @@ class Config:
         self.aws = AWSConfig()
         self.scanner = ScannerConfig()
         self.servo = ServoConfig()
+        self.bus_servo = BusServoConfig()
         self.files = FileConfig()
         self.products = ProductConfig()
         self.tasks = TaskConfig()
@@ -451,12 +490,13 @@ config = Config()
 # Convenience exports
 __all__ = [
     'Config',
-    'DeviceConfig', 
+    'DeviceConfig',
     'DisplayConfig',
     'NetworkConfig',
     'AWSConfig',
-    'ScannerConfig', 
+    'ScannerConfig',
     'ServoConfig',
+    'BusServoConfig',
     'FileConfig',
     'ProductConfig',
     'TaskConfig',

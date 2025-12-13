@@ -12,10 +12,11 @@
 #        GitHub credentials are optional (defaults to factory-droid[bot])
 #
 # IMPORTANT: This script is optimized for RASPBERRY PI 5 ONLY
-#            For Raspberry Pi 4B, use: ./tsv6-pi-setup.sh
 #
 # Designed for: Raspberry Pi OS Lite (64-bit) - Bookworm
 # Hardware: Raspberry Pi 5 (8GB RAM) with Waveshare 7" DSI Display
+# Servo: Waveshare ST3020 via Bus Servo Adapter (A) - USB Serial
+# Display: Minimal X11 (no display manager) for tkinter support
 # Performance Notes:
 #   - GPU Memory: 256MB (vs 128MB on Pi 4)
 #   - Memory Thresholds: Relaxed for 8GB RAM (75%/85%/92%)
@@ -62,7 +63,7 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-log "Starting TSV6 Raspberry Pi Complete Setup..."
+log "Starting TSV6 Raspberry Pi 5 Complete Setup..."
 
 # ============================================================================
 # STEP 1: Pre-Setup Validation
@@ -81,24 +82,24 @@ CONNECTIVITY_OK=false
 
 # Method 1: Try DNS ping (may work if DNS is available)
 if ping -c 1 8.8.8.8 &> /dev/null; then
-    info "✓ Connectivity confirmed via DNS ping"
+    info "Connectivity confirmed via DNS ping"
     CONNECTIVITY_OK=true
 # Method 2: Try HTTP request (works even if ICMP blocked)
 elif curl -s --max-time 5 http://httpbin.org/ip &> /dev/null; then
-    info "✓ Connectivity confirmed via HTTP request"
+    info "Connectivity confirmed via HTTP request"
     CONNECTIVITY_OK=true
 # Method 3: Try HTTPS to common site
 elif curl -s --max-time 5 https://www.google.com &> /dev/null; then
-    info "✓ Connectivity confirmed via HTTPS"
+    info "Connectivity confirmed via HTTPS"
     CONNECTIVITY_OK=true
 # Method 4: Try apt update as final test
 elif sudo apt-get update -qq &> /dev/null; then
-    info "✓ Connectivity confirmed via package manager"
+    info "Connectivity confirmed via package manager"
     CONNECTIVITY_OK=true
 fi
 
 if [[ "$CONNECTIVITY_OK" == false ]]; then
-    error "⚠ Internet connectivity check failed"
+    error "Internet connectivity check failed"
     warning "Common causes:"
     warning "  - ICMP blocked (ping not working)"
     warning "  - DNS issues"
@@ -109,11 +110,11 @@ if [[ "$CONNECTIVITY_OK" == false ]]; then
     warning "If issues occur later, check your network configuration."
     # Don't exit - let the script continue
 else
-    info "✓ Internet connectivity verified"
+    info "Internet connectivity verified"
 fi
 
 info "System appears ready for setup"
-log "✓ Step 1 completed successfully"
+log "Step 1 completed successfully"
 
 # ============================================================================
 # STEP 2: Initial System Update
@@ -126,7 +127,7 @@ sudo apt update
 info "Upgrading existing packages..."
 sudo apt upgrade -y
 
-log "✓ Step 2 completed successfully"
+log "Step 2 completed successfully"
 
 # ============================================================================
 # STEP 3: Initial System Configuration
@@ -150,90 +151,89 @@ info "Installing TSV6-specific packages..."
 # Try newer package names first, fallback to older ones
 # Fix for libatlas-base-dev (replaced by libatlas-base-accel-dev in newer OS)
 if sudo apt install -y libatlas-base-accel-dev 2>/dev/null; then
-    info "✓ libatlas-base-accel-dev installed (newer package)"
+    info "libatlas-base-accel-dev installed (newer package)"
 elif sudo apt install -y libatlas-base-dev 2>/dev/null; then
-    info "✓ libatlas-base-dev installed (legacy package)"
+    info "libatlas-base-dev installed (legacy package)"
 elif sudo apt install -y libblas-dev liblapack-dev 2>/dev/null; then
-    info "✓ libblas-dev and liblapack-dev installed (alternative math libraries)"
+    info "libblas-dev and liblapack-dev installed (alternative math libraries)"
 else
-    warning "⚠ Math libraries may not be installed - some ML functions may be slower"
+    warning "Math libraries may not be installed - some ML functions may be slower"
 fi
 
 # Fix for python3-tkinter (may be python3-tk in some versions)
 if sudo apt install -y python3-tkinter 2>/dev/null; then
-    info "✓ python3-tkinter installed"
+    info "python3-tkinter installed"
 elif sudo apt install -y python3-tk 2>/dev/null; then
-    info "✓ python3-tk installed (alternative package)"
+    info "python3-tk installed (alternative package)"
 else
-    warning "⚠ tkinter not available - some GUI features may not work"
+    warning "tkinter not available - some GUI features may not work"
 fi
 
 # Install VLC and related packages
 if sudo apt install -y vlc python3-vlc 2>/dev/null; then
-    info "✓ VLC and python3-vlc installed"
+    info "VLC and python3-vlc installed"
 else
-    warning "⚠ VLC installation failed - video playback may not work"
+    warning "VLC installation failed - video playback may not work"
 fi
 
 # Install I2C tools
 if sudo apt install -y i2c-tools 2>/dev/null; then
-    info "✓ I2C tools installed"
+    info "I2C tools installed"
 else
-    warning "⚠ I2C tools not available - hardware I2C access may fail"
+    warning "I2C tools not available - hardware I2C access may fail"
 fi
 
 # Install image libraries
 if sudo apt install -y libjpeg-dev zlib1g-dev libpng-dev 2>/dev/null; then
-    info "✓ Image processing libraries installed"
+    info "Image processing libraries installed"
 else
-    warning "⚠ Some image processing libraries may be missing"
+    warning "Some image processing libraries may be missing"
 fi
 
 # Install jq for JSON processing
 if sudo apt install -y jq 2>/dev/null; then
-    info "✓ jq (JSON processor) installed"
+    info "jq (JSON processor) installed"
 else
-    warning "⚠ jq not available - JSON processing may be limited"
+    warning "jq not available - JSON processing may be limited"
 fi
 
-info "Installing display server components..."
+info "Installing minimal X11 server (no display manager)..."
 
-# Install core display components
-if sudo apt install -y xorg lightdm openbox 2>/dev/null; then
-    info "✓ Core display server (xorg, lightdm, openbox) installed"
+# Install minimal X11 for tkinter support (NO lightdm, openbox, tint2)
+if sudo apt install -y xserver-xorg-core xinit x11-utils 2>/dev/null; then
+    info "Minimal X11 server installed (xserver-xorg-core, xinit, x11-utils)"
 else
-    error "❌ Failed to install core display server components"
+    error "Failed to install minimal X11 server components"
     exit 1
 fi
 
-# Install desktop environment components (with fallbacks)
-sudo apt install -y tint2 2>/dev/null || warning "⚠ tint2 (taskbar) not available"
-
-# Install X11 utilities (xrandr is often included in x11-xserver-utils)
+# Install X11 server utilities (xrandr, etc.)
 if sudo apt install -y x11-xserver-utils 2>/dev/null; then
-    info "✓ X11 server utilities installed"
-elif sudo apt install -y x11-utils 2>/dev/null; then
-    info "✓ X11 utilities installed (alternative package)"
+    info "X11 server utilities installed"
 else
-    warning "⚠ X11 utilities not available - display configuration may be limited"
+    warning "X11 server utilities not available"
 fi
 
 # Install input device tools
-sudo apt install -y xinput 2>/dev/null || warning "⚠ xinput not available"
-
-# Install cursor hiding utility
-sudo apt install -y unclutter 2>/dev/null || warning "⚠ unclutter not available"
+sudo apt install -y xinput 2>/dev/null || warning "xinput not available"
 
 info "Installing Python development tools and GPIO libraries..."
 sudo apt install -y python3-venv python3-setuptools
 
 # Install GPIO Python system packages
 if sudo apt install -y python3-gpiozero 2>/dev/null; then
-    info "✓ python3-gpiozero installed"
+    info "python3-gpiozero installed"
 else
-    warning "⚠ python3-gpiozero not available - will install via pip"
+    warning "python3-gpiozero not available - will install via pip"
 fi
-sudo apt install -y python3-rpi.gpio 2>/dev/null || warning "⚠ python3-rpi.gpio not available"
+sudo apt install -y python3-rpi.gpio 2>/dev/null || warning "python3-rpi.gpio not available"
+
+# Install pyserial for STServo bus servo
+if sudo apt install -y python3-serial 2>/dev/null; then
+    info "python3-serial installed for bus servo control"
+else
+    warning "python3-serial not available - will install via pip"
+fi
 
 info "Configuring system settings..."
 
@@ -250,12 +250,12 @@ sudo raspi-config nonint do_ssh 0  # 0 = enable
 info "Expanding filesystem..."
 sudo raspi-config nonint do_expand_rootfs
 
-# Configure boot behaviour for desktop autologin (raspi-config supported)
-info "Configuring boot behaviour for display..."
+# Configure boot behaviour for console autologin (NOT desktop)
+info "Configuring boot behaviour for console autologin..."
 sudo raspi-config nonint do_boot_behaviour B2 2>/dev/null || warning "Boot behaviour config may not be supported"
 
-# Configure boot splash (raspi-config supported)
-info "Configuring boot splash screen..."
+# Disable boot splash for faster boot
+info "Disabling boot splash screen..."
 sudo raspi-config nonint do_boot_splash 1 2>/dev/null || warning "Boot splash config may not be supported"
 
 # GPU memory split - manually configure (deprecated in raspi-config)
@@ -266,7 +266,7 @@ if [ -f "$CONFIG_FILE" ]; then
     sudo sed -i '/^gpu_mem=/d' "$CONFIG_FILE"
     # Add gpu_mem=256 for Pi 5 DSI display (enhanced for 8GB RAM)
     echo "gpu_mem=256" | sudo tee -a "$CONFIG_FILE" > /dev/null
-    info "✓ GPU memory set to 256MB (Pi 5 optimized)"
+    info "GPU memory set to 256MB (Pi 5 optimized)"
 else
     warning "Config file not found at $CONFIG_FILE"
 fi
@@ -328,7 +328,7 @@ NEW_HOSTNAME="${HOSTNAME_PREFIX}-${TIMESTAMP}"
 info "Setting hostname to: $NEW_HOSTNAME"
 sudo raspi-config nonint do_hostname "$NEW_HOSTNAME"
 
-log "✓ Step 3 completed successfully"
+log "Step 3 completed successfully"
 
 # ============================================================================
 # STEP 4: Security Hardening
@@ -377,10 +377,10 @@ fi
 # Always generate GitHub SSH key with available credentials
 if [[ -n "$GITHUB_EMAIL" && -n "$GITHUB_USERNAME" ]]; then
     info "Generating GitHub SSH key for user: $GITHUB_USERNAME"
-    
+
     if [[ ! -f ~/.ssh/github_key ]]; then
         ssh-keygen -t ed25519 -C "$GITHUB_EMAIL" -f ~/.ssh/github_key -N ""
-        
+
         # Create SSH config for GitHub
         mkdir -p ~/.ssh
         tee -a ~/.ssh/config > /dev/null <<EOF
@@ -391,28 +391,28 @@ Host github.com
   IdentityFile ~/.ssh/github_key
   IdentitiesOnly yes
 EOF
-        
+
         chmod 600 ~/.ssh/config
-        
+
         # Add to ssh-agent
         eval "$(ssh-agent -s)"
         ssh-add ~/.ssh/github_key
-        
-        info "✓ GitHub SSH key generated successfully!"
-        info "✓ SSH key can be added to GitHub account for push access"
+
+        info "GitHub SSH key generated successfully!"
+        info "SSH key can be added to GitHub account for push access"
         info "Public key for reference:"
         echo "=================================="
         cat ~/.ssh/github_key.pub
         echo "=================================="
     else
-        info "✓ GitHub SSH key already exists"
+        info "GitHub SSH key already exists"
         # Ensure it's added to ssh-agent
         eval "$(ssh-agent -s)"
         ssh-add ~/.ssh/github_key 2>/dev/null || true
     fi
 else
-    error "❌ GitHub credentials are missing"
-    error "❌ Cannot generate SSH key without GITHUB_EMAIL and GITHUB_USERNAME"
+    error "GitHub credentials are missing"
+    error "Cannot generate SSH key without GITHUB_EMAIL and GITHUB_USERNAME"
     exit 1
 fi
 
@@ -430,7 +430,7 @@ warning "Current SSH session will remain active. Test new connection before clos
 
 sudo systemctl restart ssh
 
-log "✓ Step 4 completed successfully"
+log "Step 4 completed successfully"
 
 # ============================================================================
 # STEP 5: Python Environment Setup
@@ -495,23 +495,23 @@ EOF
 
 chmod +x ~/activate_uv_env.sh
 
-# Create display environment setup script
+# Create display environment setup script (for minimal X11)
 tee ~/setup_display_env.sh > /dev/null <<EOF
 #!/bin/bash
-# Display environment setup for TSV6 applications
+# Display environment setup for TSV6 applications (minimal X11)
 export DISPLAY=:0
 export XAUTHORITY=\$HOME/.Xauthority
 
-# Wait for X11 server to be ready
+# Wait for X11 server to be ready (tsv6-xorg@ service)
 echo "Waiting for X11 server..."
-timeout 30 bash -c "until [[ -e \$XAUTHORITY ]]; do sleep 1; done"
+timeout 30 bash -c "until xdpyinfo &>/dev/null; do sleep 1; done"
 
 # Verify display is available
 if xrandr &>/dev/null; then
-    echo "✓ Display server is ready"
+    echo "Display server is ready"
     xrandr --query
 else
-    echo "⚠ Display server not responding"
+    echo "Display server not responding"
     exit 1
 fi
 EOF
@@ -522,131 +522,69 @@ info "Creating projects directory..."
 mkdir -p ~/projects
 
 # Add user to groups for hardware access
-sudo usermod -a -G dialout $USER
+sudo usermod -a -G dialout $USER  # Serial port access for STServo
 sudo usermod -a -G i2c $USER
 sudo usermod -a -G spi $USER
+sudo usermod -a -G input $USER  # Input device access for barcode scanner
 
-# Configure display manager for auto-login
-info "Configuring display manager for auto-login..."
-sudo systemctl enable lightdm
-sudo systemctl set-default graphical.target
+# Set system default to multi-user.target (console, not graphical)
+info "Setting system default to multi-user.target (console boot)..."
+sudo systemctl set-default multi-user.target
 
-# Configure auto-login for current user
-sudo tee /etc/lightdm/lightdm.conf > /dev/null << EOF
-[SeatDefaults]
-autologin-user=$USER
-autologin-user-timeout=0
-autologin-session=openbox-session
-user-session=openbox
-EOF
+# Install TSV6 X11 server service
+info "Installing tsv6-xorg@ service for minimal X11..."
 
-log "✓ Step 5 completed successfully"
+# Get the script directory to find the service file
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ============================================================================
-# STEP 6: pigpio Installation for GPIO Control
-# ============================================================================
-log "STEP 6: Installing pigpio for GPIO servo control..."
-
-info "Installing pigpio dependencies..."
-sudo apt update
-sudo apt install -y python3-pigpio
-
-info "Installing pigpio daemon from source..."
-cd /tmp
-rm -rf pigpio-master master.zip 2>/dev/null || true
-
-wget -q https://github.com/joan2937/pigpio/archive/master.zip
-unzip -q master.zip
-cd pigpio-master
-
-info "Building pigpio (this may take a few minutes)..."
-make -j$(nproc) > /dev/null 2>&1
-sudo make install > /dev/null 2>&1
-
-info "Configuring pigpiod service..."
-
-# Cleanup any potentially broken manual service configuration from previous runs
-if [ -f /etc/systemd/system/pigpiod.service ]; then
-    sudo rm /etc/systemd/system/pigpiod.service
-fi
-
-# Ensure pigpiod binary exists
-if ! command -v pigpiod &> /dev/null; then
-    warning "pigpiod binary not found in PATH. Checking common locations..."
-    if [ -x "/usr/bin/pigpiod" ]; then
-        PIGPIOD_BIN="/usr/bin/pigpiod"
-    elif [ -x "/usr/local/bin/pigpiod" ]; then
-        PIGPIOD_BIN="/usr/local/bin/pigpiod"
-    else
-        error "pigpiod binary not found. Installation failed."
-        exit 1
-    fi
+if [ -f "$SCRIPT_DIR/tsv6-xorg@.service" ]; then
+    sudo cp "$SCRIPT_DIR/tsv6-xorg@.service" /etc/systemd/system/
+    sudo chmod 644 /etc/systemd/system/tsv6-xorg@.service
+    info "tsv6-xorg@.service installed from project"
 else
-    PIGPIOD_BIN=$(which pigpiod)
-fi
-
-info "Found pigpiod at: $PIGPIOD_BIN"
-
-# Create robust systemd service
-info "Creating pigpiod systemd service..."
-sudo tee /etc/systemd/system/pigpiod.service > /dev/null <<EOF
+    # Create the service file inline if not found
+    info "Creating tsv6-xorg@.service inline..."
+    sudo tee /etc/systemd/system/tsv6-xorg@.service > /dev/null <<'EOL'
 [Unit]
-Description=Pigpio daemon
-After=network.target
+Description=TSV6 X11 Server (no display manager)
+After=systemd-user-sessions.service
+ConditionPathExists=/dev/tty7
 
 [Service]
-Type=forking
-ExecStart=${PIGPIOD_BIN} -l
-ExecStop=/bin/systemctl kill pigpiod
+Type=simple
+User=%i
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/xinit /bin/bash -c "exec sleep infinity" -- :0 vt7 -keeptty -noreset
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOL
+    sudo chmod 644 /etc/systemd/system/tsv6-xorg@.service
+fi
 
+# Reload and enable the X11 service for current user
 sudo systemctl daemon-reload
-sudo systemctl enable pigpiod
-sudo systemctl start pigpiod
+sudo systemctl enable "tsv6-xorg@$USER.service"
+info "tsv6-xorg@$USER.service enabled"
 
-# Wait a moment for service to start
-sleep 2
+log "Step 5 completed successfully"
 
-if systemctl is-active --quiet pigpiod; then
-    info "✓ pigpiod service is running"
-else
-    warning "pigpiod service failed to start. Checking status..."
-    sudo systemctl status pigpiod --no-pager || true
-fi
-
-info "Testing pigpio Python library..."
-if python3 -c "import pigpio; pi = pigpio.pi(); print('✓ Connected:', pi.connected); pi.stop()" 2>/dev/null; then
-    info "✓ pigpio test successful"
-else
-    warning "pigpio Python test failed - will be installed via pip in virtual environment"
-fi
-
-info "GPIO18 servo ready: Pin 18 (Physical 12), 50Hz PWM"
-
-# Cleanup
-cd /home/pi 2>/dev/null || cd ~
-sudo rm -rf /tmp/pigpio-master /tmp/master.zip 2>/dev/null || true
-
-log "✓ Step 6 completed successfully"
-
-# STEP 7: Git Configuration and GitHub Setup
 # ============================================================================
-log "STEP 7: Setting up Git and GitHub..."
+# STEP 6: Git Configuration and GitHub Setup
+# ============================================================================
+log "STEP 6: Setting up Git and GitHub..."
 
 if [[ -n "$GITHUB_EMAIL" && -n "$GITHUB_USERNAME" ]]; then
     info "Configuring Git with provided credentials..."
     git config --global user.name "$GITHUB_USERNAME"
     git config --global user.email "$GITHUB_EMAIL"
     git config --global init.defaultBranch main
-    
+
     # Check if GitHub SSH key is available
     if [[ -f ~/.ssh/github_key ]]; then
-        info "✓ GitHub SSH key is available for repository cloning"
+        info "GitHub SSH key is available for repository cloning"
     else
         warning "GitHub SSH key not found. Repository cloning will use HTTPS fallback."
     fi
@@ -654,12 +592,12 @@ else
     warning "GitHub credentials not provided. Skipping Git configuration."
 fi
 
-log "✓ Step 7 completed successfully"
+log "Step 6 completed successfully"
 
 # ============================================================================
-# STEP 7.5: Install TSV6 Python Dependencies
+# STEP 7: Install TSV6 Python Dependencies
 # ============================================================================
-log "STEP 7.5: Installing TSV6 Python dependencies..."
+log "STEP 7: Installing TSV6 Python dependencies..."
 
 # Ensure project directory exists
 mkdir -p ~/projects
@@ -692,40 +630,40 @@ uv pip install --python .venv/bin/python -e . || {
     exit 1
 }
 
-# Verify key runtime libraries
+# Verify key runtime libraries (no pigpio - using pyserial for STServo)
 info "Verifying key Python libraries..."
 .venv/bin/python3 - << 'PY'
 import importlib, sys, traceback
 pkgs = [
-    'awsiot','awscrt','psutil','pygame','PIL','vlc','qrcode','pigpio'
+    'awsiot','awscrt','psutil','pygame','PIL','vlc','qrcode','serial'
 ]
 missing = []
 for p in pkgs:
     try:
         importlib.import_module(p)
     except Exception:
-        print(f"⚠ Failed to import {p}:")
+        print(f"Failed to import {p}:")
         traceback.print_exc()
         missing.append(p)
 if missing:
-    print('⚠ Missing Python packages:', ', '.join(missing))
+    print('Missing Python packages:', ', '.join(missing))
     sys.exit(1)
 else:
-    print('✓ All key Python packages available')
+    print('All key Python packages available')
 PY
 
 if [ $? -eq 0 ]; then
-    info "✓ Python dependencies verified successfully"
+    info "Python dependencies verified successfully"
 else
     warning "Some Python packages may be missing - check logs above"
 fi
 
-log "✓ Step 7.5 completed successfully"
+log "Step 7 completed successfully"
 
 # ============================================================================
-# STEP 7.7: Create Runtime Directories
+# STEP 8: Create Runtime Directories
 # ============================================================================
-log "STEP 7.7: Creating runtime directories for TSV6..."
+log "STEP 8: Creating runtime directories for TSV6..."
 
 # Determine the project directory for runtime paths
 if [ -n "$PROJECT_DIR" ]; then
@@ -759,7 +697,7 @@ mkdir -p "$PROJECT_DIR/data/cache"      # For cached data
 mkdir -p "$PROJECT_DIR/data/temp"       # For temporary files
 mkdir -p "$PROJECT_DIR/data/state"      # For persistent state
 
-info "✓ Runtime directory structure created:"
+info "Runtime directory structure created:"
 info "  - $PROJECT_DIR/data (runtime data)"
 info "  - $PROJECT_DIR/logs (application logs)"
 info "  - $PROJECT_DIR/assets/certs (AWS IoT certificates)"
@@ -769,20 +707,18 @@ info "  - $PROJECT_DIR/data/state (persistent state)"
 
 # Verify directories were created
 if [ -d "$PROJECT_DIR/data" ] && [ -d "$PROJECT_DIR/logs" ]; then
-    info "✓ Runtime directories verified successfully"
+    info "Runtime directories verified successfully"
 else
     error "Failed to create runtime directories"
     exit 1
 fi
 
-log "✓ Step 7.7 completed successfully"
+log "Step 8 completed successfully"
 
 # ============================================================================
-
+# STEP 9: Project Deployment (Manual)
 # ============================================================================
-# STEP 8: Project Deployment (Manual)
-# ============================================================================
-log "STEP 8: Project setup - Manual deployment required..."
+log "STEP 9: Project setup - Manual deployment required..."
 
 info "TSV6 project should be cloned manually to ~/projects/tsv6_rpi"
 info "After setup completes, run:"
@@ -792,12 +728,12 @@ echo "  cd tsv6_rpi"
 echo "  uv venv && source .venv/bin/activate"
 echo "  uv pip install -r requirements.txt"
 
-log "✓ Step 8 completed - Manual project deployment instructions provided"
+log "Step 9 completed - Manual project deployment instructions provided"
 
 # ============================================================================
-# STEP 9: AWS IoT Certificate Deployment
+# STEP 10: AWS IoT Certificate Deployment
 # ============================================================================
-log "STEP 9: Checking for AWS IoT certificates..."
+log "STEP 10: Checking for AWS IoT certificates..."
 
 # Get device serial number for Thing name and device ID generation
 DEVICE_SERIAL=$(cat /proc/cpuinfo | grep Serial | cut -d' ' -f2)
@@ -851,43 +787,38 @@ if [[ "$CERTS_FOUND" == true ]]; then
         cp "aws_cert_crt.pem" "$CERTS_DIR/"
         chmod 644 "$CERTS_DIR/aws_cert_crt.pem"
     fi
-    
+
     if [[ -f "aws_cert_private.pem" ]]; then
         cp aws_cert_private.pem "$CERTS_DIR/"
         chmod 600 "$CERTS_DIR/aws_cert_private.pem"  # Secure permissions for private key
     fi
-    
+
     if [[ -f "aws_cert_public.pem" ]]; then
         cp aws_cert_public.pem "$CERTS_DIR/"
         chmod 644 "$CERTS_DIR/aws_cert_public.pem"
     fi
-    
+
     if [[ -f "aws_cert_ca.pem" ]]; then
         cp aws_cert_ca.pem "$CERTS_DIR/"
         chmod 644 "$CERTS_DIR/aws_cert_ca.pem"
     fi
-    
+
     if [[ -f "device-config.json" ]]; then
         cp device-config.json "$CERTS_DIR/"
         chmod 644 "$CERTS_DIR/device-config.json"
     fi
-    
+
     # Verify certificate deployment
     info "Certificate files deployed:"
     ls -la "$CERTS_DIR/"
 
-    log "✓ Step 9: AWS IoT certificates deployed successfully"
+    log "Step 10: AWS IoT certificates deployed successfully"
 else
     warning "No AWS IoT certificates found in expected locations"
     warning "Certificates should be transferred before running this script"
     info "Expected files: aws_cert_crt.pem, aws_cert_private.pem, aws_cert_ca.pem"
-    log "✓ Step 9: Skipped (no certificates found)"
+    log "Step 10: Skipped (no certificates found)"
 fi
-
-# ============================================================================
-# STEP 10: DFRobot HAT Configuration (removed as requested)
-# ============================================================================
-log "✓ Step 10 skipped - DFRobot HAT configuration not required"
 
 # ============================================================================
 # Final Setup and System Validation
@@ -923,19 +854,29 @@ info "Checking I2C tools..."
 i2cdetect -v 2>&1 | head -1 || warning "I2C tools not available"
 
 info "Checking Python libraries..."
-python3 -c "import tkinter; print('✓ tkinter available')" || warning "tkinter not available"
-python3 -c "import vlc; print('✓ python-vlc available')" || warning "python-vlc not available"
-python3 -c "import PIL; print('✓ pillow available')" 2>/dev/null || warning "pillow not yet installed"
+python3 -c "import tkinter; print('tkinter available')" || warning "tkinter not available"
+python3 -c "import vlc; print('python-vlc available')" || warning "python-vlc not available"
+python3 -c "import PIL; print('pillow available')" 2>/dev/null || warning "pillow not yet installed"
+python3 -c "import serial; print('pyserial available')" 2>/dev/null || warning "pyserial not yet installed"
 
 info "Checking I2C device access..."
 if i2cdetect -l 2>/dev/null | grep -q "i2c"; then
-    info "✓ I2C devices detected"
+    info "I2C devices detected"
     i2cdetect -l
 else
     warning "No I2C devices found - check hardware connections"
 fi
 
-log "✓ Dependency validation completed"
+# Check for USB serial devices (for STServo adapter)
+info "Checking for USB serial devices (STServo adapter)..."
+if ls /dev/ttyUSB* 2>/dev/null || ls /dev/ttyACM* 2>/dev/null; then
+    info "USB serial device(s) detected:"
+    ls -la /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
+else
+    warning "No USB serial devices found - STServo adapter may not be connected"
+fi
+
+log "Dependency validation completed"
 
 # ============================================================================
 # Display Validation
@@ -944,34 +885,42 @@ log "Validating display configuration..."
 
 info "Checking display connectivity..."
 if [[ -e /dev/dri/card0 ]]; then
-    info "✓ DRM device detected: /dev/dri/card0"
+    info "DRM device detected: /dev/dri/card0"
 else
     warning "No DRM device found - display may not be connected"
 fi
 
 if [[ -e /dev/fb0 ]]; then
-    info "✓ Framebuffer device detected: /dev/fb0"
+    info "Framebuffer device detected: /dev/fb0"
 else
     warning "No framebuffer device found"
 fi
 
-info "Checking X11 server status..."
+info "Checking X11 server availability..."
 if command -v Xorg &> /dev/null; then
-    info "✓ X11 server available"
+    info "X11 server available"
 else
     error "X11 server not found"
 fi
 
-info "Checking display manager..."
-if systemctl is-active --quiet lightdm; then
-    info "✓ LightDM display manager is active"
+info "Checking tsv6-xorg@ service..."
+if [ -f /etc/systemd/system/tsv6-xorg@.service ]; then
+    info "tsv6-xorg@.service installed"
 else
-    warning "LightDM display manager not active"
+    warning "tsv6-xorg@.service not found"
+fi
+
+info "Checking system default target..."
+DEFAULT_TARGET=$(systemctl get-default)
+if [[ "$DEFAULT_TARGET" == "multi-user.target" ]]; then
+    info "System default: $DEFAULT_TARGET (correct - console boot)"
+else
+    warning "System default: $DEFAULT_TARGET (expected multi-user.target)"
 fi
 
 info "Checking display configuration..."
 if grep -q "vc4-kms-dsi-waveshare-panel" /boot/firmware/config.txt; then
-    info "✓ Waveshare DSI overlay configured"
+    info "Waveshare DSI overlay configured"
 else
     warning "Waveshare DSI overlay not found in config.txt"
 fi
@@ -979,17 +928,17 @@ fi
 info "Checking GPU memory allocation..."
 gpu_memory=$(vcgencmd get_mem gpu | cut -d'=' -f2 | tr -d 'M')
 if [[ "$gpu_memory" -ge 64 ]]; then
-    info "✓ GPU memory allocated: ${gpu_memory}MB"
+    info "GPU memory allocated: ${gpu_memory}MB"
 else
-    warning "GPU memory may be insufficient: ${gpu_memory}MB (recommended: 128MB)"
+    warning "GPU memory may be insufficient: ${gpu_memory}MB (recommended: 256MB)"
 fi
 
-log "✓ Display validation completed"
+log "Display validation completed"
 
 # ============================================================================
 # Create Systemd Service for Boot Autostart
 # ============================================================================
-info "Creating systemd service for TSV6 boot autostart..."
+info "Installing TSV6 systemd service..."
 
 # Determine the actual working directory for the project
 if [ -d ~/projects/ts_uscup ]; then
@@ -1006,36 +955,50 @@ fi
 
 info "Using working directory: $WORK_DIR"
 
-sudo tee /etc/systemd/system/tsv6.service > /dev/null <<EOL
+# Install tsv6@.service from project if available
+if [ -f "$SCRIPT_DIR/tsv6.service" ]; then
+    # Convert to template service
+    sed "s|/home/%i/ts_uscup|$WORK_DIR|g" "$SCRIPT_DIR/tsv6.service" | sudo tee /etc/systemd/system/tsv6@.service > /dev/null
+    sudo chmod 644 /etc/systemd/system/tsv6@.service
+    info "tsv6@.service installed from project"
+else
+    # Create the service file inline
+    sudo tee /etc/systemd/system/tsv6@.service > /dev/null <<EOL
 [Unit]
-Description=TSV6 Application Service
-After=graphical-session.target network-online.target
-Wants=network-online.target
+Description=TSV6 Raspberry Pi Video Player
+After=network-online.target time-sync.target tsv6-wifi-provisioning.service tsv6-xorg@%i.service
+Wants=network-online.target tsv6-xorg@%i.service
+Requires=tsv6-wifi-provisioning.service
 
 [Service]
 Type=simple
-User=$USER
-Group=$USER
+User=%i
+Group=%i
 WorkingDirectory=$WORK_DIR
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/$USER/.Xauthority
-ExecStartPre=/bin/bash -c "sleep 15"
-ExecStart=/bin/bash -c "source .venv/bin/activate && python3 main.py"
-Restart=always
+Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/%i/.Xauthority"
+Environment="TSV6_ENVIRONMENT=production"
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/%i/.local/bin/uv run python run_production.py
+Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=tsv6
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
 EOL
+    sudo chmod 644 /etc/systemd/system/tsv6@.service
+fi
 
 # Enable the service to start on boot
 info "Enabling TSV6 service to start on boot..."
 sudo systemctl daemon-reload
-sudo systemctl enable tsv6.service
+sudo systemctl enable "tsv6@$USER.service"
 
-info "✓ Systemd service created and enabled for boot autostart"
+info "Systemd service created and enabled for boot autostart"
 
 # Determine REPO_NAME dynamically
 if [ -d ~/projects/ts_uscup ]; then
@@ -1109,10 +1072,10 @@ EOL
 
 chmod +x ~/tsv6_control.sh
 
-# Create display diagnostic script
+# Create display diagnostic script (updated for minimal X11)
 tee ~/display_diagnostics.sh > /dev/null <<'EOL'
 #!/bin/bash
-# TSV6 Display diagnostics script
+# TSV6 Display diagnostics script (minimal X11)
 echo "=== TSV6 Display Diagnostics ==="
 echo "Date: $(date)"
 echo ""
@@ -1123,81 +1086,73 @@ echo ""
 echo "Config.txt DSI settings:"
 grep -E "(dtoverlay.*waveshare|framebuffer|hdmi_|gpu_mem)" /boot/firmware/config.txt || echo "No display settings found"
 echo ""
-echo "X11/LightDM status:"
-systemctl status lightdm --no-pager -l
+echo "System default target:"
+systemctl get-default
+echo ""
+echo "tsv6-xorg@ service status:"
+systemctl status "tsv6-xorg@$USER.service" --no-pager -l 2>/dev/null || echo "Service not found"
 echo ""
 echo "Display environment:"
 echo "DISPLAY: ${DISPLAY:-Not set}"
 echo "XAUTHORITY: ${XAUTHORITY:-Not set}"
 echo ""
-echo "OpenBox autostart:"
-if [[ -f ~/.config/openbox/autostart ]]; then
-    echo "✓ OpenBox autostart configured"
-    cat ~/.config/openbox/autostart
+echo "X11 server check:"
+if xdpyinfo &>/dev/null; then
+    echo "X11 server is running"
+    xrandr --query 2>/dev/null || echo "xrandr not available"
 else
-    echo "❌ OpenBox autostart not found"
+    echo "X11 server not responding or not started"
 fi
 EOL
 
 chmod +x ~/display_diagnostics.sh
 
-# Create advanced display troubleshooting script
+# Create advanced display troubleshooting script (updated for minimal X11)
 tee ~/fix_display.sh > /dev/null <<'EOL'
 #!/bin/bash
-# Display troubleshooting and recovery script
+# Display troubleshooting and recovery script (minimal X11)
 echo "=== Display Troubleshooting ==="
 
 # Function to fix common display issues
 fix_display() {
     echo "Attempting to fix display issues..."
 
-    # Restart display manager
-    echo "Restarting LightDM display manager..."
-    sudo systemctl restart lightdm
+    # Restart X11 service
+    echo "Restarting tsv6-xorg@ service..."
+    sudo systemctl restart "tsv6-xorg@$USER.service"
 
-    # Wait for display manager to start
+    # Wait for X server to start
     sleep 5
 
     # Check if display is working
-    if xrandr &>/dev/null; then
-        echo "✓ Display restored successfully"
+    if xdpyinfo &>/dev/null; then
+        echo "Display restored successfully"
         xrandr --query
     else
-        echo "⚠ Display still not responding"
-
-        # Try alternative fix: restart X11
-        echo "Restarting X11 server..."
-        sudo systemctl restart display-manager
-
-        sleep 5
-
-        if xrandr &>/dev/null; then
-            echo "✓ Display restored after X11 restart"
-        else
-            echo "❌ Display still not working - may need reboot"
-        fi
+        echo "Display still not responding"
+        echo "Check service status: sudo systemctl status tsv6-xorg@$USER.service"
     fi
 }
 
 # Check current display status
 echo "Current display status:"
 if [[ -e /dev/dri/card0 ]]; then
-    echo "✓ DRM device: /dev/dri/card0"
+    echo "DRM device: /dev/dri/card0"
 else
-    echo "❌ No DRM device found"
+    echo "No DRM device found"
 fi
 
 if [[ -e /dev/fb0 ]]; then
-    echo "✓ Framebuffer: /dev/fb0"
+    echo "Framebuffer: /dev/fb0"
 else
-    echo "❌ No framebuffer found"
+    echo "No framebuffer found"
 fi
 
 # Check services
 echo ""
 echo "Service status:"
-systemctl is-active lightdm && echo "✓ LightDM: Active" || echo "❌ LightDM: Inactive"
-systemctl is-active graphical.target && echo "✓ Graphical target: Active" || echo "❌ Graphical target: Inactive"
+systemctl is-active "tsv6-xorg@$USER.service" && echo "tsv6-xorg@: Active" || echo "tsv6-xorg@: Inactive"
+echo "System default: $(systemctl get-default)"
 
 # Ask user if they want to fix
 echo ""
@@ -1212,7 +1167,7 @@ fi
 echo ""
 echo "Additional commands to try manually:"
 echo "- sudo reboot (if display still not working)"
-echo "- sudo raspi-config (to reconfigure display settings)"
+echo "- sudo systemctl restart tsv6-xorg@$USER.service"
 echo "- ~/display_diagnostics.sh (run diagnostics again)"
 EOL
 
@@ -1237,16 +1192,83 @@ tar -czf "$BACKUP_DIR/tsv6_backup_$DATE.tar.gz" \
     ~/.ssh \
     ~/.bashrc \
     ~/.gitconfig \
-    ~/.config/openbox \
     ~/projects 2>/dev/null
 
-echo "✓ Backup created: $BACKUP_DIR/tsv6_backup_$DATE.tar.gz"
+echo "Backup created: $BACKUP_DIR/tsv6_backup_$DATE.tar.gz"
 echo "Backup size: $(du -h $BACKUP_DIR/tsv6_backup_$DATE.tar.gz | cut -f1)"
 EOL
 
 chmod +x ~/backup_tsv6.sh
 
-log "✓ Maintenance scripts created successfully"
+# Create STServo test script
+tee ~/test_servo.sh > /dev/null <<'EOL'
+#!/bin/bash
+# STServo bus servo test script
+echo "=== STServo Bus Servo Test ==="
+
+# Find project directory
+if [ -d ~/projects/ts_uscup ]; then
+    PROJECT_DIR=~/projects/ts_uscup
+elif [ -d ~/projects/tsv6_rpi ]; then
+    PROJECT_DIR=~/projects/tsv6_rpi
+else
+    echo "Project directory not found"
+    exit 1
+fi
+
+cd "$PROJECT_DIR"
+
+# Check for USB serial devices
+echo "Checking for USB serial devices..."
+if ls /dev/ttyUSB* 2>/dev/null; then
+    SERVO_PORT=$(ls /dev/ttyUSB* | head -1)
+    echo "Found: $SERVO_PORT"
+elif ls /dev/ttyACM* 2>/dev/null; then
+    SERVO_PORT=$(ls /dev/ttyACM* | head -1)
+    echo "Found: $SERVO_PORT"
+else
+    echo "No USB serial device found - ensure STServo adapter is connected"
+    exit 1
+fi
+
+# Test pyserial
+echo ""
+echo "Testing pyserial..."
+if [ -f ".venv/bin/python" ]; then
+    .venv/bin/python -c "import serial; print('pyserial OK')" || echo "pyserial not available"
+else
+    python3 -c "import serial; print('pyserial OK')" || echo "pyserial not available"
+fi
+
+# Test servo connection
+echo ""
+echo "Testing STServo connection..."
+if [ -f ".venv/bin/python" ]; then
+    .venv/bin/python -c "
+from tsv6.hardware.stservo import STServoController
+try:
+    servo = STServoController(port='$SERVO_PORT', simulation_mode=False)
+    if servo._connected:
+        print('STServo connected successfully!')
+        print(f'Port: {servo.port}')
+        print(f'Baudrate: {servo.baudrate}')
+    else:
+        print('STServo running in simulation mode')
+    servo.cleanup()
+except Exception as e:
+    print(f'Error: {e}')
+"
+else
+    echo "Virtual environment not found - run from project directory with venv activated"
+fi
+
+echo ""
+echo "Servo test complete"
+EOL
+
+chmod +x ~/test_servo.sh
+
+log "Maintenance scripts created successfully"
 
 # ============================================================================
 # STEP 11: AWS IoT Certificate Provisioner
@@ -1270,11 +1292,11 @@ if [ -d "$PROJECT_DIR" ]; then
 
             # Run the provisioner
             if python3 aws-iot-cert-provisioner.py; then
-                info "✓ AWS IoT certificate provisioner completed successfully"
+                info "AWS IoT certificate provisioner completed successfully"
 
                 # Check if certificates were created
                 if [ -f "assets/certs/aws_cert_crt.pem" ] && [ -f "assets/certs/aws_cert_private.pem" ]; then
-                    info "✓ AWS IoT certificates generated and deployed"
+                    info "AWS IoT certificates generated and deployed"
                     CERTS_FOUND=true
                 else
                     warning "Certificate provisioner ran but certificates not found in expected location"
@@ -1301,30 +1323,32 @@ else
     info "  python3 aws-iot-cert-provisioner.py"
 fi
 
-log "✓ Step 11 completed"
+log "Step 11 completed"
 
 # ============================================================================
 # FINAL SUMMARY AND NEXT STEPS
 # ============================================================================
 log "=========================================="
-log "🎉 TSV6 Raspberry Pi Setup Complete!"
+log "TSV6 Raspberry Pi 5 Setup Complete!"
 log "=========================================="
 
 info "Summary of completed tasks:"
-info "✓ System updated and TSV6-specific packages installed"
-info "✓ Security hardening (firewall, fail2ban, SSH keys)"
-info "✓ Python environment with UV package manager configured"
-info "✓ Display system configured for Waveshare 7-inch DSI"
-info "✓ Git and GitHub SSH keys generated"
+info "  System updated and TSV6-specific packages installed"
+info "  Security hardening (firewall, fail2ban, SSH keys)"
+info "  Python environment with UV package manager configured"
+info "  Minimal X11 server configured (no display manager)"
+info "  Display system configured for Waveshare 7-inch DSI"
+info "  Git and GitHub SSH keys generated"
+info "  User added to dialout group for serial access (STServo)"
 if [[ -n "$GITHUB_REPO_URL" ]]; then
-    info "✓ TSV6 project cloned and environment set up"
+    info "  TSV6 project cloned and environment set up"
 fi
 if [[ "$CERTS_FOUND" == true ]]; then
-    info "✓ AWS IoT certificates deployed to $CERTS_DIR"
+    info "  AWS IoT certificates deployed to $CERTS_DIR"
 fi
-info "✓ Comprehensive diagnostics and maintenance scripts created"
-info "✓ TSV6 systemd service enabled for automatic boot startup"
-info "✓ AWS IoT certificate provisioner executed"
+info "  Comprehensive diagnostics and maintenance scripts created"
+info "  TSV6 systemd service enabled for automatic boot startup"
+info "  AWS IoT certificate provisioner executed"
 
 warning "CRITICAL NEXT STEPS:"
 if [[ -n "$GITHUB_EMAIL" ]]; then
@@ -1332,30 +1356,34 @@ if [[ -n "$GITHUB_EMAIL" ]]; then
     warning "2. Test GitHub connection: ssh -T git@github.com"
 fi
 warning "3. Configure your .env file with TSV6-specific settings"
-warning "4. REBOOT THE SYSTEM: sudo reboot"
+warning "4. Connect STServo adapter to USB port"
+warning "5. REBOOT THE SYSTEM: sudo reboot"
 warning "   TSV6 will automatically start on boot - no login required!"
-warning "   This is required for display configuration and SSH security"
+warning "   This is required for display configuration and group membership"
 
 info ""
 info "After reboot, useful commands:"
-info "• Display diagnostics: ~/display_diagnostics.sh"
-info "• Display troubleshooting: ~/fix_display.sh"
-info "• Control TSV6 app: ~/tsv6_control.sh {start|stop|restart|status|logs}"
-info "• Backup system: ~/backup_tsv6.sh"
-info "• Run AWS IoT provisioner: cd ~/projects/ts_uscup && source .venv/bin/activate && python3 aws-iot-cert-provisioner.py"
-info "• TSV6 auto-starts on boot (no manual commands needed)"
-info "• Control service: sudo systemctl {start|stop|restart|status} tsv6.service"
+info "  Display diagnostics: ~/display_diagnostics.sh"
+info "  Display troubleshooting: ~/fix_display.sh"
+info "  Test STServo: ~/test_servo.sh"
+info "  Control TSV6 app: ~/tsv6_control.sh {start|stop|restart|status|logs}"
+info "  Backup system: ~/backup_tsv6.sh"
+info "  Run AWS IoT provisioner: cd ~/projects/ts_uscup && source .venv/bin/activate && python3 aws-iot-cert-provisioner.py"
+info "  TSV6 auto-starts on boot (no manual commands needed)"
+info "  Control service: sudo systemctl {start|stop|restart|status} tsv6@$USER.service"
 
 info ""
 info "Important file locations:"
-info "• Project: ~/projects/$REPO_NAME"
-info "• Certificates: $CERTS_DIR (if deployed)"
-info "• Config: /boot/firmware/config.txt"
+info "  Project: ~/projects/$REPO_NAME"
+info "  Certificates: $CERTS_DIR (if deployed)"
+info "  Config: /boot/firmware/config.txt"
 
 info ""
 info "Device information:"
-info "• Hostname: $NEW_HOSTNAME"
-info "• Thing Name: $THING_NAME"
+info "  Hostname: $NEW_HOSTNAME"
+info "  Thing Name: $THING_NAME"
+info "  Boot target: multi-user.target (console with X11 service)"
+info "  X11 service: tsv6-xorg@$USER.service"
 
-log "TSV6 setup completed successfully! 🚀"
+log "TSV6 setup completed successfully!"
 log "Remember to reboot: sudo reboot"

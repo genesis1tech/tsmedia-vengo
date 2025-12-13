@@ -1,0 +1,16 @@
+[Unit]
+Description=TSV6 X11 Server (no display manager)
+After=systemd-user-sessions.service
+ConditionPathExists=/dev/tty7
+Documentation=file:///home/%i/ts_uscup/README.md
+
+[Service]
+Type=simple
+User=%i
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/xinit /bin/bash -c "exec sleep infinity" -- :0 vt7 -keeptty -noreset
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -45,11 +45,11 @@ from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineM
 # Removed for memory-fix branch
 
 try:
-    from tsv6.hardware.servo_controller_pigpio import PigpioServoController
+    from tsv6.hardware.stservo import STServoController
     SERVO_AVAILABLE = True
 except ImportError:
     SERVO_AVAILABLE = False
-    print("⚠ Servo controller not available")
+    print("STServo controller not available")
 
 
 class ProductionVideoPlayer:
@@ -376,36 +376,26 @@ class ProductionVideoPlayer:
             self.error_recovery.report_error("ota_manager", "initialization", str(e), "medium")
     
     def _initialize_servo_controller(self):
-        """Initialize servo controller if available"""
+        """Initialize STServo controller if available"""
         try:
             if SERVO_AVAILABLE:
-                self.servo_controller = PigpioServoController(gpio_pin=18)
-                # Ensure the device starts with the servo in the closed (0°) position.
-                # Some devices may power on with the servo at a non-zero position; actively drive to 0°.
+                # Initialize STServo controller (uses USB serial, not GPIO)
+                # Configuration loaded from environment variables or defaults
+                self.servo_controller = STServoController()
+                self.logger.info("STServo controller initialized")
+
+                # Ensure servo is at closed position on startup
                 try:
-                    self.servo_controller.close_door(hold_time=1.0)
-                    self.logger.info("Startup: Servo forced to closed (0°)")
-                except Exception as e:
-                    self.logger.warning(f"Startup: Failed to force servo closed: {e}")
-                self.logger.info("Servo controller initialized")
-                
-                # Ensure servo is at closed position (0 degrees) on startup
-                try:
-                    self.logger.info("Initializing servo to closed position (0°)...")
-                    self.servo_controller._set_angle(0)
-                    time.sleep(0.5)  # Allow servo to settle
-                    
-                    # Disable servo pulses to prevent jitter and save power when at rest
-                    self.servo_controller.disable_servo()
-                    
-                    self.logger.info("✓ Servo initialized to closed position (0°) - pulses disabled")
+                    self.logger.info("Initializing servo to closed position...")
+                    self.servo_controller.close_door(hold_time=0.5)
+                    self.logger.info("Servo initialized to closed position")
                 except Exception as servo_init_error:
                     self.logger.warning(f"Failed to initialize servo to closed position: {servo_init_error}")
-                
+
                 self.error_recovery.report_success("servo_controller")
             else:
-                self.logger.warning("Servo controller not available")
-                
+                self.logger.warning("STServo controller not available")
+
         except Exception as e:
             self.logger.error(f"Failed to initialize servo controller: {e}")
             self.error_recovery.report_error("servo_controller", "initialization", str(e), "medium")
@@ -811,22 +801,17 @@ class ProductionVideoPlayer:
     def _servo_door_sequence(self, product_data):
         """Execute servo door open/close sequence in background thread"""
         try:
-            import time
-            print(f"🚪 Production: Opening door for: {product_data.get('productName', 'Unknown')}")
+            print(f"Opening door for: {product_data.get('productName', 'Unknown')}")
 
-            # Move servo to 90 degrees
-            print(f"   Moving servo to 90°...")
-            self.servo_controller._set_angle(90)
+            # Open door (moves to 120 degrees at maximum speed, holds for 3 seconds)
+            print("   Opening door...")
+            self.servo_controller.open_door(hold_time=3.0)
 
-            # Wait 3 seconds
-            print(f"   Waiting 3 seconds...")
-            time.sleep(3)
+            # Close door (returns to 0 degrees)
+            print("   Closing door...")
+            self.servo_controller.close_door(hold_time=0.5)
 
-            # Return servo to 0 degrees (pulses auto-disabled at position 0)
-            print(f"   Returning servo to 0°...")
-            self.servo_controller._set_angle(0)
-
-            print(f"✅ Production: Door sequence completed: 90° → 3s hold → 0° (pulses auto-disabled)")
+            print("Door sequence completed")
             self.error_recovery.report_success("servo_controller")
 
         except Exception as e:

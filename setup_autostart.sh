@@ -71,22 +71,11 @@ if ! command -v uv &> /dev/null; then
     exit 1
 fi
 
-# Check if pigpiod is installed and enabled
-log "Checking pigpiod daemon..."
-if ! command -v pigpiod &> /dev/null; then
-    warning "pigpiod not found. Installing..."
-    sudo apt-get update
-    sudo apt-get install -y pigpio
-fi
-
-if ! sudo systemctl is-enabled pigpiod &> /dev/null; then
-    log "Enabling pigpiod daemon..."
-    sudo systemctl enable pigpiod
-    sudo systemctl start pigpiod
-    success "pigpiod daemon enabled and started"
-else
-    success "pigpiod daemon already enabled"
-fi
+# Setup serial access for STServo bus servo adapter
+log "Setting up serial device access for servo..."
+log "Adding user to dialout group for serial access..."
+sudo usermod -a -G dialout $CURRENT_USER
+success "User added to dialout group for servo serial access"
 
 # Setup input device access for barcode scanner
 log "Setting up input device access for barcode scanner..."
@@ -114,9 +103,8 @@ SERVICE_FILE="/tmp/tsv6@.service"
 cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
-After=network-online.target pigpiod.service
-Wants=network-online.target
-Requires=pigpiod.service
+After=network-online.target time-sync.target tsv6-xorg@%i.service
+Wants=network-online.target tsv6-xorg@%i.service
 
 [Service]
 Type=simple
@@ -125,8 +113,7 @@ WorkingDirectory=$CURRENT_DIR
 Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/%i/.Xauthority"
-ExecStartPre=/bin/sh -c 'echo "Starting system update check..."; if [ -f /var/cache/apt/pkgcache.bin ]; then AGE=$(($(date +%s) - $(stat -c %Y /var/cache/apt/pkgcache.bin))); if [ $AGE -gt 86400 ]; then echo "Package cache is old, updating system packages..."; sudo apt-get update; if sudo apt-get list --upgradable 2>/dev/null | grep -q .; then echo "Updates available, installing..."; sudo apt-get upgrade -y; echo "System updates completed"; else echo "No updates available"; fi; else echo "Package cache is recent, skipping update"; fi; else echo "No package cache, updating..."; sudo apt-get update; fi'
-ExecStartPre=/bin/sleep 10
+ExecStartPre=/bin/sleep 5
 ExecStart=/home/%i/.local/bin/uv run python run_production.py
 Restart=always
 RestartSec=10

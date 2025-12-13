@@ -1,8 +1,8 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
-After=network-online.target pigpiod.service time-sync.target tsv6-wifi-provisioning.service
-Wants=network-online.target
-Requires=pigpiod.service tsv6-wifi-provisioning.service
+After=network-online.target time-sync.target tsv6-wifi-provisioning.service tsv6-xorg@%i.service
+Wants=network-online.target tsv6-xorg@%i.service
+Requires=tsv6-wifi-provisioning.service
 # Document all dependencies
 Documentation=file:///home/%i/ts_uscup/README.md
 

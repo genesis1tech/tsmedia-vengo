@@ -1,8 +1,7 @@
 [Unit]
 Description=Video Watchdog Service - Ensures continuous video playback
-After=graphical.target tsv6.service
-Wants=graphical.target
-BindsTo=tsv6.service
+After=tsv6@%i.service
+BindsTo=tsv6@%i.service
 
 [Service]
 Type=simple

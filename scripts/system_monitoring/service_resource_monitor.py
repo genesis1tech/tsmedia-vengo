@@ -21,8 +21,6 @@ class ServiceResourceMonitor:
     # Services identified in Issue #42 as resource-intensive
     MONITORED_SERVICES = [
         'accounts-daemon',
-        'lightdm', 
-        'pigpiod',
         'dbus-daemon',
         'systemd-journald',
         'systemd-logind',
