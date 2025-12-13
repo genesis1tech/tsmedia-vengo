@@ -40,69 +40,16 @@ def get_wifi_info():
     except:
         return "Unknown"
 
-def check_pigpio_daemon():
-    """Check if pigpio daemon is running."""
-    try:
-        result = subprocess.run(['pgrep', 'pigpiod'], capture_output=True, text=True)
-        return result.returncode == 0
-    except:
-        return False
-
-def start_pigpio_daemon():
-    """Start the pigpio daemon if not already running."""
-    try:
-        # Check if already running
-        if check_pigpio_daemon():
-            logger.info("pigpio daemon already running")
+def check_serial_adapter():
+    """Check if USB serial adapter for servo is available."""
+    import os
+    ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/tsv6-servo']
+    for port in ports:
+        if os.path.exists(port):
+            logger.info(f"Serial adapter found: {port}")
             return True
-
-        logger.info("Starting pigpio daemon...")
-        # Try to start pigpio daemon
-        result = subprocess.run(['sudo', 'pigpiod'], capture_output=True, text=True, timeout=10)
-
-        # Give it a moment to start
-        time.sleep(2)
-
-        # Verify it started
-        if check_pigpio_daemon():
-            logger.info("pigpio daemon started successfully")
-            return True
-        else:
-            logger.error("Failed to start pigpio daemon")
-            return False
-
-    except subprocess.TimeoutExpired:
-        logger.error("pigpio daemon startup timed out")
-        return False
-    except Exception as e:
-        logger.error(f"Error starting pigpio daemon: {e}")
-        return False
-
-def pigpio_daemon_sequence(display_manager):
-    """Execute pigpio daemon startup with retries."""
-    logger.info("Step 3: Starting pigpio daemon...")
-
-    pigpio_started = False
-    for attempt in range(1, 6):  # 5 attempts for pigpio
-        logger.info(f"pigpio daemon attempt {attempt}/5")
-
-        if start_pigpio_daemon():
-            logger.info("pigpio daemon is running")
-            pigpio_started = True
-            time.sleep(2)  # Show success message briefly
-            break
-        else:
-            logger.error(f"pigpio daemon attempt {attempt} failed")
-
-            if attempt < 5:  # Don't wait after the last attempt
-                time.sleep(5)  # 5 second delay between retries
-
-    if not pigpio_started:
-        logger.error("pigpio daemon failed after 5 attempts - CRITICAL ERROR")
-        time.sleep(5)
-        return False  # Return False - this is critical for servo operation
-
-    return True
+    logger.warning("No USB serial adapter found for servo")
+    return False
 
 def wifi_connection_sequence(display_manager):
     """Execute WiFi connection check with retries."""
@@ -177,21 +124,19 @@ def aws_connection_sequence(display_manager):
     return aws_manager
 
 def servo_initialization_sequence(servo_controller):
-    """Execute servo initialization to closed position (0 degrees)."""
-    logger.info("Step 4: Initializing servo to closed position...")
-    
+    """Execute servo initialization to closed position."""
+    logger.info("Step 3: Initializing servo to closed position...")
+
     if servo_controller is None:
         logger.warning("Servo controller not available - skipping servo initialization")
         return True
-    
+
     try:
-        servo_controller._set_angle(0)
-        time.sleep(0.5)  # Allow servo to settle
-        
-        # Disable servo pulses to prevent jitter and save power when at rest
+        # Close door and disable torque when idle
+        servo_controller.close_door(hold_time=0.5)
         servo_controller.disable_servo()
-        
-        logger.info("Servo initialized to closed position (0°) - pulses disabled")
+
+        logger.info("Servo initialized to closed position")
         return True
     except Exception as e:
         logger.error(f"Failed to initialize servo: {e}")
@@ -199,7 +144,7 @@ def servo_initialization_sequence(servo_controller):
 
 def display_ready_screen(display_manager):
     """Display the device ready screen with green background."""
-    logger.info("Step 6: System ready - showing green 'Device Ready' screen")
+    logger.info("Step 5: System ready - showing 'Device Ready' screen")
     # Show green screen with "Device Ready" text
     display_manager.show_device_ready()
 
@@ -215,8 +160,7 @@ def execute_startup_sequence(display_manager, device_manager=None, servo_control
         servo_controller: Servo controller instance (optional)
 
     Returns:
-        tuple: (ResilientAWSManager instance, pigpio_available) if successful, (None, False) if failed
-        tuple: (AWSManager instance, pigpio_available) if successful, (None, False) if failed
+        tuple: (ResilientAWSManager instance, servo_available) if successful, (None, False) if failed
     """
     logger.info("Executing startup sequence...")
 
@@ -232,19 +176,16 @@ def execute_startup_sequence(display_manager, device_manager=None, servo_control
     if aws_manager is None:
         return None, False
 
-    # Step 3: Start pigpio daemon (CRITICAL - must succeed)
-    if not pigpio_daemon_sequence(display_manager):
-        return None, False  # Exit if pigpio fails - it's required for servo operation
-    
-    # Step 4: Initialize servo to closed position
+    # Step 3: Check serial adapter and initialize servo
+    serial_available = check_serial_adapter()
     if not servo_initialization_sequence(servo_controller):
         logger.warning("Servo initialization failed - continuing startup")
-    
-    # Step 5: Display device configuration with 2.5 second delay
-    logger.info("Step 5: Displaying device configuration...")
+
+    # Step 4: Display device configuration with 2.5 second delay
+    logger.info("Step 4: Displaying device configuration...")
     display_device_config(display_manager)
-    
-    # Step 6: Display ready screen (green background with "Device Ready")
+
+    # Step 5: Display ready screen (green background with "Device Ready")
     display_ready_screen(display_manager)
 
-    return aws_manager, True
+    return aws_manager, serial_available

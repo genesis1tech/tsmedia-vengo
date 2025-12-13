@@ -4,7 +4,7 @@ Documentation=file:///home/%i/ts_uscup/README.md
 # Run before main TSV6 service
 Before=tsv6.service
 # Run after basic system services
-After=pigpiod.service time-sync.target
+After=time-sync.target
 # Don't require network - we create our own if needed
 
 [Service]
