@@ -19,6 +19,7 @@ import threading
 import time
 import logging
 import logging.config
+import datetime
 from pathlib import Path
 
 # Add src to path for imports
@@ -799,25 +800,89 @@ class ProductionVideoPlayer:
             self.error_recovery.report_error("servo_controller", "door_open_failed", str(e), "medium")
 
     def _servo_door_sequence(self, product_data):
-        """Execute servo door open/close sequence in background thread"""
+        """Execute servo door open/close sequence in background thread with safety monitoring"""
         try:
             print(f"Opening door for: {product_data.get('productName', 'Unknown')}")
 
-            # Open door (moves to 120 degrees at maximum speed, holds for 3 seconds)
+            # Open door (holds for 3 seconds)
             print("   Opening door...")
             self.servo_controller.open_door(hold_time=3.0)
 
-            # Close door (returns to 0 degrees)
-            print("   Closing door...")
-            self.servo_controller.close_door(hold_time=0.5)
+            # Close door with obstruction detection and retry
+            print("   Closing door with safety monitoring...")
+            success, status = self.servo_controller.close_door_with_safety(
+                max_retries=3,
+                retry_delay=5.0,
+                hold_time=0.5
+            )
 
-            print("Door sequence completed")
-            self.error_recovery.report_success("servo_controller")
+            if success:
+                print("Door sequence completed successfully")
+                self.error_recovery.report_success("servo_controller")
+            elif status == "obstructed":
+                # Persistent obstruction - report to AWS
+                self._handle_obstruction_detected()
+            else:
+                # Other error
+                self.logger.error(f"Door close failed with status: {status}")
+                self.error_recovery.report_error("servo_controller", "door_close_failed", status, "medium")
 
         except Exception as e:
             self.logger.error(f"Servo door sequence failed: {e}")
             self.error_recovery.report_error("servo_controller", "door_sequence_failed", str(e), "medium")
-    
+
+    def _handle_obstruction_detected(self):
+        """
+        Handle persistent obstruction after all retries exhausted.
+
+        Publishes status update to AWS with connectionState "Device Obstructed"
+        which will trigger SNS email notification via IoT Rule.
+        """
+        self.logger.critical("Device obstruction detected after 3 retries - door left open")
+        print("ALERT: Device obstruction detected - door left open, reporting to AWS")
+
+        try:
+            # Build obstruction status payload
+            obstruction_status = {
+                "thingName": self.aws_config["thing_name"],
+                "connectionState": "Device Obstructed",
+                "deviceType": "raspberry-pi",
+                "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
+                "obstruction": {
+                    "detected_at": datetime.datetime.utcnow().isoformat() + "Z",
+                    "retries_attempted": 3,
+                    "device_id": self.aws_config["thing_name"],
+                    "status": "door_left_open"
+                }
+            }
+
+            # Publish to AWS IoT shadow
+            shadow_payload = {"state": {"reported": obstruction_status}}
+
+            if self.aws_manager and self.aws_manager.connected:
+                success = self.aws_manager.publish_with_retry(
+                    self.aws_manager.shadow_update_topic,
+                    shadow_payload
+                )
+                if success:
+                    self.logger.info("Obstruction status published to AWS")
+                    print("Obstruction status published to AWS")
+                else:
+                    self.logger.error("Failed to publish obstruction status to AWS")
+            else:
+                self.logger.warning("AWS not connected - obstruction status not published")
+
+            # Report to error recovery system
+            self.error_recovery.report_error(
+                "servo_controller",
+                "obstruction_detected",
+                "Device obstructed after 3 retries - door left open",
+                "critical"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to handle obstruction: {e}")
+
     def _on_no_match_display(self):
         """Handle no match display requests"""
         try:
