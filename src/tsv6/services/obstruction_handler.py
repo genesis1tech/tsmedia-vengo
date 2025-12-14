@@ -182,9 +182,13 @@ class ObstructionHandlerUI:
             logger.error(f'Error starting service: {e}')
 
     def close_servo(self):
-        """Close the servo door"""
+        """Close the servo door (re-enables torque first)"""
         if self.servo_controller:
             try:
+                # Re-enable torque (was disabled after obstruction detected)
+                logger.info('Re-enabling servo torque...')
+                self.servo_controller.enable_servo()
+
                 logger.info('Closing servo...')
                 self.servo_controller.close_door(hold_time=0.5)
                 logger.info('Servo closed')

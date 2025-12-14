@@ -468,9 +468,15 @@ class STServoController:
                         print(f"Waiting {retry_delay}s before retry...")
                         time.sleep(retry_delay)
 
-                # All retries exhausted - stay open
+                # All retries exhausted - stay open and disable torque
+                # This allows the user to freely remove the obstructing item
                 logger.error(f"Obstruction persists after {max_retries} attempts, door left open")
                 print(f"Obstruction persists after {max_retries} attempts, door left open")
+
+                logger.info("Disabling servo torque to allow item removal")
+                print("Disabling servo torque - item can be removed freely")
+                self._enable_torque(False)
+
                 return (False, "obstructed")
 
             except Exception as e:
