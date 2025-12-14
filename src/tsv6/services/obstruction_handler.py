@@ -43,11 +43,12 @@ class ObstructionHandlerUI:
     def __init__(self):
         self.root = None
         self.servo_controller = None
+        self.servo = None
+        self.port_handler = None
         self.aws_manager = None
         self.aws_config = None
         self._setup_display()
-        self._init_servo()
-        self._init_aws()
+        # Servo and AWS init deferred to run() for faster UI display
 
     def _setup_display(self):
         """Setup display environment"""
@@ -59,20 +60,48 @@ class ObstructionHandlerUI:
                 logger.error('No display available')
                 sys.exit(1)
 
-    def _init_servo(self):
-        """Initialize servo controller"""
+    def _init_servo_lightweight(self):
+        """Initialize servo controller without moving to closed position"""
         try:
             # Add vendor path for servo SDK
             vendor_path = project_root / 'src/tsv6/hardware/stservo/vendor'
             if str(vendor_path) not in sys.path:
                 sys.path.insert(0, str(vendor_path))
 
-            from tsv6.hardware.stservo.controller import STServoController
-            self.servo_controller = STServoController()
-            logger.info('Servo controller initialized')
+            from scservo_sdk import PortHandler, sms_sts, SMS_STS_TORQUE_ENABLE
+
+            # Auto-detect port
+            ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1']
+            port = None
+            for p in ports:
+                if os.path.exists(p):
+                    port = p
+                    break
+
+            if not port:
+                logger.error('No servo port found')
+                return
+
+            # Connect without moving servo
+            self.port_handler = PortHandler(port)
+            self.port_handler.baudrate = 1000000
+
+            if not self.port_handler.openPort():
+                logger.error(f'Failed to open port {port}')
+                return
+
+            self.servo = sms_sts(self.port_handler)
+            self.servo_id = 1
+            self.SMS_STS_TORQUE_ENABLE = SMS_STS_TORQUE_ENABLE
+
+            # Store closed position for later
+            self.closed_position = 4030
+
+            logger.info(f'Servo connected on {port} (lightweight init)')
+
         except Exception as e:
             logger.error(f'Failed to initialize servo: {e}')
-            self.servo_controller = None
+            self.servo = None
 
     def _init_aws(self):
         """Initialize AWS IoT connection for status publishing"""
@@ -101,12 +130,9 @@ class ObstructionHandlerUI:
             )
 
             self.aws_manager.connect()
-            time.sleep(2)  # Wait for connection
+            # Don't wait - connection happens in background
 
-            if self.aws_manager.connected:
-                logger.info(f'AWS connected: {self.aws_config["thing_name"]}')
-            else:
-                logger.warning('AWS connection not established')
+            logger.info(f'AWS connecting: {self.aws_config["thing_name"]}')
 
         except Exception as e:
             logger.error(f'Failed to initialize AWS: {e}')
@@ -183,19 +209,32 @@ class ObstructionHandlerUI:
 
     def close_servo(self):
         """Close the servo door (re-enables torque first)"""
-        if self.servo_controller:
+        # Wait briefly for background init if servo not ready yet
+        if not self.servo:
+            logger.info('Waiting for servo initialization...')
+            for _ in range(20):  # Wait up to 2 seconds
+                time.sleep(0.1)
+                if self.servo:
+                    break
+
+        if self.servo:
             try:
                 # Re-enable torque (was disabled after obstruction detected)
                 logger.info('Re-enabling servo torque...')
-                self.servo_controller.enable_servo()
+                self.servo.write1ByteTxRx(self.servo_id, self.SMS_STS_TORQUE_ENABLE, 1)
 
                 logger.info('Closing servo...')
-                self.servo_controller.close_door(hold_time=0.5)
+                # WritePosEx(id, position, speed, acceleration)
+                self.servo.WritePosEx(self.servo_id, self.closed_position, 0, 50)
+                time.sleep(1.0)  # Wait for movement
+
                 logger.info('Servo closed')
                 return True
             except Exception as e:
                 logger.error(f'Failed to close servo: {e}')
                 return False
+
+        logger.error('Servo not initialized')
         return False
 
     def on_item_cleared(self):
@@ -232,9 +271,12 @@ class ObstructionHandlerUI:
 
             time.sleep(1)
 
-            # Cleanup servo
-            if self.servo_controller:
-                self.servo_controller.disable_servo()
+            # Cleanup servo port
+            if hasattr(self, 'port_handler') and self.port_handler:
+                try:
+                    self.port_handler.closePort()
+                except:
+                    pass
 
             # Start the main service
             self.start_main_service()
@@ -318,15 +360,25 @@ class ObstructionHandlerUI:
 
         return frame, canvas
 
+    def _init_background(self):
+        """Initialize servo and AWS in background after UI is shown"""
+        import threading
+
+        def init_task():
+            self._init_servo_lightweight()
+            self._init_aws()
+
+        thread = threading.Thread(target=init_task, daemon=True)
+        thread.start()
+
     def run(self):
         """Run the obstruction handler UI"""
         logger.info('Starting Obstruction Handler UI')
 
-        # Stop the main service first
+        # Stop the main service first (quick operation)
         self.stop_main_service()
-        time.sleep(1)  # Give service time to stop
 
-        # Create the main window
+        # Create the main window IMMEDIATELY - no delays
         self.root = tk.Tk()
         self.root.title('Device Obstruction')
         self.root.configure(bg='#B71C1C')  # Dark red background
@@ -426,6 +478,9 @@ class ObstructionHandlerUI:
 
         logger.info('UI ready, entering main loop')
 
+        # Schedule background initialization after UI is shown
+        self.root.after(100, self._init_background)
+
         # Run the main loop
         try:
             self.root.mainloop()
@@ -446,6 +501,13 @@ class ObstructionHandlerUI:
         if self.servo_controller:
             try:
                 self.servo_controller.disable_servo()
+            except:
+                pass
+
+        # Close lightweight servo port if used
+        if hasattr(self, 'port_handler') and self.port_handler:
+            try:
+                self.port_handler.closePort()
             except:
                 pass
 
