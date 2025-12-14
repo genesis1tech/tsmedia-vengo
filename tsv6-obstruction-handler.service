@@ -1,0 +1,33 @@
+[Unit]
+Description=TSV6 Obstruction Handler UI
+Documentation=file:///home/g1tech/tsrpi5/README.md
+After=tsv6-xorg@g1tech.service
+Requires=tsv6-xorg@g1tech.service
+
+[Service]
+Type=simple
+User=g1tech
+Group=g1tech
+WorkingDirectory=/home/g1tech/tsrpi5
+
+# Environment
+Environment="PATH=/home/g1tech/.local/bin:/home/g1tech/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/g1tech/.Xauthority"
+
+# Wait for X11 socket
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; exit 1'
+
+# Start obstruction handler
+ExecStart=/home/g1tech/.local/bin/uv run python src/tsv6/services/obstruction_handler.py
+
+# Don't restart - this is a one-shot UI that exits after user clears obstruction
+Restart=no
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsv6-obstruction
+
+[Install]
+WantedBy=multi-user.target

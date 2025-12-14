@@ -835,11 +835,14 @@ class ProductionVideoPlayer:
         """
         Handle persistent obstruction after all retries exhausted.
 
-        Publishes status update to AWS with connectionState "Device Obstructed"
-        which will trigger SNS email notification via IoT Rule.
+        1. Publishes status update to AWS with connectionState "Device Obstructed"
+        2. Starts the obstruction handler service which will:
+           - Stop tsv6.service
+           - Display UI for user to clear obstruction
+           - Close servo and restart service when cleared
         """
         self.logger.critical("Device obstruction detected after 3 retries - door left open")
-        print("ALERT: Device obstruction detected - door left open, reporting to AWS")
+        print("ALERT: Device obstruction detected - door left open")
 
         try:
             # Build obstruction status payload
@@ -880,8 +883,56 @@ class ProductionVideoPlayer:
                 "critical"
             )
 
+            # Start the obstruction handler service
+            # This will stop tsv6.service, show UI, and restart when cleared
+            self._start_obstruction_handler()
+
         except Exception as e:
             self.logger.error(f"Failed to handle obstruction: {e}")
+
+    def _start_obstruction_handler(self):
+        """Start the obstruction handler service to display UI and handle user input"""
+        try:
+            self.logger.info("Starting obstruction handler service...")
+            import subprocess
+
+            # Start the obstruction handler service
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'start', 'tsv6-obstruction-handler.service'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                self.logger.info("Obstruction handler service started")
+                print("Obstruction handler service started - UI will appear shortly")
+            else:
+                self.logger.error(f"Failed to start obstruction handler: {result.stderr}")
+                # Fallback: run directly if service fails
+                self._run_obstruction_handler_directly()
+
+        except subprocess.TimeoutExpired:
+            self.logger.warning("Timeout starting obstruction handler service, running directly")
+            self._run_obstruction_handler_directly()
+        except Exception as e:
+            self.logger.error(f"Error starting obstruction handler: {e}")
+            self._run_obstruction_handler_directly()
+
+    def _run_obstruction_handler_directly(self):
+        """Fallback: Run obstruction handler directly as subprocess"""
+        try:
+            import subprocess
+            handler_path = Path(__file__).parent.parent / 'services' / 'obstruction_handler.py'
+            self.logger.info(f"Running obstruction handler directly: {handler_path}")
+
+            subprocess.Popen(
+                [sys.executable, str(handler_path)],
+                env={**os.environ, 'DISPLAY': ':0'},
+                start_new_session=True
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to run obstruction handler directly: {e}")
 
     def _on_no_match_display(self):
         """Handle no match display requests"""
