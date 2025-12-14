@@ -14,6 +14,7 @@ import sys
 import time
 import subprocess
 import logging
+import datetime
 from pathlib import Path
 
 # Add project paths
@@ -42,8 +43,11 @@ class ObstructionHandlerUI:
     def __init__(self):
         self.root = None
         self.servo_controller = None
+        self.aws_manager = None
+        self.aws_config = None
         self._setup_display()
         self._init_servo()
+        self._init_aws()
 
     def _setup_display(self):
         """Setup display environment"""
@@ -69,6 +73,79 @@ class ObstructionHandlerUI:
         except Exception as e:
             logger.error(f'Failed to initialize servo: {e}')
             self.servo_controller = None
+
+    def _init_aws(self):
+        """Initialize AWS IoT connection for status publishing"""
+        try:
+            from tsv6.config.production_config import ProductionConfigManager
+            from tsv6.core.aws_resilient_manager import ResilientAWSManager, RetryConfig
+
+            config_manager = ProductionConfigManager()
+            self.aws_config = config_manager.get_aws_config()
+
+            retry_config = RetryConfig(
+                initial_delay=1.0,
+                max_delay=30.0,
+                multiplier=1.5,
+                jitter=0.2
+            )
+
+            self.aws_manager = ResilientAWSManager(
+                thing_name=self.aws_config['thing_name'],
+                endpoint=self.aws_config['endpoint'],
+                cert_path=str(self.aws_config['cert_path']),
+                key_path=str(self.aws_config['key_path']),
+                ca_path=str(self.aws_config['ca_path']),
+                retry_config=retry_config,
+                use_unique_client_id=True
+            )
+
+            self.aws_manager.connect()
+            time.sleep(2)  # Wait for connection
+
+            if self.aws_manager.connected:
+                logger.info(f'AWS connected: {self.aws_config["thing_name"]}')
+            else:
+                logger.warning('AWS connection not established')
+
+        except Exception as e:
+            logger.error(f'Failed to initialize AWS: {e}')
+            self.aws_manager = None
+
+    def publish_status(self, connection_state: str, details: dict = None):
+        """Publish status update to AWS IoT"""
+        if not self.aws_manager or not self.aws_manager.connected:
+            logger.warning('AWS not connected - status not published')
+            return False
+
+        try:
+            status_payload = {
+                "thingName": self.aws_config["thing_name"],
+                "connectionState": connection_state,
+                "deviceType": "raspberry-pi",
+                "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+
+            if details:
+                status_payload.update(details)
+
+            shadow_payload = {"state": {"reported": status_payload}}
+
+            success = self.aws_manager.publish_with_retry(
+                self.aws_manager.shadow_update_topic,
+                shadow_payload
+            )
+
+            if success:
+                logger.info(f'Status published: {connection_state}')
+            else:
+                logger.error(f'Failed to publish status: {connection_state}')
+
+            return success
+
+        except Exception as e:
+            logger.error(f'Error publishing status: {e}')
+            return False
 
     def stop_main_service(self):
         """Stop the tsv6.service"""
@@ -121,6 +198,14 @@ class ObstructionHandlerUI:
         """Handle the 'Item Cleared' button press"""
         logger.info('Item Cleared button pressed')
 
+        # Publish "Obstruction Clearing" status to AWS
+        self.publish_status("Obstruction Clearing", {
+            "obstruction": {
+                "action": "user_clearing",
+                "cleared_at": datetime.datetime.utcnow().isoformat() + "Z"
+            }
+        })
+
         # Update UI to show processing
         self.button.config(state=tk.DISABLED, text='Closing door...')
         self.root.update()
@@ -131,6 +216,16 @@ class ObstructionHandlerUI:
         if success:
             self.button.config(text='Restarting service...')
             self.root.update()
+
+            # Publish "Obstruction Cleared" status to AWS
+            self.publish_status("Obstruction Cleared", {
+                "obstruction": {
+                    "action": "cleared",
+                    "servo_closed": True,
+                    "cleared_at": datetime.datetime.utcnow().isoformat() + "Z"
+                }
+            })
+
             time.sleep(1)
 
             # Cleanup servo
@@ -140,11 +235,34 @@ class ObstructionHandlerUI:
             # Start the main service
             self.start_main_service()
 
+            # Publish "Service Restarted" status to AWS
+            self.publish_status("connected", {
+                "obstruction": {
+                    "action": "service_restarted",
+                    "restarted_at": datetime.datetime.utcnow().isoformat() + "Z"
+                }
+            })
+
+            # Disconnect AWS before closing
+            if self.aws_manager:
+                try:
+                    self.aws_manager.disconnect()
+                except:
+                    pass
+
             # Close this UI
             time.sleep(0.5)
             self.root.quit()
             self.root.destroy()
         else:
+            # Publish failure status
+            self.publish_status("Obstruction Clear Failed", {
+                "obstruction": {
+                    "action": "clear_failed",
+                    "servo_closed": False
+                }
+            })
+
             # Show error and allow retry
             self.button.config(
                 state=tk.NORMAL,
@@ -227,6 +345,9 @@ class ObstructionHandlerUI:
         self.root.lift()
         self.root.focus_force()
 
+        # Hide the mouse cursor
+        self.root.config(cursor='none')
+
         # Create main container
         container = tk.Frame(self.root, bg='#B71C1C')
         container.place(relx=0.5, rely=0.5, anchor='center')
@@ -275,7 +396,7 @@ class ObstructionHandlerUI:
             relief=tk.FLAT,
             padx=50,
             pady=15,
-            cursor='hand2',
+            cursor='none',  # Hide cursor on button too
             command=self.on_item_cleared
         )
 
