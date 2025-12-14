@@ -10,7 +10,7 @@ import os
 import time
 import threading
 import logging
-from typing import Optional
+from typing import Optional, Tuple, Callable
 from pathlib import Path
 
 # Add vendor directory to Python path for scservo_sdk imports
@@ -21,6 +21,7 @@ if str(_vendor_path) not in sys.path:
 
 try:
     from scservo_sdk import PortHandler, sms_sts, SMS_STS_TORQUE_ENABLE
+    from scservo_sdk.sms_sts import SMS_STS_PRESENT_CURRENT_L, SMS_STS_PRESENT_LOAD_L
     STSERVO_AVAILABLE = True
 except ImportError as e:
     STSERVO_AVAILABLE = False
@@ -55,6 +56,7 @@ class STServoController:
         moving_speed: int = 0,          # 0 = maximum speed
         acceleration: int = 50,         # Acceleration value
         timeout: float = 1.0,
+        on_obstruction_callback: Optional[Callable[[int, int], None]] = None,
     ):
         """
         Initialize STServo controller.
@@ -68,6 +70,7 @@ class STServoController:
             moving_speed: Speed setting (0 = maximum, default: 0)
             acceleration: Acceleration value (default: 50)
             timeout: Command timeout in seconds
+            on_obstruction_callback: Callback function(retry_count, servo_id) called on obstruction
         """
         # Load from environment variables if not specified
         self.port = port or os.environ.get('TSV6_SERVO_PORT') or self._auto_detect_port()
@@ -86,6 +89,7 @@ class STServoController:
         self.port_handler: Optional[PortHandler] = None
         self.servo: Optional[sms_sts] = None
         self._connected = False
+        self.on_obstruction_callback = on_obstruction_callback
 
         if not STSERVO_AVAILABLE:
             logger.warning("STServo SDK not available - running in simulation mode")
@@ -323,6 +327,158 @@ class STServoController:
             finally:
                 self.is_moving = False
 
+    def _monitor_close_movement(self, timeout: float = 3.0) -> bool:
+        """
+        Monitor servo during close movement for obstructions.
+
+        Args:
+            timeout: Maximum time to wait for movement completion
+
+        Returns:
+            True if obstruction detected, False if movement completed normally
+        """
+        if not self._connected or not self.servo:
+            # Simulation mode - no obstruction
+            time.sleep(0.5)
+            return False
+
+        start_time = time.time()
+        baseline_current = self.read_current()
+        last_position = self.get_position()
+        stall_count = 0
+
+        # Current spike threshold (50% above baseline, minimum 100)
+        current_threshold = max(baseline_current * 1.5, 100)
+
+        logger.debug(f"Monitoring close: baseline_current={baseline_current}, threshold={current_threshold}")
+
+        while time.time() - start_time < timeout:
+            try:
+                current = self.read_current()
+                position = self.get_position()
+                moving, _, _ = self.servo.ReadMoving(self.servo_id)
+
+                # Check 1: Current spike (obstruction causing motor strain)
+                if current > current_threshold:
+                    logger.warning(f"Obstruction detected: current spike {current} > {current_threshold}")
+                    return True
+
+                # Check 2: Movement completed - verify position
+                if not moving:
+                    # Check if we reached the target (within tolerance)
+                    if abs(position - self.closed_position) < 50:
+                        logger.debug(f"Close completed: position={position}, target={self.closed_position}")
+                        return False  # Success - no obstruction
+                    else:
+                        logger.warning(f"Obstruction detected: stopped at {position}, target={self.closed_position}")
+                        return True  # Stopped but not at target = blocked
+
+                # Check 3: Position stall (moving flag set but no position change)
+                if abs(position - last_position) < 10:
+                    stall_count += 1
+                    if stall_count > 10:  # ~500ms of no movement
+                        logger.warning(f"Obstruction detected: position stalled at {position}")
+                        return True
+                else:
+                    stall_count = 0
+
+                last_position = position
+                time.sleep(0.05)  # Poll every 50ms
+
+            except Exception as e:
+                logger.error(f"Error during movement monitoring: {e}")
+                break
+
+        # Timeout - check final position
+        final_position = self.get_position()
+        if abs(final_position - self.closed_position) > 50:
+            logger.warning(f"Obstruction detected: timeout at position {final_position}")
+            return True
+
+        return False
+
+    def close_door_with_safety(
+        self,
+        max_retries: int = 3,
+        retry_delay: float = 5.0,
+        hold_time: float = 0.5
+    ) -> Tuple[bool, str]:
+        """
+        Close door with obstruction detection and automatic retry.
+
+        Safety feature: If obstruction detected, opens door immediately,
+        waits, then retries. After max_retries, stays open and reports.
+
+        Args:
+            max_retries: Maximum number of close attempts (default: 3)
+            retry_delay: Seconds to wait between retries (default: 5.0)
+            hold_time: Seconds to hold closed position (default: 0.5)
+
+        Returns:
+            Tuple of (success, status) where status is:
+            - "closed": Door successfully closed
+            - "obstructed": Obstruction detected, door left open
+            - "error": Communication or other error
+        """
+        with self.lock:
+            if self.is_moving:
+                logger.warning("Servo already moving, ignoring command")
+                return (False, "error")
+
+            self.is_moving = True
+
+            try:
+                for attempt in range(max_retries):
+                    logger.info(f"Close attempt {attempt + 1}/{max_retries}")
+                    print(f"Close attempt {attempt + 1}/{max_retries}")
+
+                    # Start close movement
+                    if not self._set_position(self.closed_position):
+                        return (False, "error")
+
+                    # Monitor for obstruction during movement
+                    obstruction_detected = self._monitor_close_movement()
+
+                    if not obstruction_detected:
+                        # Success - hold position and return
+                        if hold_time > 0:
+                            time.sleep(hold_time)
+                        logger.info("Door closed successfully")
+                        print("Door closed successfully")
+                        return (True, "closed")
+
+                    # Obstruction detected - open immediately for safety
+                    logger.warning(f"Obstruction on attempt {attempt + 1}, opening door")
+                    print(f"Obstruction detected on attempt {attempt + 1}, opening door")
+
+                    self._set_position(self.open_position)
+                    self._wait_for_movement()
+
+                    # Notify via callback if registered
+                    if self.on_obstruction_callback:
+                        try:
+                            self.on_obstruction_callback(attempt + 1, self.servo_id)
+                        except Exception as e:
+                            logger.error(f"Obstruction callback error: {e}")
+
+                    # Wait before retry (except on last attempt)
+                    if attempt < max_retries - 1:
+                        logger.info(f"Waiting {retry_delay}s before retry...")
+                        print(f"Waiting {retry_delay}s before retry...")
+                        time.sleep(retry_delay)
+
+                # All retries exhausted - stay open
+                logger.error(f"Obstruction persists after {max_retries} attempts, door left open")
+                print(f"Obstruction persists after {max_retries} attempts, door left open")
+                return (False, "obstructed")
+
+            except Exception as e:
+                logger.error(f"Error during safe close: {e}")
+                return (False, "error")
+
+            finally:
+                self.is_moving = False
+
     def get_position(self) -> int:
         """Get current servo position."""
         if not self._connected or not self.servo:
@@ -334,6 +490,40 @@ class STServoController:
             return position
         except Exception:
             return self.current_position
+
+    def read_current(self) -> int:
+        """
+        Read servo current draw.
+
+        Returns:
+            Current in mA (approximate), 0 if not connected
+        """
+        if not self._connected or not self.servo:
+            return 0
+
+        try:
+            current, _, _ = self.servo.read2ByteTxRx(self.servo_id, SMS_STS_PRESENT_CURRENT_L)
+            return current
+        except Exception as e:
+            logger.debug(f"Failed to read current: {e}")
+            return 0
+
+    def read_load(self) -> int:
+        """
+        Read servo load/torque.
+
+        Returns:
+            Load value (0-1000 scale), 0 if not connected
+        """
+        if not self._connected or not self.servo:
+            return 0
+
+        try:
+            load, _, _ = self.servo.read2ByteTxRx(self.servo_id, SMS_STS_PRESENT_LOAD_L)
+            return load
+        except Exception as e:
+            logger.debug(f"Failed to read load: {e}")
+            return 0
 
     def is_door_open(self) -> bool:
         """Check if door is in open position."""
