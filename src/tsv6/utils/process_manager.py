@@ -133,15 +133,18 @@ class ProcessLock:
     
     def release(self):
         """Release the process lock"""
-        if self.lock_file_handle:
+        if self.lock_file_handle and not self.lock_file_handle.closed:
             try:
                 fcntl.flock(self.lock_file_handle, fcntl.LOCK_UN)
                 self.lock_file_handle.close()
-                self.lock_file.unlink()
+                if self.lock_file.exists():
+                    self.lock_file.unlink()
                 self.acquired = False
+                self.lock_file_handle = None
                 print(f"✅ Process lock released: {self.lock_file}")
             except Exception as e:
                 print(f"⚠️  Error releasing process lock: {e}")
+                self.lock_file_handle = None
     
     def is_acquired(self) -> bool:
         """Check if lock is currently acquired"""
