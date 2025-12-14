@@ -1,16 +1,37 @@
 [Unit]
-Description=TSV6 X11 Server (no display manager)
-After=systemd-user-sessions.service
-ConditionPathExists=/dev/tty7
+Description=TSV6 X11 Server for Pi OS Lite (minimal xinit, no display manager)
 Documentation=file:///home/%i/tsrpi5/README.md
+After=systemd-user-sessions.service
+# Wait for DRM device to be available
+After=dev-dri-card0.device
+Wants=dev-dri-card0.device
+ConditionPathExists=/dev/tty7
 
 [Service]
 Type=simple
 User=%i
+Group=%i
+PAMName=login
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
 Environment=DISPLAY=:0
-ExecStart=/usr/bin/xinit /bin/bash -c "exec sleep infinity" -- :0 vt7 -keeptty -noreset
+Environment=XAUTHORITY=/home/%i/.Xauthority
+
+# Wait for DRM device before starting X (up to 30 seconds)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exit 0; sleep 1; done; echo "DRM device not ready after 30s"; exit 1'
+
+# Wait for DSI connector to be connected (up to 15 seconds, non-fatal)
+ExecStartPre=-/bin/bash -c 'for i in $(seq 1 15); do grep -q connected /sys/class/drm/card*-DSI*/status 2>/dev/null && exit 0; sleep 1; done; echo "DSI connector not found (continuing anyway)"; exit 0'
+
+# Start X with DPMS disabled to prevent screen blanking
+ExecStart=/usr/bin/xinit /bin/bash -c "xset s off -dpms 2>/dev/null; exec sleep infinity" -- :0 vt7 -keeptty -noreset -nolisten tcp
+
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target

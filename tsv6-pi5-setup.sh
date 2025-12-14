@@ -291,18 +291,16 @@ fi
 sudo tee -a "$CONFIG_FILE" > /dev/null << 'EOL'
 
 # ====================================================================
-# TSV6 Waveshare 7-inch DSI Display Configuration (Raspberry Pi 5)
+# TSV6 Waveshare 7-inch DSI LCD Configuration (Raspberry Pi 5)
+# Reference: https://www.waveshare.com/wiki/7inch_DSI_LCD
 # ====================================================================
-dtoverlay=vc4-kms-dsi-waveshare-panel,7inch-1024x600
+dtoverlay=vc4-kms-dsi-7inch
 dtparam=i2c_arm=on
 dtparam=spi=on
 dtparam=audio=on
 disable_overscan=1
-framebuffer_width=1024
-framebuffer_height=600
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt=1024 600 60 6 0 0 0
+framebuffer_width=800
+framebuffer_height=480
 
 # Power management for stable operation
 dtparam=pwr_led_gpio=off

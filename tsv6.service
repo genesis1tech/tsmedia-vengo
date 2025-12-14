@@ -1,10 +1,9 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
+Documentation=file:///home/g1tech/tsrpi5/README.md
 After=network-online.target time-sync.target tsv6-xorg@g1tech.service
 Wants=network-online.target
 Requires=tsv6-xorg@g1tech.service
-# Document all dependencies
-Documentation=file:///home/g1tech/tsrpi5/README.md
 
 [Service]
 Type=simple
@@ -26,15 +25,25 @@ Environment="ALSA_CONFIG_PATH=/dev/null"
 Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
 Environment="PULSE_SERVER="
 
-# Startup - Simple startup without complex checks
+# CRITICAL: Wait for X11 socket to exist (up to 60 seconds)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; echo "X11 socket not found after 60s"; exit 1'
+
+# Wait for X11 to be responsive (up to 30 seconds)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do xdpyinfo -display :0 >/dev/null 2>&1 && exit 0; sleep 1; done; echo "X11 not responsive after 30s"; exit 1'
+
+# Disable screen blanking/DPMS before starting app (non-fatal)
+ExecStartPre=-/bin/bash -c 'DISPLAY=:0 xset s off -dpms 2>/dev/null || true'
+
+# Start application
 ExecStart=/home/g1tech/.local/bin/uv run python run_production.py
 
 # Restart policy - only restart on failure, not on clean exit
 Restart=on-failure
 RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 # Watchdog - disabled (application handles its own monitoring via error recovery)
-# WatchdogSec=0 disables watchdog
 WatchdogSec=0
 RuntimeMaxSec=infinity
 
