@@ -135,6 +135,11 @@ class STServoController:
             # Enable torque
             self._enable_torque(True)
 
+            # Move servo to closed position (0) on startup/wake-up
+            logger.info("Initializing servo to closed position (0)...")
+            self._set_position(self.closed_position)
+            self._wait_for_movement(timeout=2.0)
+
             logger.info(f"STServo connected on {self.port} (ID: {self.servo_id})")
             print(f"STServo connected on {self.port} (ID: {self.servo_id})")
 
