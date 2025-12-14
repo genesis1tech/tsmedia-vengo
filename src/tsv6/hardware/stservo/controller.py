@@ -347,8 +347,9 @@ class STServoController:
         last_position = self.get_position()
         stall_count = 0
 
-        # Current spike threshold (50% above baseline, minimum 100)
-        current_threshold = max(baseline_current * 1.5, 100)
+        # Current spike threshold (200% above baseline, minimum 500)
+        # Normal movement draws ~16-50mA, obstructions draw significantly more
+        current_threshold = max(baseline_current * 3.0, 500)
 
         logger.debug(f"Monitoring close: baseline_current={baseline_current}, threshold={current_threshold}")
 
