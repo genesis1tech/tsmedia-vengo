@@ -4,8 +4,8 @@
 # Create /etc/sudoers.d/tsv6-sleep with the following content:
 #
 #   # Allow sleep service to manage tsv6 service
-#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tsv6@*.service
-#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tsv6@*.service
+#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tsv6.service
+#   %users ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tsv6.service
 #
 # Then set permissions:
 #   sudo chmod 440 /etc/sudoers.d/tsv6-sleep
@@ -21,13 +21,13 @@
 Description=TSV6 Sleep Service - Power Saving Mode Manager
 After=network-online.target
 Wants=network-online.target
-Documentation=file:///home/%i/ts_uscup/README.md
+Documentation=file:///home/%i/tsrpi5/README.md
 
 [Service]
 Type=simple
 User=%i
 Group=%i
-WorkingDirectory=/home/%i/ts_uscup
+WorkingDirectory=/home/%i/tsrpi5
 
 # Environment
 Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
@@ -35,7 +35,7 @@ Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/%i/.Xauthority"
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
 Environment="TSV6_ENVIRONMENT=production"
-Environment="PYTHONPATH=/home/%i/ts_uscup/src"
+Environment="PYTHONPATH=/home/%i/tsrpi5/src"
 Environment="SDL_AUDIODRIVER=dummy"
 Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
 Environment="PULSE_SERVER="

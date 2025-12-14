@@ -81,9 +81,9 @@ class PerformanceConfig:
 class SleepConfig:
     """Sleep mode configuration for power saving"""
     enabled: bool = True
-    sleep_time: str = "21:30"  # Time to enter sleep mode (24-hour format HH:MM) 10:30 PM
-    wake_time: str = "06:00"  # Time to wake from sleep mode (24-hour format HH:MM) 06:00 AM
-    tsv6_service_name: str = "tsv6@g1tech.service"  # Service to manage during sleep
+    sleep_time: str = "22:30"  # Time to enter sleep mode (24-hour format HH:MM) 10:30 PM
+    wake_time: str = "06:00"  # Time to wake from sleep mode (24-hour format HH:MM) 6:00 AM
+    tsv6_service_name: str = "tsv6.service"  # Service to manage during sleep
     publish_status_on_sleep: bool = True  # Publish a status message when entering sleep
     disconnect_aws_on_sleep: bool = True  # Disconnect from AWS to save energy
 
