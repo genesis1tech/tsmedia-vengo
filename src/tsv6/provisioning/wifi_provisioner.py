@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -96,6 +97,7 @@ class WiFiProvisioner:
         self.wifi_credentials: Optional[dict] = None
         self.server_thread: Optional[threading.Thread] = None
         self.shutdown_flag = threading.Event()
+        self.cached_networks: list = []  # Cache networks before AP starts
 
         # Signal handling
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -121,6 +123,83 @@ class WiFiProvisioner:
             logger.warning(f"Could not read device serial: {e}")
         return "UNKNOWN"
 
+    def _scan_wifi_networks(self, use_cache: bool = True) -> list:
+        """Scan for available WiFi networks. Returns cached results if in AP mode."""
+        # Return cached networks if available (can't scan while in AP mode)
+        if use_cache and self.cached_networks:
+            logger.debug(f"Returning {len(self.cached_networks)} cached networks")
+            return self.cached_networks
+
+        networks = []
+        try:
+            # Use iwlist to scan (need to temporarily bring up a scan interface)
+            result = subprocess.run(
+                ['/usr/sbin/iwlist', 'wlan0', 'scan'],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            if result.returncode == 0:
+                current_network = {}
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if 'ESSID:' in line:
+                        ssid = line.split('ESSID:')[1].strip('"')
+                        if ssid and ssid != self.ap_ssid:  # Don't show our own AP
+                            current_network['ssid'] = ssid
+                    elif 'Signal level=' in line:
+                        try:
+                            # Extract signal level (dBm)
+                            signal_part = line.split('Signal level=')[1].split()[0]
+                            current_network['signal'] = int(signal_part.replace('dBm', ''))
+                        except:
+                            current_network['signal'] = -100
+                    elif 'Encryption key:' in line:
+                        current_network['encrypted'] = 'on' in line.lower()
+
+                    # When we have a complete network entry, add it
+                    if 'ssid' in current_network and current_network['ssid']:
+                        if current_network not in networks:
+                            networks.append(current_network.copy())
+                        current_network = {}
+
+                # Remove duplicates and sort by signal strength
+                seen = set()
+                unique_networks = []
+                for net in networks:
+                    if net['ssid'] not in seen:
+                        seen.add(net['ssid'])
+                        unique_networks.append(net)
+
+                # Sort by signal strength (strongest first)
+                unique_networks.sort(key=lambda x: x.get('signal', -100), reverse=True)
+                networks = unique_networks[:15]  # Limit to top 15
+
+        except subprocess.TimeoutExpired:
+            logger.warning("WiFi scan timed out")
+        except Exception as e:
+            logger.error(f"Error scanning WiFi networks: {e}")
+
+        return networks
+
+    def _get_redirect_template(self) -> str:
+        """HTML template for captive portal redirect"""
+        return '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Redirecting...</title>
+    <meta http-equiv="refresh" content="0;url=http://192.168.4.1/">
+    <script>window.location.href = "http://192.168.4.1/";</script>
+</head>
+<body>
+    <p>Redirecting to WiFi setup...</p>
+    <p><a href="http://192.168.4.1/">Click here if not redirected</a></p>
+</body>
+</html>
+'''
+
     def _handle_signal(self, signum, frame):
         """Handle shutdown signals gracefully"""
         logger.info(f"Received signal {signum}, initiating shutdown")
@@ -132,7 +211,8 @@ class WiFiProvisioner:
 
         @self.app.route('/')
         def index():
-            return render_template_string(self._get_html_template())
+            networks = self._scan_wifi_networks()
+            return render_template_string(self._get_html_template(networks=networks))
 
         @self.app.route('/configure', methods=['POST'])
         def configure():
@@ -141,29 +221,87 @@ class WiFiProvisioner:
 
             if ssid:
                 self.wifi_credentials = {'ssid': ssid, 'password': password}
-                logger.info(f"Received WiFi credentials for SSID: {ssid}")
+                # Never log plaintext passwords; log metadata + stable hash for correlation.
+                logger.info(
+                    "Received WiFi credentials: ssid=%r pw_meta=%s",
+                    ssid,
+                    self._password_meta(password),
+                )
                 self.credentials_received.set()
                 return render_template_string(self._get_success_template())
 
-            return render_template_string(self._get_html_template(error="Please enter a WiFi network name"))
+            networks = self._scan_wifi_networks()
+            return render_template_string(self._get_html_template(networks=networks, error="Please select a WiFi network"))
 
         @self.app.route('/status')
         def status():
             return {'status': 'provisioning', 'device_id': self.device_id}
 
+        @self.app.route('/networks')
+        def networks():
+            """API endpoint to get available networks"""
+            return {'networks': self._scan_wifi_networks()}
+
+        # Captive portal detection endpoints - redirect to main page
+        # Android
+        @self.app.route('/generate_204')
+        @self.app.route('/gen_204')
+        def android_captive():
+            return render_template_string(self._get_redirect_template())
+
+        # iOS/macOS
+        @self.app.route('/hotspot-detect.html')
+        @self.app.route('/library/test/success.html')
+        def apple_captive():
+            return render_template_string(self._get_redirect_template())
+
+        # Windows
+        @self.app.route('/connecttest.txt')
+        @self.app.route('/ncsi.txt')
+        def windows_captive():
+            return render_template_string(self._get_redirect_template())
+
         # Catch-all for captive portal detection
         @self.app.route('/<path:path>')
         def catch_all(path):
-            return render_template_string(self._get_html_template())
+            networks = self._scan_wifi_networks()
+            return render_template_string(self._get_html_template(networks=networks))
 
-    def _get_html_template(self, error: str = "") -> str:
-        """HTML template for WiFi configuration form"""
+    def _get_html_template(self, error: str = "", networks: list = None) -> str:
+        """HTML template for WiFi configuration form with network list"""
         error_html = f'<p class="error">{error}</p>' if error else ''
+        networks = networks or []
+
+        # Build network list HTML
+        if networks:
+            network_options = ''
+            for net in networks:
+                signal = net.get('signal', -100)
+                # Convert signal to bars (1-4)
+                if signal > -50:
+                    bars = 4
+                elif signal > -60:
+                    bars = 3
+                elif signal > -70:
+                    bars = 2
+                else:
+                    bars = 1
+                signal_icon = '▂' * bars + '▂' * (4 - bars)
+                lock_icon = '🔒' if net.get('encrypted', True) else ''
+                network_options += f'''
+                <div class="network-item" onclick="selectNetwork('{net['ssid']}')">
+                    <span class="network-name">{net['ssid']}</span>
+                    <span class="network-info">{lock_icon} <span class="signal">{signal_icon}</span></span>
+                </div>'''
+            network_list_html = f'<div class="network-list">{network_options}</div>'
+        else:
+            network_list_html = '<p class="no-networks">Scanning for networks...</p>'
+
         return f'''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TSV6 WiFi Setup</title>
+    <title>Topper Stopper WiFi Setup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -179,37 +317,97 @@ class WiFiProvisioner:
         .container {{
             background: white;
             border-radius: 16px;
-            padding: 40px;
+            padding: 30px;
             max-width: 400px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }}
         .logo {{
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }}
         .logo h1 {{
             color: #1a1a2e;
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 22px;
+            margin-bottom: 5px;
         }}
         .logo p {{
             color: #666;
             font-size: 14px;
         }}
-        .device-id {{
+        .network-list {{
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }}
+        .network-item {{
+            padding: 14px 16px;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }}
+        .network-item:last-child {{
+            border-bottom: none;
+        }}
+        .network-item:hover {{
             background: #f5f5f5;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-family: monospace;
-            font-size: 12px;
+        }}
+        .network-item.selected {{
+            background: #e3f2fd;
+            border-left: 3px solid #007cba;
+        }}
+        .network-name {{
+            font-size: 16px;
+            color: #333;
+        }}
+        .network-info {{
+            font-size: 14px;
             color: #888;
-            margin-top: 10px;
+        }}
+        .signal {{
+            font-family: monospace;
+            color: #4CAF50;
+        }}
+        .no-networks {{
+            text-align: center;
+            padding: 20px;
+            color: #888;
+        }}
+        .password-section {{
+            display: none;
+            margin-top: 15px;
+        }}
+        .password-section.visible {{
+            display: block;
+        }}
+        .selected-network {{
+            background: #f5f5f5;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .selected-network-name {{
+            font-weight: 600;
+            color: #333;
+        }}
+        .change-btn {{
+            color: #007cba;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
         }}
         input {{
             width: 100%;
             padding: 14px 16px;
-            margin: 10px 0;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 16px;
@@ -219,7 +417,7 @@ class WiFiProvisioner:
             border-color: #007cba;
             outline: none;
         }}
-        button {{
+        button[type="submit"] {{
             width: 100%;
             padding: 16px;
             background: #007cba;
@@ -229,18 +427,11 @@ class WiFiProvisioner:
             font-size: 18px;
             font-weight: 600;
             cursor: pointer;
-            margin-top: 20px;
+            margin-top: 15px;
             transition: background 0.2s;
         }}
-        button:hover {{
+        button[type="submit"]:hover {{
             background: #005a87;
-        }}
-        .help {{
-            text-align: center;
-            margin-top: 20px;
-            color: #888;
-            font-size: 13px;
-            line-height: 1.5;
         }}
         .error {{
             background: #fee;
@@ -255,21 +446,51 @@ class WiFiProvisioner:
 <body>
     <div class="container">
         <div class="logo">
-            <h1>WiFi Setup</h1>
-            <p>Connect your device to the internet</p>
-            <div class="device-id">Device: {self.device_id}</div>
+            <h1>Topper Stopper</h1>
+            <p>Select your WiFi network</p>
         </div>
         {error_html}
-        <form method="post" action="/configure">
-            <input type="text" name="ssid" placeholder="WiFi Network Name" required autocomplete="off">
-            <input type="password" name="password" placeholder="WiFi Password" autocomplete="off">
-            <button type="submit">Connect</button>
+        <form method="post" action="/configure" id="wifiForm">
+            <input type="hidden" name="ssid" id="ssidInput" value="">
+
+            <div id="networkSelection">
+                {network_list_html}
+            </div>
+
+            <div class="password-section" id="passwordSection">
+                <div class="selected-network">
+                    <span class="selected-network-name" id="selectedNetworkName"></span>
+                    <button type="button" class="change-btn" onclick="changeNetwork()">Change</button>
+                </div>
+                <input type="password" name="password" id="passwordInput" placeholder="Enter WiFi password" autocomplete="off">
+                <button type="submit">Connect</button>
+            </div>
         </form>
-        <p class="help">
-            Enter your WiFi credentials to connect this device to your network.
-            The device will restart automatically after connecting.
-        </p>
     </div>
+
+    <script>
+        function selectNetwork(ssid) {{
+            document.getElementById('ssidInput').value = ssid;
+            document.getElementById('selectedNetworkName').textContent = ssid;
+            document.getElementById('networkSelection').style.display = 'none';
+            document.getElementById('passwordSection').classList.add('visible');
+            document.getElementById('passwordInput').focus();
+
+            // Highlight selected item
+            document.querySelectorAll('.network-item').forEach(item => {{
+                item.classList.remove('selected');
+                if (item.querySelector('.network-name').textContent === ssid) {{
+                    item.classList.add('selected');
+                }}
+            }});
+        }}
+
+        function changeNetwork() {{
+            document.getElementById('ssidInput').value = '';
+            document.getElementById('networkSelection').style.display = 'block';
+            document.getElementById('passwordSection').classList.remove('visible');
+        }}
+    </script>
 </body>
 </html>
 '''
@@ -431,7 +652,7 @@ ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase={self.config.ap_password}
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
+wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 """
         try:
@@ -462,6 +683,11 @@ address=/#/{self.config.ap_ip}
         """Start WiFi access point with hostapd and dnsmasq"""
         logger.info(f"Starting access point: {self.ap_ssid}")
 
+        # Scan for networks BEFORE starting AP (can't scan in AP mode)
+        logger.info("Scanning for WiFi networks before starting AP...")
+        self.cached_networks = self._scan_wifi_networks(use_cache=False)
+        logger.info(f"Cached {len(self.cached_networks)} networks for captive portal")
+
         try:
             # Stop any existing services
             subprocess.run(['systemctl', 'stop', 'hostapd'], capture_output=True)
@@ -488,17 +714,17 @@ address=/#/{self.config.ap_ip}
             subprocess.run(['ip', 'link', 'set', self.config.ap_interface, 'up'], check=True)
             time.sleep(1)
 
-            # Start dnsmasq
+            # Start dnsmasq (use full path)
             dnsmasq_proc = subprocess.Popen(
-                ['dnsmasq', '-C', self.config.dnsmasq_conf, '-d'],
+                ['/usr/sbin/dnsmasq', '-C', self.config.dnsmasq_conf, '-d'],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
             logger.info(f"Started dnsmasq (PID: {dnsmasq_proc.pid})")
 
-            # Start hostapd
+            # Start hostapd (use full path)
             hostapd_proc = subprocess.Popen(
-                ['hostapd', self.config.hostapd_conf],
+                ['/usr/sbin/hostapd', self.config.hostapd_conf],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
@@ -564,48 +790,89 @@ address=/#/{self.config.ap_ip}
         self.server_thread.start()
         logger.info(f"Web server started on port {self.config.web_port}")
 
+    def _password_meta(self, password: str) -> dict:
+        """Return safe-to-log metadata about a password (never plaintext)."""
+        try:
+            pw = password if password is not None else ""
+            pw_bytes = pw.encode("utf-8", errors="replace")
+            sha = hashlib.sha256(pw_bytes).hexdigest()[:12]
+            is_hex64 = bool(re.fullmatch(r"[0-9a-fA-F]{64}", pw))
+            return {
+                "len": len(pw),
+                "leading_ws": (len(pw) > 0 and pw[:1].isspace()),
+                "trailing_ws": (len(pw) > 0 and pw[-1:].isspace()),
+                "has_quote": ('"' in pw),
+                "has_backslash": ('\\' in pw),
+                "has_newline": ('\n' in pw or '\r' in pw),
+                "hex64": is_hex64,
+                "sha12": sha,
+            }
+        except Exception:
+            return {"len": None, "sha12": None}
+
+    def _run_capture(self, cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
+        """Run command and capture stdout/stderr for debugging."""
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+        except Exception as e:
+            return 1, "", f"{type(e).__name__}: {e}"
+
     def _apply_wifi_config(self, ssid: str, password: str) -> bool:
-        """Apply WiFi credentials and test connection"""
-        logger.info(f"Applying WiFi config for SSID: {ssid}")
+        """Apply WiFi credentials using NetworkManager and test connection"""
+        logger.info("Applying WiFi config: ssid=%r pw_meta=%s", ssid, self._password_meta(password))
 
         # Stop access point first
         self._stop_access_point()
         time.sleep(2)
 
-        # Create wpa_supplicant config
-        wpa_config = f'''ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=US
-
-network={{
-    ssid="{ssid}"
-    psk="{password}"
-    key_mgmt=WPA-PSK
-}}
-'''
-
         try:
-            # Backup existing config if present
-            if os.path.exists(self.config.wpa_supplicant_conf):
-                backup_path = f"{self.config.wpa_supplicant_conf}.backup"
-                subprocess.run(['cp', self.config.wpa_supplicant_conf, backup_path], check=True)
-                logger.info(f"Backed up existing config to {backup_path}")
+            # Re-enable WiFi in NetworkManager (it gets disabled when we use hostapd)
+            rc, out, err = self._run_capture(['nmcli', 'radio', 'wifi', 'on'], timeout=10)
+            logger.info("nmcli radio wifi on: rc=%s out=%r err=%r", rc, out, err)
+            time.sleep(2)
 
-            # Write new config to temp file first
-            temp_conf = '/tmp/wpa_supplicant_new.conf'
-            with open(temp_conf, 'w') as f:
-                f.write(wpa_config)
+            # Delete any existing connection with the same SSID to avoid conflicts
+            rc, out, err = self._run_capture(
+                ['nmcli', 'connection', 'delete', ssid],
+                timeout=10
+            )
+            logger.info("nmcli delete existing connection: rc=%s out=%r err=%r", rc, out, err)
 
-            # Copy to system location
-            subprocess.run(['cp', temp_conf, self.config.wpa_supplicant_conf], check=True)
-            subprocess.run(['chmod', '600', self.config.wpa_supplicant_conf], check=True)
-            os.remove(temp_conf)
+            # Connect to the WiFi network using nmcli
+            # This creates a new connection profile and connects
+            logger.info(f"Connecting to WiFi network: {ssid}")
+            rc, out, err = self._run_capture(
+                ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password, 'ifname', self.config.ap_interface],
+                timeout=30
+            )
+            logger.info("nmcli wifi connect: rc=%s out=%r err=%r", rc, out, err)
 
-            logger.info("WiFi configuration saved")
+            if rc != 0:
+                logger.error(f"nmcli connect failed: {err}")
+                # Try alternative: create connection then activate
+                logger.info("Trying alternative connection method...")
 
-            # Restart networking
-            subprocess.run(['systemctl', 'restart', 'dhcpcd'], capture_output=True)
-            subprocess.run(['wpa_cli', '-i', self.config.ap_interface, 'reconfigure'], capture_output=True)
+                # Create connection profile
+                rc, out, err = self._run_capture(
+                    ['nmcli', 'connection', 'add', 'type', 'wifi', 'con-name', ssid,
+                     'ssid', ssid, 'wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password],
+                    timeout=15
+                )
+                logger.info("nmcli connection add: rc=%s out=%r err=%r", rc, out, err)
+
+                if rc == 0:
+                    # Activate the connection
+                    rc, out, err = self._run_capture(
+                        ['nmcli', 'connection', 'up', ssid, 'ifname', self.config.ap_interface],
+                        timeout=30
+                    )
+                    logger.info("nmcli connection up: rc=%s out=%r err=%r", rc, out, err)
+
+            # Check connection status
+            time.sleep(3)
+            rc, out, err = self._run_capture(['nmcli', 'device', 'status'], timeout=10)
+            logger.info("nmcli device status: rc=%s out=%r", rc, out)
 
             # Test connection
             logger.info("Testing new WiFi connection...")
