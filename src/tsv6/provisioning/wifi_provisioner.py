@@ -80,10 +80,12 @@ class WiFiProvisioner:
     Creates a hotspot with captive portal for users to enter WiFi credentials.
     """
 
-    def __init__(self, config: Optional[ProvisioningConfig] = None):
+    def __init__(self, config: Optional[ProvisioningConfig] = None,
+                 on_status_update: Optional[Callable[[str, Optional[dict]], None]] = None):
         self.config = config or ProvisioningConfig()
         self.device_id = self._get_device_id()
         self.ap_ssid = f"{self.config.ap_ssid_prefix}{self.device_id}"
+        self.on_status_update = on_status_update
 
         # Flask app for web form
         self.app = Flask(__name__)
@@ -98,6 +100,14 @@ class WiFiProvisioner:
         # Signal handling
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
+
+    def _notify_status(self, status: str, details: Optional[dict] = None):
+        """Notify status update to callback if registered"""
+        if self.on_status_update:
+            try:
+                self.on_status_update(status, details)
+            except Exception as e:
+                logger.warning(f"Status callback error: {e}")
 
     def _get_device_id(self) -> str:
         """Get unique device ID from Raspberry Pi serial number"""
@@ -624,11 +634,14 @@ network={{
         logger.info(f"Starting WiFi provisioning (timeout: {timeout}s)")
 
         # Start access point
+        self._notify_status("starting_hotspot", {"ssid": self.ap_ssid})
         if not self._start_access_point():
             logger.error("Failed to start access point")
+            self._notify_status("hotspot_failed")
             return ProvisioningResult.ERROR
 
         # Start web server
+        self._notify_status("starting_portal", {"ip": self.config.ap_ip, "port": self.config.web_port})
         self._start_web_server()
 
         # Print connection info
@@ -643,16 +656,19 @@ network={{
 
         # Wait for credentials or timeout
         logger.info(f"Waiting for credentials (timeout: {timeout}s)")
+        self._notify_status("waiting_for_credentials", {"timeout": timeout})
         received = self.credentials_received.wait(timeout=timeout)
 
         if self.shutdown_flag.is_set():
             logger.info("Shutdown requested")
             self._stop_access_point()
+            self._notify_status("shutdown")
             return ProvisioningResult.ERROR
 
         if not received:
             logger.warning("Provisioning timed out")
             self._stop_access_point()
+            self._notify_status("timeout")
             return ProvisioningResult.TIMEOUT
 
         # Apply credentials
@@ -662,13 +678,20 @@ network={{
 
             for attempt in range(self.config.max_connection_retries):
                 logger.info(f"Connection attempt {attempt + 1}/{self.config.max_connection_retries}")
+                self._notify_status("connecting", {
+                    "ssid": ssid,
+                    "attempt": attempt + 1,
+                    "max_attempts": self.config.max_connection_retries
+                })
 
                 if self._apply_wifi_config(ssid, password):
+                    self._notify_status("connected", {"ssid": ssid})
                     return ProvisioningResult.SUCCESS
 
                 time.sleep(2)
 
             logger.error("All connection attempts failed")
+            self._notify_status("connection_failed", {"ssid": ssid})
             return ProvisioningResult.CONNECTION_FAILED
 
         return ProvisioningResult.ERROR

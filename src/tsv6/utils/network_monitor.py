@@ -305,6 +305,25 @@ class NetworkMonitor:
             logger.error(f"Intermediate recovery failed: {e}")
             return False
 
+    def _trigger_wifi_provisioning(self):
+        """Start WiFi provisioning service when recovery is exhausted"""
+        try:
+            logger.info("Starting WiFi provisioning service...")
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'start', 'tsv6-wifi-provisioning.service'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                logger.info("WiFi provisioning service started successfully")
+            else:
+                logger.error(f"Failed to start WiFi provisioning: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.error("Timeout starting WiFi provisioning service")
+        except Exception as e:
+            logger.error(f"Error triggering WiFi provisioning: {e}")
+
     def _hard_recovery(self) -> bool:
         """Perform hard recovery: Interface down/up + full networking restart"""
         try:
@@ -387,7 +406,9 @@ class NetworkMonitor:
             success = self._hard_recovery()
             
         elif recovery_action == "escalate":
-            logger.error("Network recovery escalating to error recovery system")
+            logger.error("Network recovery exhausted - triggering WiFi provisioning")
+
+            # Report to error recovery system
             if self.error_recovery:
                 self.error_recovery.report_error(
                     component="network",
@@ -402,6 +423,9 @@ class NetworkMonitor:
                         "interface": self.cfg.interface
                     }
                 )
+
+            # Trigger WiFi provisioning service
+            self._trigger_wifi_provisioning()
             return False
 
         if recovery_action != "none":
