@@ -1,30 +1,37 @@
 [Unit]
-Description=TSV6 WiFi Provisioning Service
-Documentation=file:///home/%i/ts_uscup/README.md
+Description=TSV6 WiFi Provisioning Service with UI
+Documentation=file:///home/g1tech/tsrpi5/README.md
 # Run before main TSV6 service
 Before=tsv6.service
-# Run after basic system services
-After=time-sync.target
+# Run after X11 is available (for UI)
+After=tsv6-xorg@g1tech.service
+Requires=tsv6-xorg@g1tech.service
 # Don't require network - we create our own if needed
 
 [Service]
-Type=oneshot
-# Run as root for network configuration
+Type=simple
+# Run as root for network configuration (hostapd, dnsmasq, etc.)
 User=root
 Group=root
-WorkingDirectory=/home/%i/ts_uscup
+WorkingDirectory=/home/g1tech/tsrpi5
 
 # Environment
-Environment="PATH=/home/%i/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/home/g1tech/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONUNBUFFERED=1"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/g1tech/.Xauthority"
 
-# Run provisioning check and captive portal if needed
-ExecStart=/home/%i/.local/bin/uv run python -m tsv6.provisioning.wifi_provisioner
+# Wait for X11 socket
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; exit 1'
+
+# Run provisioning UI service
+ExecStart=/home/g1tech/.local/bin/uv run python src/tsv6/services/wifi_provisioning_ui.py
 
 # Allow up to 12 minutes (10 min timeout + 2 min buffer)
 TimeoutStartSec=720
 
-# Don't restart - this is a one-shot service
+# Don't restart automatically - this is triggered on demand
+Restart=no
 RemainAfterExit=no
 
 # Logging
