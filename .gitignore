@@ -59,5 +59,7 @@ assets/certs/secrets.json
 !assets/certs/.gitkeep
 assets/certs/device-config.json
 
-# Documentation
+# Documentation (ignore generated docs, keep essential ones)
 *.md
+!README.md
+!CLAUDE.md
