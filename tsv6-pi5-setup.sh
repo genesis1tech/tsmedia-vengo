@@ -176,12 +176,7 @@ else
     warning "VLC installation failed - video playback may not work"
 fi
 
-# Install I2C tools
-if sudo apt install -y i2c-tools 2>/dev/null; then
-    info "I2C tools installed"
-else
-    warning "I2C tools not available - hardware I2C access may fail"
-fi
+# Note: I2C tools removed - no longer using PCA9685 PWM (switched to STServo USB serial)
 
 # Install image libraries
 if sudo apt install -y libjpeg-dev zlib1g-dev libpng-dev 2>/dev/null; then
@@ -220,12 +215,7 @@ sudo apt install -y xinput 2>/dev/null || warning "xinput not available"
 info "Installing Python development tools and GPIO libraries..."
 sudo apt install -y python3-venv python3-setuptools
 
-# Install GPIO Python system packages
-if sudo apt install -y python3-gpiozero 2>/dev/null; then
-    info "python3-gpiozero installed"
-else
-    warning "python3-gpiozero not available - will install via pip"
-fi
+# Install GPIO Python system packages (rpi-gpio only - gpiozero removed)
 sudo apt install -y python3-rpi.gpio 2>/dev/null || warning "python3-rpi.gpio not available"
 
 # Install pyserial for STServo bus servo
@@ -848,22 +838,13 @@ uv --version
 info "Checking VLC installation..."
 vlc --version || warning "VLC not found in PATH"
 
-info "Checking I2C tools..."
-i2cdetect -v 2>&1 | head -1 || warning "I2C tools not available"
+# Note: I2C tools check removed - no longer using PCA9685 PWM
 
 info "Checking Python libraries..."
 python3 -c "import tkinter; print('tkinter available')" || warning "tkinter not available"
 python3 -c "import vlc; print('python-vlc available')" || warning "python-vlc not available"
 python3 -c "import PIL; print('pillow available')" 2>/dev/null || warning "pillow not yet installed"
 python3 -c "import serial; print('pyserial available')" 2>/dev/null || warning "pyserial not yet installed"
-
-info "Checking I2C device access..."
-if i2cdetect -l 2>/dev/null | grep -q "i2c"; then
-    info "I2C devices detected"
-    i2cdetect -l
-else
-    warning "No I2C devices found - check hardware connections"
-fi
 
 # Check for USB serial devices (for STServo adapter)
 info "Checking for USB serial devices (STServo adapter)..."

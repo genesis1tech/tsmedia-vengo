@@ -81,16 +81,25 @@ sudo apt-get install -y \
 
 success "VLC installed with plugins"
 
-# Install Python build dependencies for native packages
-log "Installing Python build dependencies..."
+# Install build tools and Python build dependencies
+log "Installing build tools and Python dependencies..."
 sudo apt-get install -y \
+    build-essential \
     python3-dev \
     python3-tk \
     libdbus-1-dev \
     libdbus-glib-1-dev \
     pkg-config
 
-success "Python build dependencies installed"
+success "Build tools and Python dependencies installed"
+
+# Install AWS IoT SDK build dependencies
+log "Installing AWS IoT SDK build dependencies..."
+sudo apt-get install -y \
+    cmake \
+    libssl-dev
+
+success "AWS IoT SDK build dependencies installed"
 
 # Install SDL libraries for pygame
 log "Installing SDL libraries for pygame..."
@@ -98,9 +107,27 @@ sudo apt-get install -y \
     libsdl2-dev \
     libsdl2-image-dev \
     libsdl2-mixer-dev \
-    libsdl2-ttf-dev
+    libsdl2-ttf-dev \
+    libportmidi-dev \
+    libfreetype6-dev
 
 success "SDL libraries installed"
+
+# Install image processing libraries for Pillow
+log "Installing image processing libraries..."
+sudo apt-get install -y \
+    libjpeg-dev \
+    zlib1g-dev \
+    libpng-dev
+
+success "Image processing libraries installed"
+
+# Install GPIO libraries for future sensor support
+log "Installing GPIO libraries..."
+sudo apt-get install -y \
+    python3-rpi.gpio
+
+success "GPIO libraries installed"
 
 # Install additional system utilities
 log "Installing system utilities..."
@@ -108,7 +135,8 @@ sudo apt-get install -y \
     bc \
     curl \
     psmisc \
-    htop
+    htop \
+    jq
 
 success "System utilities installed"
 
@@ -172,8 +200,11 @@ echo ""
 info "System packages installed:"
 echo "  - X11/Xorg (display server)"
 echo "  - VLC with plugins (video playback)"
-echo "  - Python build dependencies"
+echo "  - Build tools and Python dependencies"
+echo "  - AWS IoT SDK build dependencies"
 echo "  - SDL libraries (pygame)"
+echo "  - Image processing libraries (Pillow)"
+echo "  - GPIO libraries (rpi-gpio)"
 echo "  - System utilities"
 echo ""
 info "Configuration applied:"
@@ -209,11 +240,13 @@ success "TSV6 dependencies setup complete!"
 echo "=================================="
 echo ""
 info "Next steps:"
-echo "  1. Install systemd services: ./setup_autostart.sh"
-echo "  2. Provision AWS IoT certs:  ./aws-iot-cert-provisioner.sh"
-echo "  3. Start the service:        sudo systemctl start tsv6.service"
+echo "  1. Configure Raspberry Pi:   ./setup-pi-config.sh"
+echo "  2. Install systemd services: ./setup-services.sh"
+echo "  3. Security hardening (opt): ./setup-security.sh"
+echo "  4. Provision AWS IoT certs:  ./aws-iot-cert-provisioner.sh"
+echo "  5. Reboot to apply changes:  sudo reboot"
 echo ""
-info "Or reboot to apply all changes: sudo reboot"
+info "After reboot, TSV6 will start automatically."
 echo ""
 
 exit 0
