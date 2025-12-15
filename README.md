@@ -36,6 +36,12 @@ cd tsrpi5
 
 # 7. Reboot to apply all changes
 sudo reboot
+
+# 8. Download videos from S3 (requires AWS CLI credentials)
+./download_s3_videos.sh
+
+# 9. Download event images from S3
+./download_s3_images.sh
 ```
 
 After reboot, TSV6 will start automatically. Verify with:
@@ -60,6 +66,8 @@ journalctl -u tsv6@$USER -f
 | `setup-services.sh` | Systemd services, user groups, diagnostic scripts | Yes |
 | `setup-security.sh` | UFW firewall, fail2ban, SSH hardening | Optional |
 | `aws-iot-cert-provisioner.sh` | AWS IoT certificate provisioning | Yes |
+| `download_s3_videos.sh` | Download videos from S3 bucket | Yes |
+| `download_s3_images.sh` | Download event images from S3 bucket | Yes |
 
 ### What Each Script Does
 
@@ -89,6 +97,16 @@ journalctl -u tsv6@$USER -f
 - Configures UFW firewall (SSH, MQTT/8883, HTTPS/443)
 - Configures fail2ban for SSH brute force protection
 - Hardens SSH (disables password auth, root login)
+
+**download_s3_videos.sh**
+- Downloads videos from S3 bucket (s3://usc-upstate-videos/)
+- Syncs to local assets/videos directory
+- Requires AWS CLI credentials configured (`aws configure`)
+
+**download_s3_images.sh**
+- Downloads event images from S3 bucket (s3://topper-stopper-event-images/)
+- Syncs to local event_images directory
+- Requires AWS CLI credentials configured (`aws configure`)
 
 ## Hardware Requirements
 
