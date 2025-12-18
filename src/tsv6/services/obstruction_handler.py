@@ -16,6 +16,7 @@ import subprocess
 import logging
 import datetime
 from pathlib import Path
+from typing import Tuple
 
 # Add project paths
 project_root = Path(__file__).parent.parent.parent.parent
@@ -40,6 +41,9 @@ class ObstructionHandlerUI:
     and restart the main service.
     """
 
+    # Maximum clearing attempts before locking door open
+    MAX_CLEAR_ATTEMPTS = 3
+
     def __init__(self):
         self.root = None
         self.servo_controller = None
@@ -47,6 +51,8 @@ class ObstructionHandlerUI:
         self.port_handler = None
         self.aws_manager = None
         self.aws_config = None
+        self.error_label = None
+        self.clear_attempts = 0  # Track clearing attempts
         self._setup_display()
         # Servo and AWS init deferred to run() for faster UI display
 
@@ -94,8 +100,9 @@ class ObstructionHandlerUI:
             self.servo_id = 1
             self.SMS_STS_TORQUE_ENABLE = SMS_STS_TORQUE_ENABLE
 
-            # Store closed position for later
+            # Store positions for later
             self.closed_position = 4030
+            self.open_position = 2868
 
             logger.info(f'Servo connected on {port} (lightweight init)')
 
@@ -207,8 +214,13 @@ class ObstructionHandlerUI:
         except Exception as e:
             logger.error(f'Error starting service: {e}')
 
-    def close_servo(self):
-        """Close the servo door (re-enables torque first)"""
+    def close_servo(self) -> Tuple[bool, str]:
+        """
+        Close the servo door (re-enables torque first).
+
+        Returns:
+            Tuple of (success, error_message) where error_message is empty on success
+        """
         # Wait briefly for background init if servo not ready yet
         if not self.servo:
             logger.info('Waiting for servo initialization...')
@@ -217,44 +229,147 @@ class ObstructionHandlerUI:
                 if self.servo:
                     break
 
-        if self.servo:
+        # If still no servo, try to reinitialize (handles retry scenarios)
+        if not self.servo:
+            logger.info('Servo not ready, attempting to reinitialize...')
+            self._init_servo_lightweight()
+            time.sleep(0.5)  # Give it time to connect
+
+        if not self.servo:
+            logger.error('Servo not initialized after retry')
+            return (False, 'Servo not connected')
+
+        try:
+            # Re-enable torque (was disabled after obstruction detected)
+            logger.info('Re-enabling servo torque...')
+            self.servo.write1ByteTxRx(self.servo_id, self.SMS_STS_TORQUE_ENABLE, 1)
+            time.sleep(0.1)  # Small delay after torque enable
+
+            # Read current position (for logging only - we don't check it)
             try:
-                # Re-enable torque (was disabled after obstruction detected)
-                logger.info('Re-enabling servo torque...')
-                self.servo.write1ByteTxRx(self.servo_id, self.SMS_STS_TORQUE_ENABLE, 1)
+                current_pos, _, _ = self.servo.ReadPos(self.servo_id)
+                logger.info(f'Current position before close: {current_pos}')
+            except:
+                current_pos = None
+                logger.warning('Could not read current position')
 
-                logger.info('Closing servo...')
-                # WritePosEx(id, position, speed, acceleration)
-                self.servo.WritePosEx(self.servo_id, self.closed_position, 0, 50)
-                time.sleep(1.0)  # Wait for movement
+            logger.info(f'Closing servo to position {self.closed_position}...')
+            # WritePosEx(id, position, speed, acceleration)
+            # Always command to closed position regardless of current position
+            self.servo.WritePosEx(self.servo_id, self.closed_position, 0, 50)
 
-                logger.info('Servo closed')
-                return True
+            # Wait for movement to complete with position verification
+            max_wait = 2.0  # Maximum wait time
+            poll_interval = 0.1
+            waited = 0.0
+
+            while waited < max_wait:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+                try:
+                    # Check if servo reached target position
+                    pos, _, _ = self.servo.ReadPos(self.servo_id)
+                    # Check if within tolerance (±50 units)
+                    if abs(pos - self.closed_position) < 50:
+                        logger.info(f'Servo closed successfully at position {pos}')
+                        return (True, '')
+                except Exception as e:
+                    logger.warning(f'Could not read position during wait: {e}')
+
+            # Timeout - check final position
+            try:
+                final_pos, _, _ = self.servo.ReadPos(self.servo_id)
+                if abs(final_pos - self.closed_position) < 50:
+                    logger.info(f'Servo closed at position {final_pos}')
+                    return (True, '')
+                else:
+                    logger.error(f'Servo did not reach target: at {final_pos}, target {self.closed_position}')
+                    return (False, f'Door stuck at position {final_pos}')
             except Exception as e:
-                logger.error(f'Failed to close servo: {e}')
-                return False
+                logger.error(f'Could not verify final position: {e}')
+                # If we can't read position but command was sent, assume success
+                logger.info('Command sent, assuming success')
+                return (True, '')
 
-        logger.error('Servo not initialized')
-        return False
+        except Exception as e:
+            logger.error(f'Failed to close servo: {e}')
+            return (False, f'Servo error: {str(e)}')
+
+    def open_fully_and_disable_torque(self) -> bool:
+        """
+        Move servo to full open position and disable torque.
+        Called after max clearing attempts to allow manual item removal.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        logger.info('Opening door fully and disabling torque (max attempts reached)')
+
+        # Ensure servo is initialized
+        if not self.servo:
+            self._init_servo_lightweight()
+            time.sleep(0.5)
+
+        if not self.servo:
+            logger.error('Cannot open door - servo not connected')
+            return False
+
+        try:
+            # Enable torque first to move
+            logger.info('Enabling torque to move to open position...')
+            self.servo.write1ByteTxRx(self.servo_id, self.SMS_STS_TORQUE_ENABLE, 1)
+            time.sleep(0.1)
+
+            # Move to full open position
+            open_pos = getattr(self, 'open_position', 2868)
+            logger.info(f'Moving servo to full open position {open_pos}...')
+            self.servo.WritePosEx(self.servo_id, open_pos, 0, 50)
+
+            # Wait for movement to complete
+            time.sleep(1.5)
+
+            # Verify position (optional, just for logging)
+            try:
+                pos, _, _ = self.servo.ReadPos(self.servo_id)
+                logger.info(f'Servo at position {pos} after open command')
+            except:
+                pass
+
+            # Now disable torque so user can freely move the door
+            logger.info('Disabling servo torque for manual removal...')
+            self.servo.write1ByteTxRx(self.servo_id, self.SMS_STS_TORQUE_ENABLE, 0)
+
+            logger.info('Door fully open, torque disabled')
+            return True
+
+        except Exception as e:
+            logger.error(f'Failed to open door and disable torque: {e}')
+            return False
 
     def on_item_cleared(self):
         """Handle the 'Item Cleared' button press"""
-        logger.info('Item Cleared button pressed')
+        self.clear_attempts += 1
+        logger.info(f'Item Cleared button pressed (attempt {self.clear_attempts}/{self.MAX_CLEAR_ATTEMPTS})')
 
         # Publish "Obstruction Clearing" status to AWS
         self.publish_status("Obstruction Clearing", {
             "obstruction": {
                 "action": "user_clearing",
+                "attempt": self.clear_attempts,
                 "cleared_at": datetime.datetime.utcnow().isoformat() + "Z"
             }
         })
 
         # Update UI to show processing
         self.button.config(state=tk.DISABLED, text='Closing door...')
+        # Update error label if exists
+        if hasattr(self, 'error_label') and self.error_label:
+            self.error_label.config(text='')
         self.root.update()
 
-        # Close the servo
-        success = self.close_servo()
+        # Close the servo - returns (success, error_message)
+        success, error_message = self.close_servo()
 
         if success:
             self.button.config(text='Restarting service...')
@@ -265,6 +380,7 @@ class ObstructionHandlerUI:
                 "obstruction": {
                     "action": "cleared",
                     "servo_closed": True,
+                    "attempts_needed": self.clear_attempts,
                     "cleared_at": datetime.datetime.utcnow().isoformat() + "Z"
                 }
             })
@@ -301,20 +417,71 @@ class ObstructionHandlerUI:
             self.root.quit()
             self.root.destroy()
         else:
-            # Publish failure status
-            self.publish_status("Obstruction Clear Failed", {
-                "obstruction": {
-                    "action": "clear_failed",
-                    "servo_closed": False
-                }
-            })
+            # Check if max attempts reached
+            if self.clear_attempts >= self.MAX_CLEAR_ATTEMPTS:
+                # Max attempts reached - open door fully and disable torque
+                logger.warning(f'Max clearing attempts ({self.MAX_CLEAR_ATTEMPTS}) reached, locking door open')
 
-            # Show error and allow retry
-            self.button.config(
-                state=tk.NORMAL,
-                text='Retry - Item Cleared',
-                bg='#FF6B6B'
-            )
+                self.button.config(text='Opening door...')
+                self.root.update()
+
+                # Open door fully and disable torque
+                self.open_fully_and_disable_torque()
+
+                # Publish "Door Locked Open" status to AWS
+                self.publish_status("Door Locked Open", {
+                    "obstruction": {
+                        "action": "door_locked_open",
+                        "servo_closed": False,
+                        "torque_disabled": True,
+                        "attempts": self.clear_attempts,
+                        "error": error_message
+                    }
+                })
+
+                # Update UI to show door is locked open
+                if hasattr(self, 'error_label') and self.error_label:
+                    self.error_label.config(
+                        text='Door locked open. Torque disabled.\nPlease remove item and restart device.',
+                        fg='#FFEB3B'
+                    )
+
+                # Disable button - no more retries, device needs restart
+                self.button.config(
+                    state=tk.DISABLED,
+                    text='Restart Required',
+                    bg='#757575'  # Gray
+                )
+                self.root.update()
+                logger.error('Door locked open after max attempts - restart required')
+
+            else:
+                # Still have retries left
+                remaining = self.MAX_CLEAR_ATTEMPTS - self.clear_attempts
+
+                # Publish failure status with error details
+                self.publish_status("Obstruction Clear Failed", {
+                    "obstruction": {
+                        "action": "clear_failed",
+                        "servo_closed": False,
+                        "attempt": self.clear_attempts,
+                        "attempts_remaining": remaining,
+                        "error": error_message
+                    }
+                })
+
+                # Show error message on screen
+                if hasattr(self, 'error_label') and self.error_label:
+                    self.error_label.config(text=f'Error: {error_message}\n({remaining} attempts remaining)')
+
+                # Show error and allow retry
+                self.button.config(
+                    state=tk.NORMAL,
+                    text=f'Retry ({remaining} left)',
+                    bg='#FF6B6B'
+                )
+                self.root.update()
+                logger.warning(f'Close failed: {error_message}, {remaining} retries remaining')
 
     def create_rounded_button(self, parent, text, command, **kwargs):
         """Create a pill-shaped button using a Canvas"""
@@ -463,6 +630,17 @@ class ObstructionHandlerUI:
         )
         self.button.pack(pady=20)
 
+        # Error label (hidden initially, shown on failure)
+        self.error_label = tk.Label(
+            container,
+            text='',
+            font=('Helvetica', 14),
+            fg='#FFEB3B',  # Yellow for visibility
+            bg='#B71C1C',
+            wraplength=screen_width - 100
+        )
+        self.error_label.pack(pady=(10, 0))
+
         # Add subtle instruction
         hint_label = tk.Label(
             container,
@@ -471,7 +649,7 @@ class ObstructionHandlerUI:
             fg='#EF9A9A',  # Lighter red
             bg='#B71C1C'
         )
-        hint_label.pack(pady=(30, 0))
+        hint_label.pack(pady=(20, 0))
 
         # Bind escape key to close (for testing)
         self.root.bind('<Escape>', lambda e: self._emergency_exit())
