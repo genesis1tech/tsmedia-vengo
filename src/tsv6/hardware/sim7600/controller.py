@@ -453,12 +453,16 @@ class SIM7600Controller:
         return success
 
     def _enable_rndis(self) -> bool:
-        """Enable RNDIS USB network interface mode."""
+        """Enable RNDIS USB network interface mode (or accept NDIS mode)."""
         success, response = self._send_command(ATCommands.GET_USB_MODE)
         if success:
             pid, mode = ATResponseParser.parse_cusbpidswitch(response)
+            # Accept both RNDIS (9011) and NDIS (9001) modes - both support data
             if pid == 9011:
                 logger.info("RNDIS mode already enabled")
+                return True
+            elif pid == 9001:
+                logger.info("NDIS mode detected - acceptable for data connection")
                 return True
 
         success, _ = self._send_command(ATCommands.ENABLE_RNDIS)
