@@ -637,9 +637,9 @@ class ResilientAWSManager:
 
             # If LTE is primary, return LTE info
             if lte_primary:
-                # Get LTE signal strength from ModemManager
-                rssi = self._get_lte_signal_strength(env)
-                return "LTE Hologram", rssi
+                # Get LTE signal strength from ModemManager (as percentage with % symbol)
+                pct = self._get_lte_signal_strength(env)
+                return "LTE Hologram", f"{pct}%"
 
             # Otherwise get WiFi info
             ssid = ""
@@ -695,7 +695,7 @@ class ResilientAWSManager:
             return "Unknown", -100
 
     def _get_lte_signal_strength(self, env: dict) -> int:
-        """Get LTE signal strength in dBm from ModemManager"""
+        """Get LTE signal strength as percentage from ModemManager"""
         try:
             # Get signal quality percentage from modem status
             result = subprocess.run(
@@ -710,15 +710,12 @@ class ResilientAWSManager:
                         if len(parts) >= 2:
                             value = parts[1].strip().replace('%', '').split()[0]
                             try:
-                                # Convert percentage to approximate dBm
-                                # 100% ~ -50dBm, 0% ~ -120dBm
-                                pct = int(value)
-                                return -120 + int(pct * 0.7)
+                                return int(value)
                             except ValueError:
                                 pass
         except Exception:
             pass
-        return -100
+        return 0
 
     def _get_cpu_temperature(self) -> float:
         """Get CPU temperature in Fahrenheit"""
