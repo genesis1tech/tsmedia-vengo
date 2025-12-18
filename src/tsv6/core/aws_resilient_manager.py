@@ -697,25 +697,7 @@ class ResilientAWSManager:
     def _get_lte_signal_strength(self, env: dict) -> int:
         """Get LTE signal strength in dBm from ModemManager"""
         try:
-            # Use mmcli to get signal quality
-            result = subprocess.run(
-                ["mmcli", "-m", "0", "--signal-get"],
-                capture_output=True, text=True, timeout=10, env=env
-            )
-            if result.returncode == 0:
-                # Parse RSSI from output (look for "rssi" line)
-                for line in result.stdout.splitlines():
-                    if 'rssi' in line.lower():
-                        # Format: "rssi: -XX.X dBm"
-                        parts = line.split(':')
-                        if len(parts) >= 2:
-                            value = parts[1].strip().split()[0]
-                            try:
-                                return int(float(value))
-                            except ValueError:
-                                pass
-
-            # Fallback: try signal-quality percentage and convert to approximate dBm
+            # Get signal quality percentage from modem status
             result = subprocess.run(
                 ["mmcli", "-m", "0"],
                 capture_output=True, text=True, timeout=10, env=env
@@ -723,7 +705,7 @@ class ResilientAWSManager:
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
                     if 'signal quality' in line.lower():
-                        # Format: "signal quality: XX%"
+                        # Format: "|          signal quality: XX% (cached)"
                         parts = line.split(':')
                         if len(parts) >= 2:
                             value = parts[1].strip().replace('%', '').split()[0]
