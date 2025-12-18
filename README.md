@@ -65,6 +65,7 @@ journalctl -u tsv6@$USER -f
 | `setup-pi-config.sh` | Raspberry Pi config (DSI display, GPU, boot settings) | Yes |
 | `setup-services.sh` | Systemd services, user groups, diagnostic scripts | Yes |
 | `setup-security.sh` | UFW firewall, fail2ban, SSH hardening | Optional |
+| `setup-sim7600.sh` | 4G LTE HAT setup (ModemManager, NetworkManager) | Optional |
 | `aws-iot-cert-provisioner.sh` | AWS IoT certificate provisioning | Yes |
 | `download_s3_videos.sh` | Download videos from S3 bucket | Yes |
 | `download_s3_images.sh` | Download event images from S3 bucket | Yes |
@@ -108,6 +109,13 @@ journalctl -u tsv6@$USER -f
 - Syncs to local event_images directory
 - Requires AWS CLI credentials configured (`aws configure`)
 
+**setup-sim7600.sh** (Optional - for 4G LTE connectivity)
+- Installs ModemManager and NetworkManager packages
+- Creates udev rules for SIM7600 USB modem
+- Configures NetworkManager connection for Hologram.io
+- Sets LTE as primary connection (route metric 100 vs WiFi 600)
+- Requires Waveshare SIM7600G-H 4G HAT with active SIM card
+
 ## Hardware Requirements
 
 | Component | Specification |
@@ -116,6 +124,7 @@ journalctl -u tsv6@$USER -f
 | Display | Waveshare 7" DSI LCD (800x480) |
 | Servo | Waveshare ST3020 via Bus Servo Adapter (USB Serial) |
 | Barcode Scanner | USB HID compatible |
+| 4G LTE (Optional) | Waveshare SIM7600G-H 4G HAT with Hologram.io SIM |
 | Storage | MicroSD 32GB+ (Class 10 or better) |
 | Power | 5V/5A USB-C power supply |
 
@@ -136,6 +145,86 @@ journalctl -u tsv6@$USER -f
 - OTA updates via AWS IoT Jobs
 - Memory optimization for production deployment
 - WiFi stability monitoring and recovery
+- 4G LTE connectivity with WiFi failover
+
+## 4G LTE Configuration (Optional)
+
+TSV6 supports cellular connectivity via the Waveshare SIM7600G-H 4G LTE HAT with automatic WiFi failover.
+
+### Hardware Setup
+
+1. Attach the SIM7600G-H HAT to the Raspberry Pi GPIO header
+2. Insert an active SIM card (Hologram.io recommended)
+3. Connect the USB cable from the HAT to the Pi
+
+### Software Setup
+
+```bash
+# Run the LTE setup script
+sudo ./setup-sim7600.sh
+
+# Verify modem is detected
+mmcli -L
+
+# Activate the LTE connection
+sudo nmcli connection up hologram-lte
+
+# Verify connectivity
+ping -c 3 8.8.8.8
+```
+
+### Service Configuration
+
+Configure LTE in `tsv6.service` with these environment variables:
+
+```ini
+# Enable/disable LTE connectivity
+Environment="TSV6_LTE_ENABLED=true"
+
+# APN for your cellular provider
+Environment="TSV6_LTE_APN=hologram"
+
+# Connectivity mode options:
+#   wifi_only           - WiFi only, no LTE
+#   lte_only            - LTE only, no WiFi failover
+#   wifi_primary        - WiFi primary, LTE backup
+#   lte_primary_wifi_backup - LTE primary, WiFi backup (recommended)
+Environment="TSV6_CONNECTIVITY_MODE=lte_primary_wifi_backup"
+```
+
+### Route Priority
+
+When LTE is configured as primary:
+- LTE (wwan0): metric 100 (primary)
+- WiFi (wlan0): metric 600 (backup)
+
+Traffic automatically fails over to WiFi if LTE disconnects, and fails back when LTE recovers.
+
+### AWS IoT Reporting
+
+When LTE is the active connection, AWS IoT shadow reports:
+- `wifiSSID`: "LTE Hologram"
+- `wifiStrength`: Signal quality percentage (e.g., "57%")
+
+### Troubleshooting LTE
+
+```bash
+# Check modem status
+mmcli -m 0
+
+# Check signal quality
+mmcli -m 0 | grep "signal quality"
+
+# View NetworkManager connections
+nmcli connection show
+
+# Check routing table
+ip route
+
+# Restart LTE connection
+sudo nmcli connection down hologram-lte
+sudo nmcli connection up hologram-lte
+```
 
 ## Service Management
 
