@@ -308,6 +308,23 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.error(f"Failed to initialize LTE monitor: {e}")
 
+    def _is_lte_hardware_present(self) -> bool:
+        """Check if LTE modem hardware is present via ModemManager"""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["mmcli", "-L"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and "SIM" in result.stdout.upper():
+                self.logger.info("LTE modem detected via ModemManager")
+                return True
+            self.logger.info("No LTE modem detected")
+            return False
+        except Exception as e:
+            self.logger.debug(f"LTE hardware detection failed: {e}")
+            return False
+
     def _initialize_connectivity_manager(self):
         """Initialize connectivity manager for WiFi/LTE failover"""
         try:
@@ -320,6 +337,12 @@ class ProductionVideoPlayer:
             except ValueError:
                 self.logger.warning(f"Unknown connectivity mode '{mode_str}', using lte_primary_wifi_backup")
                 mode = ConnectivityMode.LTE_PRIMARY_WIFI_BACKUP
+
+            # Auto-detect: if LTE mode requested but no hardware, fall back to WiFi
+            if mode in (ConnectivityMode.LTE_ONLY, ConnectivityMode.LTE_PRIMARY_WIFI_BACKUP):
+                if not self._is_lte_hardware_present():
+                    self.logger.warning("LTE mode configured but no LTE hardware detected - falling back to WiFi only")
+                    mode = ConnectivityMode.WIFI_ONLY
 
             config = ConnectivityManagerConfig(
                 mode=mode,
