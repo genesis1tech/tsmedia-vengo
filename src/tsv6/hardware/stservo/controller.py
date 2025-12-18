@@ -100,23 +100,44 @@ class STServoController:
 
     def _auto_detect_port(self) -> str:
         """Auto-detect the serial port for the USB adapter."""
-        # Common port paths for USB serial adapters on Linux
+        # Check for stable by-id path first (QinHeng CH340 adapter)
+        # This is the most reliable method as it identifies the specific device
+        import glob
+        by_id_patterns = [
+            '/dev/serial/by-id/usb-1a86_USB_Single_Serial*',  # QinHeng CH340/CH341
+            '/dev/serial/by-id/*CH340*',
+            '/dev/serial/by-id/*CH341*',
+        ]
+        for pattern in by_id_patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                port = matches[0]
+                logger.info(f"Auto-detected servo port via by-id: {port}")
+                return port
+
+        # Common port paths - prioritize ttyACM (typical for CH340 on newer kernels)
+        # over ttyUSB (which is often used by LTE modems)
         ports = [
-            '/dev/ttyUSB0',
-            '/dev/ttyUSB1',
-            '/dev/ttyACM0',
-            '/dev/ttyACM1',
             '/dev/tsv6-servo',  # Custom udev symlink if configured
+            '/dev/ttyACM0',     # CH340 often appears as ACM on newer kernels
+            '/dev/ttyACM1',
+            '/dev/ttyUSB0',     # Fallback - may conflict with LTE modem
+            '/dev/ttyUSB1',
         ]
 
         for port in ports:
             if os.path.exists(port):
-                logger.info(f"Auto-detected serial port: {port}")
+                # Warn if using ttyUSB as it may conflict with LTE modem
+                if 'ttyUSB' in port:
+                    logger.warning(f"Using {port} for servo - may conflict with LTE modem. "
+                                   "Consider setting TSV6_SERVO_PORT explicitly.")
+                else:
+                    logger.info(f"Auto-detected serial port: {port}")
                 return port
 
         # Fallback to default
-        logger.warning("No serial port auto-detected, using /dev/ttyUSB0")
-        return '/dev/ttyUSB0'
+        logger.warning("No serial port auto-detected, using /dev/ttyACM0")
+        return '/dev/ttyACM0'
 
     def _connect(self) -> bool:
         """Connect to the servo via serial port."""
