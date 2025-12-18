@@ -305,12 +305,31 @@ class SleepService:
             self.logger.error(f"Error publishing sleep status: {e}")
 
     def _get_wifi_info(self) -> tuple:
-        """Get WiFi SSID and signal strength"""
+        """Get connection info (WiFi or LTE based on primary route)"""
         try:
             env = os.environ.copy()
             env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
 
-            # Get SSID
+            # Check if LTE (wwan0) is the primary connection
+            lte_primary = False
+            try:
+                result = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    capture_output=True, text=True, timeout=5, env=env
+                )
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    if lines and 'wwan0' in lines[0]:
+                        lte_primary = True
+            except Exception:
+                pass
+
+            # If LTE is primary, return LTE info
+            if lte_primary:
+                strength = self._get_lte_signal_strength(env)
+                return "LTE Hologram", strength
+
+            # Get WiFi SSID
             ssid = ""
             try:
                 result = subprocess.run(["/usr/sbin/iwgetid", "-r"], capture_output=True, text=True, timeout=5, env=env)
@@ -319,7 +338,7 @@ class SleepService:
             except Exception:
                 pass
 
-            # Get signal strength
+            # Get WiFi signal strength
             strength = 0
             try:
                 result = subprocess.run(["/usr/sbin/iwconfig", "wlan0"], capture_output=True, text=True, timeout=5, env=env)
@@ -338,6 +357,27 @@ class SleepService:
             return ssid, strength
         except Exception:
             return "", 0
+
+    def _get_lte_signal_strength(self, env: dict) -> int:
+        """Get LTE signal strength as percentage from ModemManager"""
+        try:
+            result = subprocess.run(
+                ["mmcli", "-m", "0"],
+                capture_output=True, text=True, timeout=10, env=env
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'signal quality' in line.lower():
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            value = parts[1].strip().replace('%', '').split()[0]
+                            try:
+                                return int(value)
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+        return 0
 
     def _get_cpu_temperature(self) -> float:
         """Get CPU temperature"""
