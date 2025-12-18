@@ -210,7 +210,7 @@ setup_network_manager() {
     log_success "NetworkManager connection 'hologram-lte' created"
 }
 
-# Add user to dialout group
+# Add user to dialout group and configure sudoers for nmcli
 setup_user_permissions() {
     log_info "Setting up user permissions..."
 
@@ -220,6 +220,20 @@ setup_user_permissions() {
     if [ "$ACTUAL_USER" != "root" ]; then
         usermod -a -G dialout "$ACTUAL_USER"
         log_success "User '$ACTUAL_USER' added to dialout group"
+
+        # Add sudoers rule for nmcli (needed for WiFi failover control)
+        SUDOERS_FILE="/etc/sudoers.d/tsv6-nmcli"
+        if [ ! -f "$SUDOERS_FILE" ]; then
+            cat > "$SUDOERS_FILE" << EOF
+# Allow TSV6 to control network connections for WiFi/LTE failover
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/nmcli connection up *
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/nmcli connection down *
+EOF
+            chmod 440 "$SUDOERS_FILE"
+            log_success "Sudoers rule created for nmcli (WiFi failover control)"
+        else
+            log_info "Sudoers rule for nmcli already exists"
+        fi
     fi
 }
 
@@ -328,12 +342,18 @@ print_summary() {
     echo "  - GPIO power control service"
     echo "  - NetworkManager connection 'hologram-lte'"
     echo "  - User permissions (dialout group)"
+    echo "  - Sudoers for nmcli (WiFi failover control)"
+    echo ""
+    echo "Power Saving Mode (default):"
+    echo "  - WiFi is disabled when LTE is connected"
+    echo "  - WiFi only activates on LTE failover"
+    echo "  - WiFi disabled again when LTE recovers"
     echo ""
     echo "Next steps:"
     echo "  1. Insert activated Hologram SIM card"
     echo "  2. Reboot the Raspberry Pi"
     echo "  3. Run: ~/test_sim7600.sh"
-    echo "  4. Verify device: ls -la /dev/tsv6-lte*"
+    echo "  4. Activate: sudo nmcli connection up hologram-lte"
     echo ""
     echo "To enable LTE in TSV6:"
     echo "  Set environment variable: TSV6_LTE_ENABLED=true"
