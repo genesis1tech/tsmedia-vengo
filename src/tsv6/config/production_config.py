@@ -503,7 +503,7 @@ class ProductionConfigManager:
             "failover_timeout_secs": float(os.getenv("TSV6_FAILOVER_TIMEOUT", "60.0")),
             "failback_check_interval_secs": float(os.getenv("TSV6_FAILBACK_INTERVAL", "300.0")),
             "failback_stability_secs": float(os.getenv("TSV6_FAILBACK_STABILITY", "30.0")),
-            "status_report_interval_secs": float(os.getenv("TSV6_STATUS_INTERVAL", "60.0")),
+            "status_report_interval_secs": float(os.getenv("TSV6_STATUS_INTERVAL", "300.0")),
         }
 
     def save_runtime_config(self):
