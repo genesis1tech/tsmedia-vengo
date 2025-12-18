@@ -57,6 +57,7 @@ class LTEMonitorConfig:
     # Connectivity test
     ping_target: str = "8.8.8.8"
     ping_timeout_secs: int = 5
+    wwan_interface: str = "wwan0"  # Network interface for LTE
 
     # Recovery thresholds (number of consecutive failures before action)
     soft_recovery_threshold: int = 2      # 60s to first recovery (2 * 30s)
@@ -67,6 +68,10 @@ class LTEMonitorConfig:
     # Backoff settings
     max_backoff_secs: float = 300.0
     initial_backoff_secs: float = 5.0
+
+    # ModemManager mode: Use NetworkManager/ModemManager instead of AT commands
+    # This is recommended when ModemManager is managing the modem (default on most distros)
+    use_modemmanager: bool = True
 
 
 class LTERecoveryStage:
@@ -169,20 +174,117 @@ class LTEMonitor:
             self._thread.join(timeout=5)
         logger.info("LTE monitor stopped")
 
-    def _ping(self, host: str, count: int = 1, timeout: int = None) -> bool:
+    def _ping(self, host: str, count: int = 1, timeout: int = None, interface: str = None) -> bool:
         """Ping a host to test data connectivity"""
         timeout = timeout or self.cfg.ping_timeout_secs
-        rc, _, _ = _run(
-            ["/bin/ping", "-c", str(count), "-W", str(timeout), host],
-            timeout=timeout + 2
-        )
+        cmd = ["/bin/ping", "-c", str(count), "-W", str(timeout)]
+        if interface:
+            cmd.extend(["-I", interface])
+        cmd.append(host)
+        rc, _, _ = _run(cmd, timeout=timeout + 2)
         if rc != 0:
             # Fallback without full path
-            rc, _, _ = _run(
-                ["ping", "-c", str(count), "-W", str(timeout), host],
-                timeout=timeout + 2
-            )
+            cmd[0] = "ping"
+            rc, _, _ = _run(cmd, timeout=timeout + 2)
         return rc == 0
+
+    def _get_wwan_ip(self) -> str:
+        """Get IP address of wwan interface (for ModemManager mode)"""
+        try:
+            rc, stdout, _ = _run(["ip", "-4", "addr", "show", self.cfg.wwan_interface])
+            if rc == 0:
+                for line in stdout.split('\n'):
+                    line = line.strip()
+                    if line.startswith('inet '):
+                        # Parse: inet 10.232.10.9/30 brd ...
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            return parts[1].split('/')[0]
+        except Exception as e:
+            logger.debug(f"Failed to get wwan IP: {e}")
+        return ''
+
+    def _get_modemmanager_status(self) -> Dict[str, Any]:
+        """Get modem status via mmcli (for ModemManager mode)"""
+        status = {
+            'state': 'unknown',
+            'signal_quality': 0,
+            'operator': '',
+        }
+        try:
+            rc, stdout, _ = _run(["mmcli", "-m", "0"], timeout=10)
+            if rc == 0:
+                for line in stdout.split('\n'):
+                    line = line.strip()
+                    if 'state:' in line.lower() and 'power state' not in line.lower():
+                        status['state'] = line.split(':')[-1].strip()
+                    elif 'signal quality:' in line.lower():
+                        # Parse: signal quality: 99% (recent)
+                        qual = line.split(':')[-1].strip()
+                        if '%' in qual:
+                            status['signal_quality'] = int(qual.split('%')[0])
+                    elif 'operator name:' in line.lower():
+                        status['operator'] = line.split(':')[-1].strip()
+        except Exception as e:
+            logger.debug(f"Failed to get mmcli status: {e}")
+        return status
+
+    def _check_connectivity_modemmanager(self) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check LTE connectivity using ModemManager/NetworkManager (passive mode).
+
+        This doesn't use AT commands - just checks if wwan interface has IP and can ping.
+        """
+        status = {
+            'connected': False,
+            'data_connected': False,
+            'signal_rssi': 99,
+            'signal_dbm': -999,
+            'signal_quality': 'unknown',
+            'operator': '',
+            'ip_address': '',
+            'ping_success': False,
+            'mode': 'modemmanager',
+        }
+
+        try:
+            # Check if wwan interface has an IP
+            ip_addr = self._get_wwan_ip()
+            status['ip_address'] = ip_addr
+            status['data_connected'] = bool(ip_addr)
+
+            if ip_addr:
+                status['connected'] = True
+                # Test actual connectivity with ping via wwan interface
+                status['ping_success'] = self._ping(
+                    self.cfg.ping_target,
+                    interface=self.cfg.wwan_interface
+                )
+
+            # Get additional info from ModemManager (non-blocking, just for status)
+            mm_status = self._get_modemmanager_status()
+            status['operator'] = mm_status.get('operator', '')
+            signal_pct = mm_status.get('signal_quality', 0)
+
+            # Convert percentage to approximate RSSI (0-31 scale)
+            # 100% ≈ 31, 0% ≈ 0
+            if signal_pct > 0:
+                status['signal_rssi'] = int(signal_pct * 31 / 100)
+                status['signal_quality'] = (
+                    'excellent' if signal_pct >= 80 else
+                    'good' if signal_pct >= 60 else
+                    'fair' if signal_pct >= 40 else
+                    'weak' if signal_pct >= 20 else
+                    'critical'
+                )
+
+            is_connected = status['data_connected'] and status['ping_success']
+            return is_connected, status
+
+        except Exception as e:
+            logger.error(f"ModemManager connectivity check error: {e}")
+            status['error'] = str(e)
+            return False, status
 
     def _check_connectivity(self) -> Tuple[bool, Dict[str, Any]]:
         """
@@ -191,6 +293,11 @@ class LTEMonitor:
         Returns:
             Tuple of (is_connected, status_dict)
         """
+        # Use ModemManager mode if configured (default) - passive monitoring
+        if self.cfg.use_modemmanager:
+            return self._check_connectivity_modemmanager()
+
+        # Legacy AT command mode (requires exclusive modem access)
         status = {
             'connected': False,
             'data_connected': False,
@@ -253,14 +360,30 @@ class LTEMonitor:
         """
         Perform soft recovery: Re-register to network.
 
-        AT+CFUN=0 (minimum functionality) then AT+CFUN=1 (full functionality)
+        ModemManager mode: Restart NetworkManager connection
+        AT mode: AT+CFUN=0 (minimum functionality) then AT+CFUN=1 (full functionality)
         """
         try:
             logger.info("Performing soft LTE recovery (network re-registration)...")
             self._recovery.soft_attempts += 1
             self._recovery.current_stage = "soft"
 
-            # Import here to avoid circular imports
+            if self.cfg.use_modemmanager:
+                # ModemManager mode: cycle the NetworkManager connection
+                logger.info("Soft recovery via NetworkManager...")
+                rc, _, _ = _run(["sudo", "nmcli", "connection", "down", "hologram-lte"], timeout=10)
+                time.sleep(2)
+                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=30)
+                time.sleep(5)
+                # Check if we got an IP
+                ip = self._get_wwan_ip()
+                if ip:
+                    logger.info(f"Soft LTE recovery completed - got IP {ip}")
+                    return True
+                logger.warning("Soft LTE recovery - no IP after reconnect")
+                return False
+
+            # Legacy AT command mode
             from ..hardware.sim7600.at_commands import ATCommands
 
             # Minimum functionality mode
@@ -296,12 +419,28 @@ class LTEMonitor:
         """
         Perform intermediate recovery: Restart PDP context.
 
-        AT+CGACT=0,1 (deactivate) then AT+CGACT=1,1 (activate)
+        ModemManager mode: Reset modem via mmcli
+        AT mode: AT+CGACT=0,1 (deactivate) then AT+CGACT=1,1 (activate)
         """
         try:
             logger.info("Performing intermediate LTE recovery (PDP context restart)...")
             self._recovery.intermediate_attempts += 1
             self._recovery.current_stage = "intermediate"
+
+            if self.cfg.use_modemmanager:
+                # ModemManager mode: reset modem
+                logger.info("Intermediate recovery via ModemManager reset...")
+                rc, _, _ = _run(["sudo", "mmcli", "-m", "0", "-r"], timeout=30)
+                time.sleep(15)  # Wait for modem to restart
+                # Reconnect
+                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=60)
+                time.sleep(10)
+                ip = self._get_wwan_ip()
+                if ip:
+                    logger.info(f"Intermediate LTE recovery completed - got IP {ip}")
+                    return True
+                logger.warning("Intermediate LTE recovery - no IP after modem reset")
+                return False
 
             from ..hardware.sim7600.at_commands import ATCommands
 
@@ -345,14 +484,32 @@ class LTEMonitor:
 
     def _hard_recovery(self) -> bool:
         """
-        Perform hard recovery: Full modem restart via serial.
+        Perform hard recovery: Full modem restart.
+
+        ModemManager mode: Restart ModemManager service
+        AT mode: Full modem restart via serial
         """
         try:
             logger.info("Performing hard LTE recovery (modem restart)...")
             self._recovery.hard_attempts += 1
             self._recovery.current_stage = "hard"
 
-            # Full modem restart
+            if self.cfg.use_modemmanager:
+                # ModemManager mode: restart ModemManager service
+                logger.info("Hard recovery - restarting ModemManager service...")
+                _run(["sudo", "systemctl", "restart", "ModemManager"], timeout=30)
+                time.sleep(20)  # Wait for service restart and modem detection
+                # Reconnect
+                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=60)
+                time.sleep(10)
+                ip = self._get_wwan_ip()
+                if ip:
+                    logger.info(f"Hard LTE recovery completed - got IP {ip}")
+                    return True
+                logger.warning("Hard LTE recovery - no IP after service restart")
+                return False
+
+            # Legacy AT mode: Full modem restart
             success = self.controller.restart_modem()
 
             if success:
