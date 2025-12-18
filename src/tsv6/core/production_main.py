@@ -41,8 +41,7 @@ from tsv6.config.production_config import ProductionConfigManager
 from tsv6.utils.memory_optimizer import MemoryOptimizer, MemoryThresholds, get_global_memory_optimizer
 from tsv6.monitoring.watchdog_monitor import WatchdogMonitor
 from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineMonitor
-
-from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineMonitor
+from tsv6.utils.splash_screen import SplashScreen
 
 # Sleep mode imports
 # Removed for memory-fix branch
@@ -94,6 +93,9 @@ class ProductionVideoPlayer:
         self.lte_controller = None
         self.lte_monitor = None
         self.connectivity_manager = None
+
+        # Splash screen for LTE startup wait
+        self.splash_screen = None
         
         # Initialize systemd recovery manager first (needed for connection deadline monitor)
         self.systemd_recovery = SystemdRecoveryManager(
@@ -359,6 +361,8 @@ class ProductionVideoPlayer:
                 error_recovery_system=self.error_recovery,
                 on_connection_change=self._on_connectivity_change,
                 on_status=self._on_connectivity_status,
+                on_lte_wait_start=self._on_lte_wait_start,
+                on_lte_wait_end=self._on_lte_wait_end,
             )
 
             self.logger.info(f"Connectivity manager initialized (mode: {mode.value})")
@@ -392,6 +396,33 @@ class ProductionVideoPlayer:
         """Handle connectivity status updates"""
         active = status.get('active_connection', 'none')
         self.logger.debug(f"Connectivity status: active={active}")
+
+    def _on_lte_wait_start(self, image_path: str, text: str):
+        """Handle LTE startup wait beginning - show splash screen"""
+        try:
+            self.logger.info(f"LTE wait starting - showing splash: {text}")
+            self.splash_screen = SplashScreen()
+            self.splash_screen.show(
+                text=text,
+                image_path=image_path,
+                text_position="bottom",
+                font_size=32,
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to show LTE splash screen: {e}")
+
+    def _on_lte_wait_end(self, success: bool):
+        """Handle LTE startup wait ending - hide splash screen"""
+        try:
+            if self.splash_screen:
+                if success:
+                    self.logger.info("LTE connected - hiding splash screen")
+                else:
+                    self.logger.warning("LTE failed to connect - hiding splash screen")
+                self.splash_screen.hide()
+                self.splash_screen = None
+        except Exception as e:
+            self.logger.warning(f"Failed to hide LTE splash screen: {e}")
 
     def _initialize_health_monitor(self):
         """Initialize system health monitoring"""

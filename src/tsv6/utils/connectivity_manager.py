@@ -63,6 +63,15 @@ class ConnectivityManagerConfig:
     # WiFi connection name in NetworkManager
     wifi_connection_name: str = ""  # Auto-detected if empty
 
+    # Startup behavior: wait for LTE before enabling WiFi
+    # If LTE is primary, disable WiFi at startup and wait for LTE to connect
+    lte_startup_wait_secs: float = 90.0  # Time to wait for LTE before enabling WiFi fallback
+
+    # Splash screen settings
+    show_lte_splash: bool = True  # Show splash screen during LTE wait
+    lte_splash_image: str = "/home/g1tech/tsrpi5/event_images/g1tech.jpg"
+    lte_splash_text: str = "Please wait connecting to 4G LTE"
+
 
 class ConnectivityManager:
     """
@@ -96,6 +105,8 @@ class ConnectivityManager:
         error_recovery_system: Optional['ErrorRecoverySystem'] = None,
         on_connection_change: Optional[Callable[[ConnectionType, ConnectionType], None]] = None,
         on_status: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_lte_wait_start: Optional[Callable[[str, str], None]] = None,  # (image_path, text)
+        on_lte_wait_end: Optional[Callable[[bool], None]] = None,  # (success: bool)
     ):
         """
         Initialize connectivity manager.
@@ -107,6 +118,8 @@ class ConnectivityManager:
             error_recovery_system: Optional error recovery integration
             on_connection_change: Callback(old_type, new_type) on active connection change
             on_status: Callback for periodic status updates
+            on_lte_wait_start: Callback(image_path, text) when LTE startup wait begins
+            on_lte_wait_end: Callback(success) when LTE startup wait ends
         """
         self.config = config or ConnectivityManagerConfig()
         self.wifi_monitor = wifi_monitor
@@ -114,6 +127,8 @@ class ConnectivityManager:
         self.error_recovery = error_recovery_system
         self.on_connection_change = on_connection_change
         self.on_status = on_status
+        self.on_lte_wait_start = on_lte_wait_start
+        self.on_lte_wait_end = on_lte_wait_end
 
         # State tracking
         self._active_connection = ConnectionType.NONE
@@ -437,18 +452,55 @@ class ConnectivityManager:
         """Main management loop"""
         logger.info("Connectivity management loop starting")
 
-        # Initial delay
-        time.sleep(5)
-
         last_status_report = 0
 
-        # Initial state: if LTE is primary and power saving is enabled, disable WiFi
-        if (self.config.disable_backup_when_primary_active and
-            self._primary == ConnectionType.LTE and
+        # LTE-first startup: if LTE is primary, disable WiFi immediately and wait for LTE
+        if (self._primary == ConnectionType.LTE and
             self._backup == ConnectionType.WIFI):
+            logger.info("LTE-first startup: disabling WiFi to prioritize LTE connection")
             if self._is_wifi_active():
-                logger.info("Power saving: disabling WiFi on startup (LTE is primary)")
                 self._disable_wifi()
+
+            # Signal LTE wait start (for splash screen)
+            if self.on_lte_wait_start:
+                try:
+                    self.on_lte_wait_start(
+                        self.config.lte_splash_image,
+                        self.config.lte_splash_text
+                    )
+                except Exception as e:
+                    logger.warning(f"LTE wait start callback error: {e}")
+
+            # Wait for LTE to connect with timeout
+            lte_startup_deadline = time.time() + self.config.lte_startup_wait_secs
+            lte_connected = False
+
+            logger.info(f"Waiting up to {self.config.lte_startup_wait_secs}s for LTE to connect...")
+            while time.time() < lte_startup_deadline and not self._stop.is_set():
+                if self._is_connection_available(ConnectionType.LTE):
+                    lte_connected = True
+                    logger.info("LTE connected successfully - WiFi will remain disabled for power saving")
+                    self._set_active_connection(ConnectionType.LTE)
+                    break
+                time.sleep(5)
+
+            # Signal LTE wait end (to hide splash screen)
+            if self.on_lte_wait_end:
+                try:
+                    self.on_lte_wait_end(lte_connected)
+                except Exception as e:
+                    logger.warning(f"LTE wait end callback error: {e}")
+
+            if not lte_connected and not self._stop.is_set():
+                logger.warning(f"LTE did not connect within {self.config.lte_startup_wait_secs}s - enabling WiFi fallback")
+                self._enable_wifi()
+                time.sleep(10)  # Wait for WiFi to connect
+                if self._is_connection_available(ConnectionType.WIFI):
+                    logger.info("WiFi fallback connected")
+                    self._set_active_connection(ConnectionType.WIFI)
+        else:
+            # Non-LTE primary mode: normal startup delay
+            time.sleep(5)
 
         while not self._stop.is_set():
             try:
