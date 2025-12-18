@@ -11,6 +11,7 @@ Default mode: LTE Primary + WiFi Backup
 import threading
 import time
 import logging
+import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum
@@ -55,6 +56,12 @@ class ConnectivityManagerConfig:
     # Connection priorities (higher = preferred when both available)
     wifi_priority: int = 100
     lte_priority: int = 200  # LTE preferred by default
+
+    # Power saving: disconnect backup when primary is active
+    disable_backup_when_primary_active: bool = True
+
+    # WiFi connection name in NetworkManager
+    wifi_connection_name: str = ""  # Auto-detected if empty
 
 
 class ConnectivityManager:
@@ -128,8 +135,16 @@ class ConnectivityManager:
         # Determine primary/backup based on mode
         self._primary, self._backup = self._get_connection_order()
 
+        # WiFi connection name for NetworkManager control
+        self._wifi_conn_name = self.config.wifi_connection_name or self._detect_wifi_connection()
+        self._wifi_disabled_by_us = False
+
         logger.info(f"ConnectivityManager initialized (mode: {self.config.mode.value})")
         logger.info(f"Primary: {self._primary.value}, Backup: {self._backup.value if self._backup else 'none'}")
+        if self.config.disable_backup_when_primary_active:
+            logger.info(f"Power saving enabled: backup will be disabled when primary is active")
+            if self._wifi_conn_name:
+                logger.info(f"WiFi connection name: {self._wifi_conn_name}")
 
     def _get_connection_order(self) -> tuple:
         """Determine primary and backup connections based on mode"""
@@ -145,6 +160,90 @@ class ConnectivityManager:
             return ConnectionType.LTE, ConnectionType.WIFI
         else:
             return ConnectionType.LTE, ConnectionType.WIFI
+
+    def _detect_wifi_connection(self) -> str:
+        """Auto-detect WiFi connection name from NetworkManager"""
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if ':wifi' in line or ':802-11-wireless' in line:
+                        name = line.split(':')[0]
+                        if name and name != 'lo':
+                            logger.info(f"Auto-detected WiFi connection: {name}")
+                            return name
+        except Exception as e:
+            logger.warning(f"Failed to detect WiFi connection: {e}")
+        return ""
+
+    def _enable_wifi(self) -> bool:
+        """Enable WiFi connection via NetworkManager"""
+        if not self._wifi_conn_name:
+            logger.warning("Cannot enable WiFi: no connection name configured")
+            return False
+
+        try:
+            logger.info(f"Enabling WiFi connection: {self._wifi_conn_name}")
+            result = subprocess.run(
+                ["sudo", "nmcli", "connection", "up", self._wifi_conn_name],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                logger.info(f"WiFi connection '{self._wifi_conn_name}' activated")
+                self._wifi_disabled_by_us = False
+                return True
+            else:
+                logger.error(f"Failed to enable WiFi: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.error(f"Error enabling WiFi: {e}")
+            return False
+
+    def _disable_wifi(self) -> bool:
+        """Disable WiFi connection via NetworkManager"""
+        if not self._wifi_conn_name:
+            logger.warning("Cannot disable WiFi: no connection name configured")
+            return False
+
+        try:
+            logger.info(f"Disabling WiFi connection: {self._wifi_conn_name}")
+            result = subprocess.run(
+                ["sudo", "nmcli", "connection", "down", self._wifi_conn_name],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                logger.info(f"WiFi connection '{self._wifi_conn_name}' deactivated")
+                self._wifi_disabled_by_us = True
+                return True
+            else:
+                # Connection might already be down
+                if "not active" in result.stderr.lower() or "not an active" in result.stderr.lower():
+                    logger.info("WiFi already disconnected")
+                    self._wifi_disabled_by_us = True
+                    return True
+                logger.error(f"Failed to disable WiFi: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.error(f"Error disabling WiFi: {e}")
+            return False
+
+    def _is_wifi_active(self) -> bool:
+        """Check if WiFi is currently active via NetworkManager"""
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,TYPE,STATE", "connection", "show", "--active"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if 'wifi' in line.lower() or '802-11-wireless' in line.lower():
+                        return True
+        except Exception:
+            pass
+        return False
 
     def start(self) -> None:
         """Start connectivity management"""
@@ -343,12 +442,26 @@ class ConnectivityManager:
 
         last_status_report = 0
 
+        # Initial state: if LTE is primary and power saving is enabled, disable WiFi
+        if (self.config.disable_backup_when_primary_active and
+            self._primary == ConnectionType.LTE and
+            self._backup == ConnectionType.WIFI):
+            if self._is_wifi_active():
+                logger.info("Power saving: disabling WiFi on startup (LTE is primary)")
+                self._disable_wifi()
+
         while not self._stop.is_set():
             try:
                 with self._lock:
                     # Determine best available connection
                     primary_available = self._is_connection_available(self._primary)
-                    backup_available = self._backup and self._is_connection_available(self._backup)
+
+                    # For backup availability, check if WiFi is actually active
+                    # (it may be disabled by us for power saving)
+                    if self._backup == ConnectionType.WIFI and self._wifi_disabled_by_us:
+                        backup_available = False  # WiFi is disabled, not available
+                    else:
+                        backup_available = self._backup and self._is_connection_available(self._backup)
 
                     current_time = time.time()
 
@@ -358,8 +471,19 @@ class ConnectivityManager:
                         if primary_available:
                             self._set_active_connection(self._primary)
                             self._primary_failure_start = 0
-                        elif backup_available:
-                            self._set_active_connection(self._backup)
+                            # Disable backup for power saving
+                            if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
+                                if self._is_wifi_active():
+                                    logger.info("Power saving: disabling WiFi (LTE connected)")
+                                    self._disable_wifi()
+                        elif self._backup == ConnectionType.WIFI:
+                            # Primary not available, enable WiFi for failover
+                            if self._wifi_disabled_by_us:
+                                logger.info("Enabling WiFi for failover (LTE unavailable)")
+                                self._enable_wifi()
+                                time.sleep(5)  # Wait for WiFi to connect
+                            if self._is_connection_available(self._backup):
+                                self._set_active_connection(self._backup)
 
                     elif self._active_connection == self._primary:
                         # On primary connection
@@ -367,22 +491,43 @@ class ConnectivityManager:
                             # Primary failed
                             if self._primary_failure_start == 0:
                                 self._primary_failure_start = current_time
+                                logger.warning(f"Primary ({self._primary.value}) connection lost")
 
                             # Check if failover timeout reached
-                            if backup_available and (current_time - self._primary_failure_start) >= self.config.failover_timeout_secs:
-                                logger.warning(f"Failing over from {self._primary.value} to {self._backup.value}")
-                                self._set_active_connection(self._backup)
-                                self._last_failover_time = current_time
+                            elapsed = current_time - self._primary_failure_start
+                            if elapsed >= self.config.failover_timeout_secs:
+                                # Enable WiFi for failover
+                                if self._backup == ConnectionType.WIFI and self._wifi_disabled_by_us:
+                                    logger.info("Enabling WiFi for failover")
+                                    self._enable_wifi()
+                                    time.sleep(10)  # Wait for WiFi to connect
+
+                                if self._is_connection_available(self._backup):
+                                    logger.warning(f"Failing over from {self._primary.value} to {self._backup.value}")
+                                    self._set_active_connection(self._backup)
+                                    self._last_failover_time = current_time
+                                else:
+                                    logger.error("Failover failed: backup not available")
                         else:
-                            # Primary recovered
+                            # Primary is working
+                            if self._primary_failure_start != 0:
+                                logger.info(f"Primary ({self._primary.value}) recovered")
                             self._primary_failure_start = 0
+                            # Ensure WiFi is disabled for power saving
+                            if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
+                                if self._is_wifi_active():
+                                    logger.info("Power saving: disabling WiFi (LTE stable)")
+                                    self._disable_wifi()
 
                     elif self._active_connection == self._backup:
-                        # On backup connection
-                        if not backup_available:
+                        # On backup connection (WiFi failover)
+                        if not self._is_connection_available(self._backup):
                             # Backup also failed
                             if primary_available:
                                 self._set_active_connection(self._primary)
+                                # Disable WiFi for power saving
+                                if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
+                                    self._disable_wifi()
                             else:
                                 self._set_active_connection(ConnectionType.NONE)
 
@@ -397,6 +542,10 @@ class ConnectivityManager:
                                 logger.info(f"Failing back to primary ({self._primary.value})")
                                 self._set_active_connection(self._primary)
                                 self._primary_failure_start = 0
+                                # Disable WiFi for power saving
+                                if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
+                                    logger.info("Power saving: disabling WiFi after failback")
+                                    self._disable_wifi()
 
                 # Periodic status report
                 if current_time - last_status_report >= self.config.status_report_interval_secs:
