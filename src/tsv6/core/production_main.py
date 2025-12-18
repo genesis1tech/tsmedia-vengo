@@ -31,6 +31,8 @@ from tsv6.core.aws_resilient_manager import ResilientAWSManager, RetryConfig
 from tsv6.ota.ota_manager import OTAManager
 from tsv6.utils.network_monitor import NetworkMonitor, NetworkMonitorConfig
 from tsv6.utils.systemd_recovery_manager import SystemdRecoveryManager
+from tsv6.utils.lte_monitor import LTEMonitor, LTEMonitorConfig
+from tsv6.utils.connectivity_manager import ConnectivityManager, ConnectivityManagerConfig, ConnectivityMode
 from tsv6.utils.health_monitor import HealthMonitor, HealthThresholds
 from tsv6.utils.enhanced_health_monitor import EnhancedHealthMonitor
 from tsv6.hardware.display_driver_monitor import DisplayDriverMonitor
@@ -51,6 +53,13 @@ try:
 except ImportError:
     SERVO_AVAILABLE = False
     print("STServo controller not available")
+
+try:
+    from tsv6.hardware.sim7600 import SIM7600Controller, SIM7600Config
+    SIM7600_AVAILABLE = True
+except ImportError:
+    SIM7600_AVAILABLE = False
+    print("SIM7600 LTE controller not available")
 
 
 class ProductionVideoPlayer:
@@ -80,6 +89,11 @@ class ProductionVideoPlayer:
         self.video_player = None
         self.barcode_scanner = None
         self.servo_controller = None
+
+        # LTE connectivity components
+        self.lte_controller = None
+        self.lte_monitor = None
+        self.connectivity_manager = None
         
         # Initialize systemd recovery manager first (needed for connection deadline monitor)
         self.systemd_recovery = SystemdRecoveryManager(
@@ -132,9 +146,19 @@ class ProductionVideoPlayer:
         self.error_recovery.register_component("ota_manager")
         self.error_recovery.register_component("system_health")
         self.error_recovery.register_component("memory_optimizer")
-        
+        self.error_recovery.register_component("lte_modem")
+
+        # Initialize LTE controller if enabled (before network monitor)
+        self._initialize_lte_controller()
+
         # Initialize network monitoring with error recovery integration
         self._initialize_network_monitor()
+
+        # Initialize LTE monitor (after LTE controller)
+        self._initialize_lte_monitor()
+
+        # Initialize connectivity manager (after both monitors)
+        self._initialize_connectivity_manager()
         
         # Initialize memory optimizer (Priority: Critical for Issue #39)
         self._initialize_memory_optimizer()
@@ -205,7 +229,147 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.error(f"Failed to initialize network monitor: {e}")
             self.error_recovery.report_error("network", "initialization", str(e), "high")
-    
+
+    def _initialize_lte_controller(self):
+        """Initialize SIM7600 LTE controller if enabled"""
+        try:
+            lte_config = self.config_manager.get_lte_config()
+
+            if not lte_config.get("enabled", False):
+                self.logger.info("LTE connectivity disabled in configuration")
+                return
+
+            if not SIM7600_AVAILABLE:
+                self.logger.warning("SIM7600 module not available - LTE disabled")
+                return
+
+            self.logger.info("Initializing SIM7600 LTE controller...")
+
+            config = SIM7600Config(
+                port=lte_config.get("port") or None,
+                baudrate=lte_config.get("baudrate", 115200),
+                apn=lte_config.get("apn", "hologram"),
+                apn_username=lte_config.get("apn_username", ""),
+                apn_password=lte_config.get("apn_password", ""),
+                force_lte=lte_config.get("force_lte", True),
+                enable_roaming=lte_config.get("enable_roaming", True),
+                rndis_mode=lte_config.get("rndis_mode", True),
+                power_gpio=lte_config.get("power_gpio", 6),
+                use_gpio_power=lte_config.get("use_gpio_power", True),
+                keepalive_interval=lte_config.get("keepalive_interval_secs", 30),
+            )
+
+            self.lte_controller = SIM7600Controller(
+                config=config,
+                on_state_change=self._on_lte_state_change
+            )
+
+            if self.lte_controller.connect():
+                self.logger.info("LTE controller connected successfully")
+                self.error_recovery.report_success("lte_modem")
+            else:
+                self.logger.warning("LTE controller failed to connect - will retry")
+                self.error_recovery.report_error("lte_modem", "connection", "Initial connection failed", "medium")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LTE controller: {e}")
+            self.error_recovery.report_error("lte_modem", "initialization", str(e), "high")
+
+    def _initialize_lte_monitor(self):
+        """Initialize LTE network monitor"""
+        try:
+            if not self.lte_controller:
+                self.logger.debug("LTE controller not initialized, skipping LTE monitor")
+                return
+
+            lte_config = self.config_manager.get_lte_config()
+
+            monitor_config = LTEMonitorConfig(
+                check_interval_secs=lte_config.get("check_interval_secs", 30.0),
+                signal_weak_threshold_rssi=lte_config.get("signal_weak_threshold", 10),
+                signal_critical_threshold_rssi=lte_config.get("signal_critical_threshold", 5),
+                soft_recovery_threshold=lte_config.get("soft_recovery_threshold", 2),
+                intermediate_recovery_threshold=lte_config.get("intermediate_recovery_threshold", 4),
+                hard_recovery_threshold=lte_config.get("hard_recovery_threshold", 6),
+                critical_escalation_threshold=lte_config.get("critical_escalation_threshold", 10),
+            )
+
+            self.lte_monitor = LTEMonitor(
+                lte_controller=self.lte_controller,
+                config=monitor_config,
+                on_status=self._on_lte_status,
+                on_disconnect=self._on_lte_disconnect,
+                on_reconnect=self._on_lte_reconnect,
+                error_recovery_system=self.error_recovery,
+            )
+
+            self.logger.info("LTE monitor initialized")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize LTE monitor: {e}")
+
+    def _initialize_connectivity_manager(self):
+        """Initialize connectivity manager for WiFi/LTE failover"""
+        try:
+            connectivity_config = self.config_manager.get_connectivity_config()
+
+            # Determine mode from config
+            mode_str = connectivity_config.get("mode", "lte_primary_wifi_backup")
+            try:
+                mode = ConnectivityMode(mode_str)
+            except ValueError:
+                self.logger.warning(f"Unknown connectivity mode '{mode_str}', using lte_primary_wifi_backup")
+                mode = ConnectivityMode.LTE_PRIMARY_WIFI_BACKUP
+
+            config = ConnectivityManagerConfig(
+                mode=mode,
+                failover_timeout_secs=connectivity_config.get("failover_timeout_secs", 60.0),
+                failback_check_interval_secs=connectivity_config.get("failback_check_interval_secs", 300.0),
+                failback_stability_secs=connectivity_config.get("failback_stability_secs", 30.0),
+                status_report_interval_secs=connectivity_config.get("status_report_interval_secs", 60.0),
+            )
+
+            self.connectivity_manager = ConnectivityManager(
+                config=config,
+                wifi_monitor=self.network_monitor,
+                lte_monitor=self.lte_monitor,
+                error_recovery_system=self.error_recovery,
+                on_connection_change=self._on_connectivity_change,
+                on_status=self._on_connectivity_status,
+            )
+
+            self.logger.info(f"Connectivity manager initialized (mode: {mode.value})")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize connectivity manager: {e}")
+
+    def _on_lte_state_change(self, old_state, new_state):
+        """Handle LTE modem state changes"""
+        self.logger.info(f"LTE modem state changed: {old_state.value} -> {new_state.value}")
+
+    def _on_lte_status(self, status: dict):
+        """Handle LTE status updates"""
+        rssi = status.get('signal_rssi', 99)
+        quality = status.get('signal_quality', 'unknown')
+        self.logger.debug(f"LTE status: RSSI={rssi}, quality={quality}")
+
+    def _on_lte_disconnect(self, status: dict):
+        """Handle LTE disconnect"""
+        self.logger.warning(f"LTE disconnected: {status.get('error', 'unknown')}")
+
+    def _on_lte_reconnect(self, status: dict):
+        """Handle LTE reconnect"""
+        self.logger.info(f"LTE reconnected: IP={status.get('ip_address', 'unknown')}")
+
+    def _on_connectivity_change(self, old_type, new_type):
+        """Handle connectivity type changes (WiFi/LTE failover)"""
+        self.logger.info(f"Connectivity changed: {old_type.value} -> {new_type.value}")
+
+    def _on_connectivity_status(self, status: dict):
+        """Handle connectivity status updates"""
+        active = status.get('active_connection', 'none')
+        self.logger.debug(f"Connectivity status: active={active}")
+
     def _initialize_health_monitor(self):
         """Initialize system health monitoring"""
         try:
@@ -999,10 +1163,18 @@ class ProductionVideoPlayer:
             # Start monitoring systems
             if self.network_monitor:
                 self.network_monitor.start()
-            
+
+            # Start LTE monitor if available
+            if self.lte_monitor:
+                self.lte_monitor.start()
+
+            # Start connectivity manager if available
+            if self.connectivity_manager:
+                self.connectivity_manager.start()
+
             if self.health_monitor:
                 self.health_monitor.start()
-            
+
             # Start connection deadline monitoring
             self.connection_deadline_monitor.start()
             
@@ -1037,11 +1209,16 @@ class ProductionVideoPlayer:
                 if self.video_player.video_files:
                     self.video_player.play_current_video()
                 
-                self.logger.info("🚀 Enhanced production system fully started")
-                print("🚀 Enhanced Production System Ready")
-                print(f"📊 Error Recovery: {len(self.error_recovery.component_health)} components monitored")
-                print(f"🌐 Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
-                print(f"📡 AWS IoT: {self.aws_config['thing_name']} ready")
+                self.logger.info("Enhanced production system fully started")
+                print("Enhanced Production System Ready")
+                print(f"Error Recovery: {len(self.error_recovery.component_health)} components monitored")
+                if self.network_monitor:
+                    print(f"Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
+                if self.lte_controller:
+                    print(f"LTE Controller: {self.lte_controller.config.apn} APN configured")
+                if self.connectivity_manager:
+                    print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
+                print(f"AWS IoT: {self.aws_config['thing_name']} ready")
                 
                 # Run main loop
                 try:
@@ -1074,12 +1251,21 @@ class ProductionVideoPlayer:
                 self.aws_manager.disconnect()
             
             # Stop monitoring systems
+            if self.connectivity_manager:
+                self.connectivity_manager.stop()
+
+            if self.lte_monitor:
+                self.lte_monitor.stop()
+
+            if self.lte_controller:
+                self.lte_controller.cleanup()
+
             if self.network_monitor:
                 self.network_monitor.stop()
-            
+
             if self.health_monitor:
                 self.health_monitor.stop()
-            
+
             # Stop connection deadline monitoring
             if self.connection_deadline_monitor:
                 self.connection_deadline_monitor.stop()

@@ -412,6 +412,67 @@ class ProvisioningConfig:
     dnsmasq_conf: str = "/tmp/dnsmasq_provisioning.conf"
 
 
+@dataclass
+class LTEConfig:
+    """
+    SIM7600NA-H 4G LTE HAT configuration.
+
+    Optimized for Hologram.io as the service provider.
+    Reference: https://www.waveshare.com/wiki/SIM7600NA-H_4G_HAT
+    """
+    # Feature toggle
+    enabled: bool = False
+
+    # Serial port settings
+    port: str = ""  # Auto-detect if empty
+    baudrate: int = 115200
+
+    # Hologram.io APN settings (no authentication required)
+    apn: str = "hologram"
+    apn_username: str = ""
+    apn_password: str = ""
+
+    # Network preferences
+    force_lte: bool = True  # Use AT+CNMP=38 to force LTE mode
+    enable_roaming: bool = True  # Required for Hologram global SIM
+    rndis_mode: bool = True  # Use RNDIS USB network interface
+
+    # GPIO for Raspberry Pi power control (GPIO D6 = BCM 6)
+    power_gpio: int = 6
+    use_gpio_power: bool = True
+
+    # Monitoring settings
+    check_interval_secs: float = 30.0
+    signal_weak_threshold: int = 10  # CSQ value (0-31)
+    signal_critical_threshold: int = 5
+    keepalive_interval_secs: int = 30
+
+    # Recovery thresholds
+    soft_recovery_threshold: int = 2
+    intermediate_recovery_threshold: int = 4
+    hard_recovery_threshold: int = 6
+    critical_escalation_threshold: int = 10
+
+
+@dataclass
+class ConnectivityConfig:
+    """
+    Network connectivity mode configuration.
+
+    Supports WiFi/LTE failover with configurable primary/backup modes.
+    """
+    # Connectivity mode: wifi_only, lte_only, wifi_primary_lte_backup, lte_primary_wifi_backup
+    mode: str = "lte_primary_wifi_backup"
+
+    # Failover timing
+    failover_timeout_secs: float = 60.0  # Time before switching to backup
+    failback_check_interval_secs: float = 300.0  # How often to check if primary recovered
+    failback_stability_secs: float = 30.0  # Primary must be stable before switching back
+
+    # Status reporting
+    status_report_interval_secs: float = 60.0
+
+
 class Config:
     """Main configuration class that combines all config sections"""
 
@@ -431,6 +492,8 @@ class Config:
         self.video = VideoConfig()
         self.ota = OTAConfig()
         self.provisioning = ProvisioningConfig()
+        self.lte = LTEConfig()
+        self.connectivity = ConnectivityConfig()
 
     def get_aws_topics(self) -> dict:
         """Get formatted AWS IoT topics for this device"""
@@ -505,6 +568,8 @@ __all__ = [
     'VideoConfig',
     'OTAConfig',
     'ProvisioningConfig',
+    'LTEConfig',
+    'ConnectivityConfig',
     'config'
 ]
 

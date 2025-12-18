@@ -57,5 +57,10 @@ TasksMax=100
 MemoryMax=2G
 CPUQuota=150%
 
+# LTE Configuration (Hologram.io)
+Environment="TSV6_LTE_ENABLED=true"
+Environment="TSV6_LTE_APN=hologram"
+Environment="TSV6_CONNECTIVITY_MODE=lte_primary_wifi_backup"
+
 [Install]
 WantedBy=multi-user.target

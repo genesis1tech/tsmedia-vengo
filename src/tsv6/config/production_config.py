@@ -476,6 +476,36 @@ class ProductionConfigManager:
             "TMPFS_PROTECTED": tmpfs_available
         }
 
+    def get_lte_config(self) -> Dict[str, Any]:
+        """Get LTE configuration from environment variables with defaults for Hologram.io"""
+        return {
+            "enabled": os.getenv("TSV6_LTE_ENABLED", "false").lower() in ("true", "1", "yes"),
+            "port": os.getenv("TSV6_LTE_PORT", ""),  # Auto-detect if empty
+            "baudrate": int(os.getenv("TSV6_LTE_BAUD", "115200")),
+            "apn": os.getenv("TSV6_LTE_APN", "hologram"),
+            "apn_username": os.getenv("TSV6_LTE_APN_USER", ""),
+            "apn_password": os.getenv("TSV6_LTE_APN_PASS", ""),
+            "force_lte": os.getenv("TSV6_LTE_FORCE_LTE", "true").lower() in ("true", "1", "yes"),
+            "enable_roaming": os.getenv("TSV6_LTE_ROAMING", "true").lower() in ("true", "1", "yes"),
+            "rndis_mode": os.getenv("TSV6_LTE_RNDIS", "true").lower() in ("true", "1", "yes"),
+            "power_gpio": int(os.getenv("TSV6_LTE_POWER_GPIO", "6")),
+            "use_gpio_power": os.getenv("TSV6_LTE_USE_GPIO", "true").lower() in ("true", "1", "yes"),
+            "check_interval_secs": float(os.getenv("TSV6_LTE_CHECK_INTERVAL", "30.0")),
+            "signal_weak_threshold": int(os.getenv("TSV6_LTE_WEAK_SIGNAL", "10")),
+            "signal_critical_threshold": int(os.getenv("TSV6_LTE_CRITICAL_SIGNAL", "5")),
+            "keepalive_interval_secs": int(os.getenv("TSV6_LTE_KEEPALIVE", "30")),
+        }
+
+    def get_connectivity_config(self) -> Dict[str, Any]:
+        """Get connectivity mode configuration from environment variables"""
+        return {
+            "mode": os.getenv("TSV6_CONNECTIVITY_MODE", "lte_primary_wifi_backup"),
+            "failover_timeout_secs": float(os.getenv("TSV6_FAILOVER_TIMEOUT", "60.0")),
+            "failback_check_interval_secs": float(os.getenv("TSV6_FAILBACK_INTERVAL", "300.0")),
+            "failback_stability_secs": float(os.getenv("TSV6_FAILBACK_STABILITY", "30.0")),
+            "status_report_interval_secs": float(os.getenv("TSV6_STATUS_INTERVAL", "60.0")),
+        }
+
     def save_runtime_config(self):
         """Save current runtime configuration"""
         try:
@@ -511,7 +541,9 @@ class ProductionConfigManager:
             "security": asdict(self.security_config),
             "performance": asdict(self.performance_config),
             "sleep": asdict(self.sleep_config),
-            "aws": self.get_aws_config()
+            "aws": self.get_aws_config(),
+            "lte": self.get_lte_config(),
+            "connectivity": self.get_connectivity_config()
         }
     
     def update_config(self, updates: Dict[str, Any]):

@@ -613,11 +613,35 @@ class ResilientAWSManager:
             return False
 
     def _get_wifi_info(self) -> tuple[str, int]:
-        """Get WiFi information"""
+        """Get connection information (WiFi or LTE based on primary route)"""
         try:
             env = os.environ.copy()
             env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
 
+            # Check if LTE (wwan0) is the primary connection by looking at default route
+            lte_primary = False
+            try:
+                result = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    capture_output=True, text=True, timeout=5, env=env
+                )
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    if lines:
+                        # First default route is the primary (lowest metric)
+                        first_route = lines[0]
+                        if 'wwan0' in first_route:
+                            lte_primary = True
+            except Exception:
+                pass
+
+            # If LTE is primary, return LTE info
+            if lte_primary:
+                # Get LTE signal strength from ModemManager (as percentage with % symbol)
+                pct = self._get_lte_signal_strength(env)
+                return "LTE Hologram", f"{pct}%"
+
+            # Otherwise get WiFi info
             ssid = ""
             for cmd in (["/usr/sbin/iwgetid", "-r"], ["iwgetid", "-r"]):
                 try:
@@ -669,6 +693,29 @@ class ResilientAWSManager:
             return ssid, rssi
         except Exception:
             return "Unknown", -100
+
+    def _get_lte_signal_strength(self, env: dict) -> int:
+        """Get LTE signal strength as percentage from ModemManager"""
+        try:
+            # Get signal quality percentage from modem status
+            result = subprocess.run(
+                ["mmcli", "-m", "0"],
+                capture_output=True, text=True, timeout=10, env=env
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'signal quality' in line.lower():
+                        # Format: "|          signal quality: XX% (cached)"
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            value = parts[1].strip().replace('%', '').split()[0]
+                            try:
+                                return int(value)
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+        return 0
 
     def _get_cpu_temperature(self) -> float:
         """Get CPU temperature in Fahrenheit"""

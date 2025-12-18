@@ -143,6 +143,24 @@ class ErrorRecoverySystem:
                     EscalationLevel.CRITICAL: RecoveryAction.SYSTEM_RESTART
                 }
             },
+            "lte_modem": {
+                "soft_threshold": 2,        # 60s to first recovery (2 * 30s check interval)
+                "intermediate_threshold": 4,  # 120s
+                "hard_threshold": 6,        # 180s
+                "critical_threshold": 10,   # 300s (5 min)
+                "soft_recovery_delay": 15,
+                "intermediate_recovery_delay": 30,
+                "hard_recovery_delay": 60,
+                "critical_recovery_delay": 120,
+                "max_restarts_per_hour": 6,
+                "max_boot_failures": 5,
+                "escalation_actions": {
+                    EscalationLevel.SOFT: RecoveryAction.RESET_CONNECTION,  # Re-register network
+                    EscalationLevel.INTERMEDIATE: RecoveryAction.RESTART_COMPONENT,  # Restart PDP
+                    EscalationLevel.HARD: RecoveryAction.RESTART_SERVICE,  # Modem restart
+                    EscalationLevel.CRITICAL: RecoveryAction.SYSTEM_RESTART  # GPIO power cycle
+                }
+            },
             "barcode_scanner": {
                 "soft_threshold": 5,
                 "intermediate_threshold": 10,
