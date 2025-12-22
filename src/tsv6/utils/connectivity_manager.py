@@ -209,6 +209,9 @@ class ConnectivityManager:
             if result.returncode == 0:
                 logger.info(f"WiFi connection '{self._wifi_conn_name}' activated")
                 self._wifi_disabled_by_us = False
+                # Notify network monitor that WiFi is no longer intentionally disabled
+                if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
+                    self.wifi_monitor.set_wifi_intentionally_disabled(False)
                 return True
             else:
                 logger.error(f"Failed to enable WiFi: {result.stderr}")
@@ -232,12 +235,19 @@ class ConnectivityManager:
             if result.returncode == 0:
                 logger.info(f"WiFi connection '{self._wifi_conn_name}' deactivated")
                 self._wifi_disabled_by_us = True
+                # Notify network monitor that WiFi is intentionally disabled (LTE-first mode)
+                # This prevents network monitor from triggering WiFi provisioning
+                if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
+                    self.wifi_monitor.set_wifi_intentionally_disabled(True)
                 return True
             else:
                 # Connection might already be down
                 if "not active" in result.stderr.lower() or "not an active" in result.stderr.lower():
                     logger.info("WiFi already disconnected")
                     self._wifi_disabled_by_us = True
+                    # Also mark as intentionally disabled
+                    if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
+                        self.wifi_monitor.set_wifi_intentionally_disabled(True)
                     return True
                 logger.error(f"Failed to disable WiFi: {result.stderr}")
                 return False
@@ -266,6 +276,15 @@ class ConnectivityManager:
             return
 
         self._stop.clear()
+
+        # If LTE is primary and WiFi is backup, notify network monitor immediately
+        # This prevents WiFi provisioning from being triggered during LTE startup wait
+        if (self._primary == ConnectionType.LTE and
+            self._backup == ConnectionType.WIFI and
+            self.wifi_monitor and
+            hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled')):
+            logger.info("LTE-first mode: marking WiFi as intentionally disabled at startup")
+            self.wifi_monitor.set_wifi_intentionally_disabled(True)
 
         # Register callbacks with monitors
         if self.wifi_monitor:
