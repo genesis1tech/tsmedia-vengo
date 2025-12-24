@@ -244,7 +244,7 @@ Common test fixtures:
 - Videos: Downloaded from S3 or stored locally
 
 ### Key Dependencies
-- **Hardware:** adafruit-blinka, adafruit-circuitpython-pca9685, gpiozero, pyserial, rpi-gpio
+- **Hardware:** adafruit-blinka, adafruit-circuitpython-pca9685, pyserial, rpi-gpio
 - **Media:** python-vlc, pygame, Pillow
 - **Cloud:** awscrt, awsiotsdk
 - **Display:** Custom DSI display drivers
