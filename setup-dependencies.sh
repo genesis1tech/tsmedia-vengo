@@ -122,12 +122,15 @@ sudo apt-get install -y \
 
 success "Image processing libraries installed"
 
-# Install GPIO libraries for future sensor support
-log "Installing GPIO libraries..."
+# Install GPIO and I2C libraries for hardware support
+log "Installing GPIO and I2C libraries..."
 sudo apt-get install -y \
-    python3-rpi.gpio
+    python3-rpi.gpio \
+    i2c-tools \
+    python3-smbus \
+    libgpiod-dev
 
-success "GPIO libraries installed"
+success "GPIO and I2C libraries installed"
 
 # Install additional system utilities
 log "Installing system utilities..."
@@ -204,7 +207,7 @@ echo "  - Build tools and Python dependencies"
 echo "  - AWS IoT SDK build dependencies"
 echo "  - SDL libraries (pygame)"
 echo "  - Image processing libraries (Pillow)"
-echo "  - GPIO libraries (rpi-gpio)"
+echo "  - GPIO and I2C libraries (rpi-gpio, adafruit-blinka support)"
 echo "  - System utilities"
 echo ""
 info "Configuration applied:"
