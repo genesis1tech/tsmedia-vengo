@@ -16,6 +16,8 @@ import random
 import os
 import socket
 import logging
+import uuid
+import concurrent.futures
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
@@ -538,16 +540,26 @@ class ResilientAWSManager:
                     qos=qos_level
                 )
 
-                # Message was sent to broker. Wait for ACK but don't retry if this times out
-                # because the message was already delivered (at-least-once semantics)
+                # Message was sent to broker. Wait for ACK.
+                # Only treat TIMEOUT as success (message likely delivered).
+                # Other errors indicate real failures that should be retried.
                 try:
                     publish_future.result(timeout=10)
-                except Exception as ack_error:
-                    # Message was sent but ACK timed out - log but consider it success
-                    # to avoid sending duplicate messages
-                    logger.warning(f"Publish ACK timeout (message likely delivered): {ack_error}")
+                except concurrent.futures.TimeoutError as timeout_err:
+                    # ACK timed out but message was sent - consider success to avoid duplicates
+                    logger.warning(f"Publish ACK timeout (message likely delivered): {timeout_err}")
                     self.publish_circuit_breaker.on_success()
                     return True
+                except Exception as ack_error:
+                    # Real error after publish - log and let outer handler decide
+                    error_str = str(ack_error).lower()
+                    if 'timeout' in error_str or 'timed out' in error_str:
+                        # Timeout-like error, message likely sent
+                        logger.warning(f"Publish ACK timeout (message likely delivered): {ack_error}")
+                        self.publish_circuit_breaker.on_success()
+                        return True
+                    # Non-timeout error - this is a real failure, re-raise to retry
+                    raise
 
                 self.publish_circuit_breaker.on_success()
                 return True
@@ -633,9 +645,8 @@ class ResilientAWSManager:
             wifi_ssid, wifi_strength = self._get_wifi_info()
             cpu_temp = self._get_cpu_temperature()
 
-            # Generate unique message ID to track duplicates
-            import uuid
-            message_id = str(uuid.uuid4())[:8]
+            # Generate unique message ID to track duplicates (full UUID to avoid collisions)
+            message_id = str(uuid.uuid4())
 
             status = {
                 "thingName": self.thing_name,
