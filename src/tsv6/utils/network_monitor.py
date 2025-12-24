@@ -101,6 +101,10 @@ class NetworkMonitor:
         self._recovery = NetworkRecoveryStage()
         self._gateway_last_updated = 0
         self._failed_ping_count = 0
+
+        # Flag to indicate WiFi is intentionally disabled (e.g., for LTE-first mode)
+        # When True, network monitor will NOT trigger WiFi provisioning on failures
+        self._wifi_intentionally_disabled = False
         
         # Initialize systemd recovery manager if available
         if self.systemd_recovery and self.systemd_recovery.is_available():
@@ -110,6 +114,28 @@ class NetworkMonitor:
 
         logger.info(f"Enhanced Network Monitor initialized for {self.cfg.interface}")
         logger.debug(f"Check interval: {self.cfg.check_interval_secs}s, Startup delay: {self.cfg.startup_delay_secs}s, Gateway auto-detection: enabled")
+
+    def set_wifi_intentionally_disabled(self, disabled: bool) -> None:
+        """
+        Set whether WiFi is intentionally disabled (e.g., for LTE-first mode).
+
+        When True, the network monitor will NOT trigger WiFi provisioning on failures
+        because WiFi is expected to be down (LTE is being used instead).
+
+        Args:
+            disabled: True if WiFi is intentionally disabled, False otherwise
+        """
+        self._wifi_intentionally_disabled = disabled
+        if disabled:
+            logger.info("WiFi marked as intentionally disabled - provisioning will be skipped")
+            # Reset failure count since WiFi being down is expected
+            self._recovery.reset()
+        else:
+            logger.info("WiFi marked as active - normal provisioning behavior restored")
+
+    def is_wifi_intentionally_disabled(self) -> bool:
+        """Check if WiFi is intentionally disabled."""
+        return self._wifi_intentionally_disabled
 
     def start(self) -> None:
         """Start network monitoring in background thread"""
@@ -406,6 +432,17 @@ class NetworkMonitor:
             success = self._hard_recovery()
             
         elif recovery_action == "escalate":
+            # Check if WiFi is intentionally disabled (e.g., LTE-first mode)
+            # In this case, do NOT trigger WiFi provisioning - the device is using LTE
+            if self._wifi_intentionally_disabled:
+                logger.info(
+                    "Network recovery exhausted but WiFi is intentionally disabled "
+                    "(LTE-first mode) - skipping WiFi provisioning"
+                )
+                # Reset recovery state to prevent continuous escalation attempts
+                self._recovery.reset()
+                return False
+
             logger.error("Network recovery exhausted - triggering WiFi provisioning")
 
             # Report to error recovery system
@@ -582,5 +619,6 @@ class NetworkMonitor:
             "backoff_delay": self._backoff,
             "gateway": self.cfg.ping_target_local,
             "gateway_last_updated": self._gateway_last_updated,
-            "failed_ping_count": self._failed_ping_count
+            "failed_ping_count": self._failed_ping_count,
+            "wifi_intentionally_disabled": self._wifi_intentionally_disabled
         }
