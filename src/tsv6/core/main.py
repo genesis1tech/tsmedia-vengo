@@ -551,7 +551,7 @@ class EnhancedVideoPlayer:
         self.status_publish_active = True
         
         def publish_status():
-            """Background task to publish status every 60 seconds"""
+            """Background task to publish status every 5 minutes"""
             print("📡 Starting AWS status publishing...")
             consecutive_failures = 0
             publish_count = 0
@@ -577,8 +577,8 @@ class EnhancedVideoPlayer:
                     import traceback
                     traceback.print_exc()
                 
-                # Wait 60 seconds before next publish
-                for _ in range(600):  # 60 seconds in 0.1s increments
+                # Wait 5 minutes before next publish
+                for _ in range(3000):  # 300 seconds (5 min) in 0.1s increments
                     if not self.status_publish_active:
                         break
                     time.sleep(0.1)
