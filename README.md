@@ -173,23 +173,60 @@ sudo nmcli connection up hologram-lte
 ping -c 3 8.8.8.8
 ```
 
-### Service Configuration
+### Network Connectivity Configuration
 
-Configure LTE in `tsv6.service` with these environment variables:
+TSV6 supports flexible network configuration via environment variables. Edit these in `/etc/systemd/system/tsv6.service` or your service override file.
+
+#### Quick Reference
+
+| Scenario | TSV6_LTE_ENABLED | TSV6_CONNECTIVITY_MODE |
+|----------|------------------|------------------------|
+| **WiFi Only** (disable LTE) | `false` | `wifi_only` |
+| **LTE Only** (disable WiFi) | `true` | `lte_only` |
+| **LTE Primary, WiFi Backup** | `true` | `lte_primary_wifi_backup` |
+| **WiFi Primary, LTE Backup** | `true` | `wifi_primary_lte_backup` |
+
+#### To Disable 4G/LTE (WiFi Only)
 
 ```ini
-# Enable/disable LTE connectivity
+Environment="TSV6_LTE_ENABLED=false"
+Environment="TSV6_CONNECTIVITY_MODE=wifi_only"
+```
+
+#### To Use LTE Only (No WiFi)
+
+```ini
 Environment="TSV6_LTE_ENABLED=true"
+Environment="TSV6_CONNECTIVITY_MODE=lte_only"
+```
 
-# APN for your cellular provider
+#### To Use LTE Primary with WiFi Failover (Recommended)
+
+```ini
+Environment="TSV6_LTE_ENABLED=true"
 Environment="TSV6_LTE_APN=hologram"
-
-# Connectivity mode options:
-#   wifi_only           - WiFi only, no LTE
-#   lte_only            - LTE only, no WiFi failover
-#   wifi_primary        - WiFi primary, LTE backup
-#   lte_primary_wifi_backup - LTE primary, WiFi backup (recommended)
 Environment="TSV6_CONNECTIVITY_MODE=lte_primary_wifi_backup"
+```
+
+#### All LTE Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TSV6_LTE_ENABLED` | `false` | Enable/disable LTE modem |
+| `TSV6_LTE_APN` | `hologram` | Cellular APN (Hologram.io default) |
+| `TSV6_LTE_PORT` | auto | Serial port (auto-detect if empty) |
+| `TSV6_LTE_BAUD` | `115200` | Baud rate for AT commands |
+| `TSV6_LTE_FORCE_LTE` | `true` | Force LTE mode (vs 3G/2G) |
+| `TSV6_LTE_ROAMING` | `true` | Enable roaming |
+| `TSV6_CONNECTIVITY_MODE` | `lte_primary_wifi_backup` | Connection priority mode |
+
+#### Applying Changes
+
+After editing the service file, reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart tsv6.service
 ```
 
 ### Route Priority
