@@ -16,6 +16,8 @@ import random
 import os
 import socket
 import logging
+import uuid
+import concurrent.futures
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
@@ -487,8 +489,21 @@ class ResilientAWSManager:
             return False
 
     def publish_with_retry(self, topic: str, payload: Dict[str, Any],
-                          retries: int = 3) -> bool:
-        """Publish with retry logic"""
+                          retries: int = 3, use_qos0: bool = False) -> bool:
+        """Publish with retry logic
+
+        IMPORTANT: Only retries on connection errors BEFORE the message is sent.
+        Once publish() is called, the message is considered sent and we don't retry
+        to avoid duplicate messages on the broker side.
+
+        Args:
+            topic: MQTT topic to publish to
+            payload: Message payload as dictionary
+            retries: Number of connection retries (default 3)
+            use_qos0: If True, use QoS 0 (fire-and-forget) to prevent MQTT-level
+                      duplicates on slow connections. Recommended for periodic
+                      status updates where occasional message loss is acceptable.
+        """
         if not self.publish_circuit_breaker.can_execute():
             logger.warning("Publish circuit breaker open, queueing message")
             self._queue_message(topic, payload)
@@ -498,35 +513,77 @@ class ResilientAWSManager:
             logger.warning("Not connected, queueing message")
             self._queue_message(topic, payload)
             return False
-        
+
+        # Convert payload to JSON with safe serialization (do once, outside retry loop)
+        try:
+            json_payload = json.dumps(payload, default=str)
+        except (TypeError, ValueError) as json_err:
+            logger.warning(f"JSON serialization warning: {json_err}")
+            # Fallback: convert all non-serializable objects to strings
+            safe_payload = {k: str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
+                            for k, v in payload.items()}
+            json_payload = json.dumps(safe_payload)
+
         for attempt in range(retries + 1):
             try:
-                # Convert payload to JSON with safe serialization
-                try:
-                    json_payload = json.dumps(payload, default=str)
-                except (TypeError, ValueError) as json_err:
-                    logger.warning(f"JSON serialization warning: {json_err}")
-                    # Fallback: convert all non-serializable objects to strings
-                    safe_payload = {k: str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
-                                    for k, v in payload.items()}
-                    json_payload = json.dumps(safe_payload)
+                # Check connection state before attempting publish
+                if not self.connected or not self.connection:
+                    raise ConnectionError("Not connected to AWS IoT")
+
+                # Use QoS 0 for status updates to prevent MQTT-level duplicates on LTE
+                # QoS 1 can cause duplicates when ACK is delayed on slow connections
+                qos_level = mqtt.QoS.AT_MOST_ONCE if use_qos0 else mqtt.QoS.AT_LEAST_ONCE
 
                 publish_future, _ = self.connection.publish(
                     topic=topic,
                     payload=json_payload,
-                    qos=mqtt.QoS.AT_LEAST_ONCE
+                    qos=qos_level
                 )
 
-                # Wait for completion with timeout
-                publish_future.result(timeout=10)
+                # Message was sent to broker. Wait for ACK.
+                # Only treat TIMEOUT as success (message likely delivered).
+                # Other errors indicate real failures that should be retried.
+                try:
+                    publish_future.result(timeout=10)
+                except concurrent.futures.TimeoutError as timeout_err:
+                    # ACK timed out but message was sent - consider success to avoid duplicates
+                    logger.warning(f"Publish ACK timeout (message likely delivered): {timeout_err}")
+                    self.publish_circuit_breaker.on_success()
+                    return True
+                except Exception as ack_error:
+                    # Real error after publish - log and let outer handler decide
+                    error_str = str(ack_error).lower()
+                    if 'timeout' in error_str or 'timed out' in error_str:
+                        # Timeout-like error, message likely sent
+                        logger.warning(f"Publish ACK timeout (message likely delivered): {ack_error}")
+                        self.publish_circuit_breaker.on_success()
+                        return True
+                    # Non-timeout error - this is a real failure, re-raise to retry
+                    raise
 
                 self.publish_circuit_breaker.on_success()
                 return True
 
-            except Exception as e:
-                logger.error(f"Publish attempt {attempt + 1} failed: {type(e).__name__}: {e or repr(e)}")
+            except ConnectionError as e:
+                # Connection error - message was NOT sent, safe to retry
+                logger.error(f"Publish attempt {attempt + 1} connection error: {e}")
                 if attempt < retries:
                     time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    self.publish_circuit_breaker.on_failure()
+                    self._queue_message(topic, payload)
+            except Exception as e:
+                # Other error during publish setup - safe to retry since message wasn't sent yet
+                error_str = str(e).lower()
+                if 'timeout' in error_str or 'timed out' in error_str:
+                    # If we got a timeout and we're not sure if message was sent,
+                    # log it but don't retry to avoid duplicates
+                    logger.warning(f"Publish timeout (avoiding retry to prevent duplicates): {e}")
+                    return False
+
+                logger.error(f"Publish attempt {attempt + 1} failed: {type(e).__name__}: {e or repr(e)}")
+                if attempt < retries:
+                    time.sleep(2 ** attempt)
                 else:
                     self.publish_circuit_breaker.on_failure()
                     self._queue_message(topic, payload)
@@ -587,7 +644,10 @@ class ResilientAWSManager:
             # Get system info
             wifi_ssid, wifi_strength = self._get_wifi_info()
             cpu_temp = self._get_cpu_temperature()
-            
+
+            # Generate unique message ID to track duplicates (full UUID to avoid collisions)
+            message_id = str(uuid.uuid4())
+
             status = {
                 "thingName": self.thing_name,
                 "deviceType": "raspberry-pi",
@@ -597,16 +657,20 @@ class ResilientAWSManager:
                 "temperature": cpu_temp,
                 "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
                 "timeConnectedMins": int((time.time() - (self.connection_start_time or time.time())) / 60),
-                "connectionState": self.state.value
+                "connectionState": self.state.value,
+                "messageId": message_id  # Unique ID to track duplicates
             }
-            
+
             shadow_payload = {
                 "state": {
                     "reported": status
                 }
             }
-            
-            return self.publish_with_retry(self.shadow_update_topic, shadow_payload)
+
+            logger.info(f"Publishing status with messageId: {message_id}")
+            # Use QoS 0 for status updates - prevents MQTT-level duplicates on LTE
+            # Status is periodic (every 5 min), so occasional loss is acceptable
+            return self.publish_with_retry(self.shadow_update_topic, shadow_payload, use_qos0=True)
 
         except Exception as e:
             logger.error(f"Failed to publish status: {type(e).__name__}: {e or repr(e)}")
