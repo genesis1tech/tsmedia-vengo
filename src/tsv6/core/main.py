@@ -549,14 +549,34 @@ class EnhancedVideoPlayer:
         
         print("✅ Starting status publisher thread...")
         self.status_publish_active = True
-        
+
+        # Publish initial status immediately before starting the interval loop
+        print("📡 Publishing initial device status...")
+        try:
+            initial_success = self.aws_manager.publish_status()
+            if initial_success:
+                print("✅ Initial device status published to AWS")
+            else:
+                print("⚠️  Failed to publish initial device status")
+        except Exception as e:
+            print(f"❌ Initial status publish error: {type(e).__name__}: {e}")
+
         def publish_status():
             """Background task to publish status every 5 minutes"""
-            print("📡 Starting AWS status publishing...")
+            print("📡 Starting AWS status publishing interval (5 min)...")
             consecutive_failures = 0
             publish_count = 0
-            
+
             while self.status_publish_active and self.aws_manager:
+                # Wait 5 minutes before next publish (initial status already sent)
+                for _ in range(3000):  # 300 seconds (5 min) in 0.1s increments
+                    if not self.status_publish_active:
+                        break
+                    time.sleep(0.1)
+
+                if not self.status_publish_active:
+                    break
+
                 try:
                     # Publish device status
                     success = self.aws_manager.publish_status()
@@ -567,23 +587,17 @@ class EnhancedVideoPlayer:
                     else:
                         consecutive_failures += 1
                         print(f"⚠️  Failed to publish device status (attempt {consecutive_failures})")
-                        
+
                     if consecutive_failures >= 5:
                         print(f"❌ Status publishing failed {consecutive_failures} consecutive times")
-                        
+
                 except Exception as e:
                     consecutive_failures += 1
                     print(f"❌ Status publish error (attempt {consecutive_failures}): {type(e).__name__}: {e}")
                     import traceback
                     traceback.print_exc()
-                
-                # Wait 5 minutes before next publish
-                for _ in range(3000):  # 300 seconds (5 min) in 0.1s increments
-                    if not self.status_publish_active:
-                        break
-                    time.sleep(0.1)
-            
-            print(f"📡 AWS status publishing stopped (published {publish_count} times)")
+
+            print(f"📡 AWS status publishing stopped (published {publish_count} interval updates)")
         
         # Start status publishing thread
         status_thread = threading.Thread(target=publish_status, name="StatusPublisher")
