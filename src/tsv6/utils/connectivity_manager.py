@@ -8,6 +8,7 @@ Provides unified interface for AWS IoT, OTA updates, and general connectivity.
 Default mode: LTE Primary + WiFi Backup
 """
 
+import os
 import threading
 import time
 import logging
@@ -194,6 +195,58 @@ class ConnectivityManager:
             logger.warning(f"Failed to detect WiFi connection: {e}")
         return ""
 
+    def _log_network_snapshot(self, reason: str) -> None:
+        """Log NetworkManager + routing snapshot for debugging decisions.
+
+        Logging-only helper to validate:
+        - which WiFi connection (if any) is actually active
+        - whether WiFi radio is enabled
+        - which interface owns the default route
+        """
+        try:
+            cmds: list[tuple[str, list[str], float]] = [
+                (
+                    "nmcli_device_status",
+                    ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+                    10,
+                ),
+                (
+                    "nmcli_active_connections",
+                    ["nmcli", "-t", "-f", "NAME,TYPE,STATE,DEVICE", "connection", "show", "--active"],
+                    10,
+                ),
+                (
+                    "nmcli_general_status",
+                    ["nmcli", "-t", "general", "status"],
+                    10,
+                ),
+                (
+                    "ip_default_route",
+                    ["ip", "route", "show", "default"],
+                    5,
+                ),
+            ]
+
+            parts: list[str] = []
+            for label, cmd, timeout in cmds:
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+                out = (p.stdout or "").strip()
+                err = (p.stderr or "").strip()
+                parts.append(
+                    f"{label}: rc={p.returncode} out={out!r} err={err!r}"
+                )
+
+            logger.info(
+                "ConnectivityManager snapshot (%s): active=%s wifi_disabled_by_us=%s wifi_conn_name=%r | %s",
+                reason,
+                self._active_connection.value,
+                self._wifi_disabled_by_us,
+                self._wifi_conn_name,
+                " | ".join(parts),
+            )
+        except Exception as e:
+            logger.warning("ConnectivityManager snapshot failed (%s): %s", reason, e)
+
     def _enable_wifi(self) -> bool:
         """Enable WiFi connection via NetworkManager"""
         if not self._wifi_conn_name:
@@ -201,6 +254,7 @@ class ConnectivityManager:
             return False
 
         try:
+            self._log_network_snapshot("before_enable_wifi")
             logger.info(f"Enabling WiFi connection: {self._wifi_conn_name}")
             result = subprocess.run(
                 ["sudo", "nmcli", "connection", "up", self._wifi_conn_name],
@@ -212,9 +266,11 @@ class ConnectivityManager:
                 # Notify network monitor that WiFi is no longer intentionally disabled
                 if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
                     self.wifi_monitor.set_wifi_intentionally_disabled(False)
+                self._log_network_snapshot("after_enable_wifi_success")
                 return True
             else:
                 logger.error(f"Failed to enable WiFi: {result.stderr}")
+                self._log_network_snapshot("after_enable_wifi_failure")
                 return False
         except Exception as e:
             logger.error(f"Error enabling WiFi: {e}")
@@ -227,6 +283,7 @@ class ConnectivityManager:
             return False
 
         try:
+            self._log_network_snapshot("before_disable_wifi")
             logger.info(f"Disabling WiFi connection: {self._wifi_conn_name}")
             result = subprocess.run(
                 ["sudo", "nmcli", "connection", "down", self._wifi_conn_name],
@@ -239,6 +296,7 @@ class ConnectivityManager:
                 # This prevents network monitor from triggering WiFi provisioning
                 if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
                     self.wifi_monitor.set_wifi_intentionally_disabled(True)
+                self._log_network_snapshot("after_disable_wifi_success")
                 return True
             else:
                 # Connection might already be down
@@ -248,8 +306,10 @@ class ConnectivityManager:
                     # Also mark as intentionally disabled
                     if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
                         self.wifi_monitor.set_wifi_intentionally_disabled(True)
+                    self._log_network_snapshot("after_disable_wifi_already_down")
                     return True
                 logger.error(f"Failed to disable WiFi: {result.stderr}")
+                self._log_network_snapshot("after_disable_wifi_failure")
                 return False
         except Exception as e:
             logger.error(f"Error disabling WiFi: {e}")
@@ -270,12 +330,92 @@ class ConnectivityManager:
             pass
         return False
 
+    def _is_wifi_hotspot_active(self) -> bool:
+        """Check if WiFi hotspot (hostapd) is currently running"""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "hostapd"],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _stop_wifi_hotspot(self) -> bool:
+        """Stop WiFi hotspot (hostapd and dnsmasq) if running"""
+        if not self._is_wifi_hotspot_active():
+            logger.debug("WiFi hotspot not running, nothing to stop")
+            return True
+
+        try:
+            logger.info("Stopping WiFi hotspot (hostapd/dnsmasq)...")
+
+            # Stop the provisioning service if it's running
+            subprocess.run(
+                ["sudo", "systemctl", "stop", "tsv6-wifi-provisioning.service"],
+                capture_output=True, timeout=10
+            )
+
+            # Kill hostapd and dnsmasq processes directly as backup
+            subprocess.run(["sudo", "killall", "hostapd"], capture_output=True, timeout=5)
+            subprocess.run(["sudo", "killall", "dnsmasq"], capture_output=True, timeout=5)
+
+            # Clean up temp config files
+            for conf_file in ["/tmp/hostapd_provisioning.conf", "/tmp/dnsmasq_provisioning.conf"]:
+                try:
+                    if os.path.exists(conf_file):
+                        os.remove(conf_file)
+                except Exception:
+                    pass
+
+            # Restore wlan0 to managed mode (not AP mode)
+            subprocess.run(
+                ["sudo", "ip", "addr", "flush", "dev", "wlan0"],
+                capture_output=True, timeout=5
+            )
+
+            logger.info("WiFi hotspot stopped successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error stopping WiFi hotspot: {e}")
+            return False
+
+    def _start_wifi_hotspot(self) -> bool:
+        """Start WiFi hotspot for provisioning (only when LTE is disabled)"""
+        try:
+            logger.info("Starting WiFi hotspot for provisioning...")
+
+            # Start the provisioning service
+            result = subprocess.run(
+                ["sudo", "systemctl", "start", "tsv6-wifi-provisioning.service"],
+                capture_output=True, text=True, timeout=30
+            )
+
+            if result.returncode == 0:
+                logger.info("WiFi hotspot provisioning service started")
+                return True
+            else:
+                logger.error(f"Failed to start WiFi hotspot: {result.stderr}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error starting WiFi hotspot: {e}")
+            return False
+
     def start(self) -> None:
         """Start connectivity management"""
         if self._thread and self._thread.is_alive():
             return
 
         self._stop.clear()
+
+        # If LTE is primary or LTE-only mode, stop WiFi hotspot immediately
+        # Hotspot should only run when LTE is disabled
+        if self._primary == ConnectionType.LTE or self.config.mode == ConnectivityMode.LTE_ONLY:
+            if self._is_wifi_hotspot_active():
+                logger.info("LTE mode active: stopping WiFi hotspot at startup")
+                self._stop_wifi_hotspot()
 
         # If LTE is primary and WiFi is backup, notify network monitor immediately
         # This prevents WiFi provisioning from being triggered during LTE startup wait
@@ -340,6 +480,13 @@ class ConnectivityManager:
     def _on_wifi_status(self, status: Dict[str, Any]) -> None:
         """Handle WiFi status update"""
         self._wifi_status = status
+        # NetworkMonitor emits keys like wifi_ok/internet_ok/connectivity_ok.
+        # ConnectivityManager historically expected 'connected'. Log mismatch to validate.
+        if 'connected' not in status and 'connectivity_ok' in status:
+            logger.warning(
+                "WiFi status schema mismatch: expected key 'connected' but got %s",
+                sorted(list(status.keys())),
+            )
         self._wifi_connected = status.get('connected', False)
 
         # Chain to original callback
@@ -476,7 +623,14 @@ class ConnectivityManager:
         # LTE-first startup: if LTE is primary, disable WiFi immediately and wait for LTE
         if (self._primary == ConnectionType.LTE and
             self._backup == ConnectionType.WIFI):
-            logger.info("LTE-first startup: disabling WiFi to prioritize LTE connection")
+            logger.info("LTE-first startup: disabling WiFi and hotspot to prioritize LTE connection")
+            self._log_network_snapshot("lte_first_startup_entry")
+
+            # Stop WiFi hotspot if running (hotspot should only run when LTE is disabled)
+            if self._is_wifi_hotspot_active():
+                self._stop_wifi_hotspot()
+
+            # Disable WiFi client connection
             if self._is_wifi_active():
                 self._disable_wifi()
 
@@ -544,6 +698,11 @@ class ConnectivityManager:
                             self._primary_failure_start = 0
                             # Disable backup for power saving
                             if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
+                                # Stop hotspot if running (should only run when LTE is disabled)
+                                if self._is_wifi_hotspot_active():
+                                    logger.info("Power saving: stopping WiFi hotspot (LTE connected)")
+                                    self._stop_wifi_hotspot()
+                                # Disable WiFi client
                                 if self._is_wifi_active():
                                     logger.info("Power saving: disabling WiFi (LTE connected)")
                                     self._disable_wifi()

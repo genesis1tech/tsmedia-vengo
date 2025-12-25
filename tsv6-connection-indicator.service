@@ -1,0 +1,22 @@
+[Unit]
+Description=TSV6 Connection Status Indicator
+Documentation=https://github.com/genesis1tech/tsrpi5
+After=graphical.target tsv6-xorg@0.service
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/var/run/lightdm/root/:0
+ExecStart=/home/g1tech/tsrpi5/.venv/bin/python -m src.tsv6.services.connection_status_indicator
+WorkingDirectory=/home/g1tech/tsrpi5
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Give it some time before considering ready
+TimeoutStartSec=30
+
+[Install]
+WantedBy=graphical.target

@@ -522,6 +522,8 @@ class NetworkMonitor:
                     "wifi_ok": wifi_ok,
                     "internet_ok": internet_ok,
                     "connectivity_ok": connectivity_ok,
+                    # Logging/diagnostics: expose whether WiFi is expected to be down
+                    "wifi_intentionally_disabled": self._wifi_intentionally_disabled,
                     "gateway": self.cfg.ping_target_local,
                     "local_ping_ok": local_ping_ok,
                     "public_ping_ok": public_ping_ok,
@@ -529,6 +531,13 @@ class NetworkMonitor:
                     "recovery_stage": self._recovery.current_stage,
                     "consecutive_failures": self._recovery.consecutive_failures
                 }
+
+                if self._wifi_intentionally_disabled and not connectivity_ok:
+                    logger.debug(
+                        "WiFi intentionally disabled; skipping interpretation of connectivity_ok=%s ssid=%r",
+                        connectivity_ok,
+                        ssid,
+                    )
 
                 self._emit(self.on_status, status)
 

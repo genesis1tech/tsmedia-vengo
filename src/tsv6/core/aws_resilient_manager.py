@@ -175,6 +175,11 @@ class ResilientAWSManager:
         self._message_queue = []
         self._queue_lock = threading.Lock()
         
+        # Cached LTE signal strength to avoid blocking startup (Issue: mmcli 10s timeout)
+        self._cached_lte_signal: int = 0
+        self._lte_signal_lock = threading.Lock()
+        self._lte_signal_thread: Optional[threading.Thread] = None
+        
         logger.info(f"Resilient AWS Manager initialized for {thing_name}")
 
     def set_callbacks(self, on_success: Optional[Callable] = None, 
@@ -682,7 +687,11 @@ class ResilientAWSManager:
             env = os.environ.copy()
             env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
 
-            # Check if LTE (wwan0) is the primary connection by looking at default route
+            # Get configured interfaces from environment
+            wifi_interface = os.getenv('WIFI_INTERFACE', 'wlan0')
+            lte_interface = os.getenv('LTE_INTERFACE', 'wwan0')
+
+            # Check if LTE is the primary connection by looking at default route
             lte_primary = False
             try:
                 result = subprocess.run(
@@ -694,7 +703,7 @@ class ResilientAWSManager:
                     if lines:
                         # First default route is the primary (lowest metric)
                         first_route = lines[0]
-                        if 'wwan0' in first_route:
+                        if lte_interface in first_route:
                             lte_primary = True
             except Exception:
                 pass
@@ -720,11 +729,10 @@ class ResilientAWSManager:
             if not ssid:
                 ssid = "Unknown"
 
-            interface = os.getenv('WIFI_INTERFACE', 'wlan0')
             rssi = None
             iwconfig_cmds = [
-                ["/usr/sbin/iwconfig", interface],
-                ["iwconfig", interface],
+                ["/usr/sbin/iwconfig", wifi_interface],
+                ["iwconfig", wifi_interface],
                 ["/usr/sbin/iwconfig"],
                 ["iwconfig"],
             ]
@@ -741,13 +749,28 @@ class ResilientAWSManager:
                 for line in result.stdout.splitlines():
                     if 'Signal level=' in line:
                         signal_part = line.split('Signal level=')[1].split()[0]
-                        signal_part = signal_part.split('/')[0]
-                        signal_part = signal_part.replace('dBm', '')
-                        try:
-                            rssi = int(signal_part)
-                            break
-                        except ValueError:
-                            continue
+                        # Handle both formats: "-70 dBm" and "47/70" (quality ratio)
+                        if '/' in signal_part:
+                            # Quality ratio format (e.g., "47/70") - convert to approximate dBm
+                            # Formula: dBm ≈ (quality / max_quality) * 100 - 110
+                            # This maps 0/70 → -110 dBm and 70/70 → -10 dBm
+                            try:
+                                parts = signal_part.split('/')
+                                quality = int(parts[0])
+                                max_quality = int(parts[1]) if len(parts) > 1 else 70
+                                # Convert quality ratio to approximate dBm
+                                rssi = int((quality / max_quality) * 100 - 110)
+                                break
+                            except (ValueError, ZeroDivisionError):
+                                continue
+                        else:
+                            # Standard dBm format
+                            signal_part = signal_part.replace('dBm', '')
+                            try:
+                                rssi = int(signal_part)
+                                break
+                            except ValueError:
+                                continue
                 if rssi is not None:
                     break
 
@@ -759,27 +782,56 @@ class ResilientAWSManager:
             return "Unknown", -100
 
     def _get_lte_signal_strength(self, env: dict) -> int:
-        """Get LTE signal strength as percentage from ModemManager"""
-        try:
-            # Get signal quality percentage from modem status
-            result = subprocess.run(
-                ["mmcli", "-m", "0"],
-                capture_output=True, text=True, timeout=10, env=env
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'signal quality' in line.lower():
-                        # Format: "|          signal quality: XX% (cached)"
-                        parts = line.split(':')
-                        if len(parts) >= 2:
-                            value = parts[1].strip().replace('%', '').split()[0]
-                            try:
-                                return int(value)
-                            except ValueError:
-                                pass
-        except Exception:
-            pass
-        return 0
+        """Get LTE signal strength as percentage from ModemManager (non-blocking).
+        
+        Returns cached value immediately and updates in background to avoid
+        blocking startup/UI with mmcli's potential 10s+ response time.
+        """
+        # Start background refresh if not already running
+        self._refresh_lte_signal_async(env)
+        
+        # Return cached value immediately (non-blocking)
+        with self._lte_signal_lock:
+            return self._cached_lte_signal
+    
+    def _refresh_lte_signal_async(self, env: dict) -> None:
+        """Refresh LTE signal strength in background thread."""
+        # Don't start if already running
+        if self._lte_signal_thread and self._lte_signal_thread.is_alive():
+            return
+        
+        def fetch_signal():
+            try:
+                # Get signal quality percentage from modem status
+                # Use shorter timeout (3s) to fail fast if modem is unresponsive
+                result = subprocess.run(
+                    ["mmcli", "-m", "0"],
+                    capture_output=True, text=True, timeout=3, env=env
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.splitlines():
+                        if 'signal quality' in line.lower():
+                            # Format: "|          signal quality: XX% (cached)"
+                            parts = line.split(':')
+                            if len(parts) >= 2:
+                                value = parts[1].strip().replace('%', '').split()[0]
+                                try:
+                                    with self._lte_signal_lock:
+                                        self._cached_lte_signal = int(value)
+                                    return
+                                except ValueError:
+                                    pass
+            except subprocess.TimeoutExpired:
+                logger.debug("mmcli timeout - modem may be initializing")
+            except Exception as e:
+                logger.debug(f"LTE signal fetch error: {e}")
+        
+        self._lte_signal_thread = threading.Thread(
+            target=fetch_signal,
+            name="LTE-Signal-Fetch",
+            daemon=True
+        )
+        self._lte_signal_thread.start()
 
     def _get_cpu_temperature(self) -> float:
         """Get CPU temperature in Fahrenheit"""
