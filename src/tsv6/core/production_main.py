@@ -42,6 +42,7 @@ from tsv6.utils.memory_optimizer import MemoryOptimizer, MemoryThresholds, get_g
 from tsv6.monitoring.watchdog_monitor import WatchdogMonitor
 from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineMonitor
 from tsv6.utils.splash_screen import SplashScreen
+from tsv6.services.connection_status_indicator import ConnectionStatusIndicator
 
 # Sleep mode imports
 # Removed for memory-fix branch
@@ -96,6 +97,10 @@ class ProductionVideoPlayer:
 
         # Splash screen for LTE startup wait
         self.splash_screen = None
+        
+        # Connection status indicator overlay
+        self.connection_indicator = None
+        self.connection_indicator_thread = None
         
         # Initialize systemd recovery manager first (needed for connection deadline monitor)
         self.systemd_recovery = SystemdRecoveryManager(
@@ -194,6 +199,29 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.warning(f"Failed to initialize watchdog monitor: {e}")
             self.watchdog_monitor = None
+    
+    def _initialize_connection_indicator(self):
+        """Initialize and start connection status indicator overlay"""
+        try:
+            self.connection_indicator = ConnectionStatusIndicator()
+            self.connection_indicator_thread = threading.Thread(
+                target=self._run_connection_indicator,
+                daemon=True,
+                name="ConnectionIndicator"
+            )
+            self.connection_indicator_thread.start()
+            self.logger.info("Connection status indicator started")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize connection indicator: {e}")
+            self.connection_indicator = None
+    
+    def _run_connection_indicator(self):
+        """Run the connection indicator in a background thread"""
+        try:
+            if self.connection_indicator:
+                self.connection_indicator.run()
+        except Exception as e:
+            self.logger.error(f"Connection indicator error: {e}")
     
     def _initialize_network_monitor(self):
         """Initialize network monitoring with enhanced recovery integration"""
@@ -1214,6 +1242,9 @@ class ProductionVideoPlayer:
         self.running = True
         
         try:
+            # Start connection status indicator overlay first
+            self._initialize_connection_indicator()
+            
             # Start monitoring systems
             if self.network_monitor:
                 self.network_monitor.start()
@@ -1296,6 +1327,10 @@ class ProductionVideoPlayer:
         self.shutdown_event.set()
         
         try:
+            # Stop connection status indicator
+            if self.connection_indicator:
+                self.connection_indicator.stop()
+            
             # Stop barcode scanning
             if self.barcode_scanner:
                 self.barcode_scanner.stop_scanning()
