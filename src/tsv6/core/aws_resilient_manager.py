@@ -2,7 +2,7 @@
 """
 Resilient AWS IoT Manager
 
-Enhanced AWS IoT connection manager with robust error handling, 
+Enhanced AWS IoT connection manager with robust error handling,
 exponential backoff, circuit breaker pattern, and automatic recovery.
 Designed for production IoT devices that need high reliability.
 """
@@ -18,6 +18,9 @@ import socket
 import logging
 import uuid
 import concurrent.futures
+import traceback
+import threading as _threading
+import fcntl
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from enum import Enum
@@ -116,7 +119,13 @@ class CircuitBreaker:
 class ResilientAWSManager:
     """Resilient AWS IoT Manager with enhanced error handling and recovery"""
     
-    def __init__(self, thing_name: str, endpoint: str, cert_path: str, 
+    # Class-level lock file for status publishing deduplication
+    _status_publish_lock_file = "/tmp/tsv6-status-publish.lock"
+    _status_publish_lock_handle = None
+    _last_status_publish_time = 0.0
+    _status_publish_lock = threading.Lock()
+    
+    def __init__(self, thing_name: str, endpoint: str, cert_path: str,
                  key_path: str, ca_path: str, retry_config: Optional[RetryConfig] = None,
                  use_unique_client_id: bool = True, lock_file: Optional[str] = None):
         self.thing_name = thing_name
@@ -182,6 +191,68 @@ class ResilientAWSManager:
         self._lte_signal_thread: Optional[threading.Thread] = None
         
         logger.info(f"Resilient AWS Manager initialized for {thing_name}")
+        
+        # Acquire status publish lock file to prevent duplicate publishes across processes
+        self._acquire_status_publish_lock()
+
+    def _debug_publish_enabled(self) -> bool:
+        """Enable verbose publish diagnostics when TSV6_DEBUG_AWS_PUBLISH=1.
+
+        This is intentionally runtime-gated to avoid noisy logs in production.
+        """
+        return os.getenv("TSV6_DEBUG_AWS_PUBLISH", "0") == "1"
+
+    def _debug_publish_log(self, event: str, *, topic: str = "", payload: Optional[Dict[str, Any]] = None, extra: Optional[Dict[str, Any]] = None) -> None:
+        """Log publish diagnostics: pid/thread + call-site + message identifiers."""
+        if not self._debug_publish_enabled():
+            return
+
+        try:
+            thread = _threading.current_thread()
+            ctx = {
+                "event": event,
+                "pid": os.getpid(),
+                "thread": f"{thread.name}({thread.ident})",
+                "thing": self.thing_name,
+                "client_id": getattr(self, "client_id", None),
+                "session_id": getattr(self, "session_id", None),
+                "state": getattr(self, "state", None).value if getattr(self, "state", None) else None,
+                "topic": topic,
+            }
+
+            # Extract useful identifiers from a shadow payload (if present)
+            msg_id = None
+            ts_iso = None
+            conn_state = None
+            try:
+                reported = (payload or {}).get("state", {}).get("reported", {})
+                msg_id = reported.get("messageId")
+                ts_iso = reported.get("timestampISO")
+                conn_state = reported.get("connectionState")
+            except Exception:
+                pass
+
+            if msg_id is not None:
+                ctx["messageId"] = msg_id
+            if ts_iso is not None:
+                ctx["timestampISO"] = ts_iso
+            if conn_state is not None:
+                ctx["connectionState"] = conn_state
+            if extra:
+                ctx.update(extra)
+
+            # Best-effort caller identification (who invoked publish)
+            try:
+                stack = traceback.extract_stack(limit=12)
+                # Pick a frame a few levels above this helper
+                caller = stack[-4] if len(stack) >= 4 else stack[-1]
+                ctx["caller"] = f"{caller.filename}:{caller.lineno} in {caller.name}"
+            except Exception:
+                pass
+
+            logger.info("AWS_PUBLISH_DIAG %s", ctx)
+        except Exception as e:
+            logger.warning("AWS publish diag logging failed: %s", e)
 
     def set_callbacks(self, on_success: Optional[Callable] = None, 
                      on_lost: Optional[Callable] = None):
@@ -264,6 +335,7 @@ class ResilientAWSManager:
             self.connection_circuit_breaker.on_success()
 
             logger.info(f"Connected to AWS IoT as {self.client_id}")
+            self._debug_publish_log("connect_success", extra={"connected": True})
 
             # Subscribe to topics
             self._subscribe_to_topics()
@@ -279,6 +351,7 @@ class ResilientAWSManager:
             
         except Exception as e:
             logger.error(f"AWS IoT connection failed: {e}")
+            self._debug_publish_log("connect_failure", extra={"error": str(e), "error_type": type(e).__name__})
             self.connection_circuit_breaker.on_failure()
             self.state = ConnectionState.FAILED
             return False
@@ -512,11 +585,13 @@ class ResilientAWSManager:
         """
         if not self.publish_circuit_breaker.can_execute():
             logger.warning("Publish circuit breaker open, queueing message")
+            self._debug_publish_log("publish_blocked_circuit_open", topic=topic, payload=payload)
             self._queue_message(topic, payload)
             return False
 
         if not self.connected:
             logger.warning("Not connected, queueing message")
+            self._debug_publish_log("publish_not_connected_queue", topic=topic, payload=payload)
             self._queue_message(topic, payload)
             return False
 
@@ -540,6 +615,13 @@ class ResilientAWSManager:
                 # QoS 1 can cause duplicates when ACK is delayed on slow connections
                 qos_level = mqtt.QoS.AT_MOST_ONCE if use_qos0 else mqtt.QoS.AT_LEAST_ONCE
 
+                self._debug_publish_log(
+                    "publish_attempt",
+                    topic=topic,
+                    payload=payload,
+                    extra={"attempt": attempt + 1, "retries": retries, "qos": str(qos_level)}
+                )
+
                 publish_future, _ = self.connection.publish(
                     topic=topic,
                     payload=json_payload,
@@ -554,6 +636,7 @@ class ResilientAWSManager:
                 except concurrent.futures.TimeoutError as timeout_err:
                     # ACK timed out but message was sent - consider success to avoid duplicates
                     logger.warning(f"Publish ACK timeout (message likely delivered): {timeout_err}")
+                    self._debug_publish_log("publish_ack_timeout_considered_success", topic=topic, payload=payload)
                     self.publish_circuit_breaker.on_success()
                     return True
                 except Exception as ack_error:
@@ -562,17 +645,20 @@ class ResilientAWSManager:
                     if 'timeout' in error_str or 'timed out' in error_str:
                         # Timeout-like error, message likely sent
                         logger.warning(f"Publish ACK timeout (message likely delivered): {ack_error}")
+                        self._debug_publish_log("publish_ack_timeout_like_considered_success", topic=topic, payload=payload)
                         self.publish_circuit_breaker.on_success()
                         return True
                     # Non-timeout error - this is a real failure, re-raise to retry
                     raise
 
                 self.publish_circuit_breaker.on_success()
+                self._debug_publish_log("publish_success", topic=topic, payload=payload)
                 return True
 
             except ConnectionError as e:
                 # Connection error - message was NOT sent, safe to retry
                 logger.error(f"Publish attempt {attempt + 1} connection error: {e}")
+                self._debug_publish_log("publish_connection_error", topic=topic, payload=payload, extra={"attempt": attempt + 1, "error": str(e)})
                 if attempt < retries:
                     time.sleep(2 ** attempt)  # Exponential backoff
                 else:
@@ -585,9 +671,11 @@ class ResilientAWSManager:
                     # If we got a timeout and we're not sure if message was sent,
                     # log it but don't retry to avoid duplicates
                     logger.warning(f"Publish timeout (avoiding retry to prevent duplicates): {e}")
+                    self._debug_publish_log("publish_timeout_avoiding_retry", topic=topic, payload=payload, extra={"attempt": attempt + 1, "error": str(e)})
                     return False
 
                 logger.error(f"Publish attempt {attempt + 1} failed: {type(e).__name__}: {e or repr(e)}")
+                self._debug_publish_log("publish_failed", topic=topic, payload=payload, extra={"attempt": attempt + 1, "error": str(e), "error_type": type(e).__name__})
                 if attempt < retries:
                     time.sleep(2 ** attempt)
                 else:
@@ -608,6 +696,7 @@ class ResilientAWSManager:
                 'timestamp': time.time()
             })
             logger.info(f"Message queued ({len(self._message_queue)} total)")
+            self._debug_publish_log("queued", topic=topic, payload=payload, extra={"queue_len": len(self._message_queue)})
 
     def _process_message_queue(self):
         """Process queued messages"""
@@ -616,6 +705,7 @@ class ResilientAWSManager:
                 return
 
             logger.info(f"Processing {len(self._message_queue)} queued messages...")
+            self._debug_publish_log("queue_process_begin", extra={"queue_len": len(self._message_queue)})
             processed = 0
             
             # Process messages in batches to avoid blocking
@@ -629,6 +719,7 @@ class ResilientAWSManager:
                     continue
                 
                 try:
+                    self._debug_publish_log("queue_publish_attempt", topic=msg['topic'], payload=msg['payload'], extra={"queue_len": len(self._message_queue)})
                     publish_future, _ = self.connection.publish(
                         topic=msg['topic'],
                         payload=json.dumps(msg['payload']),
@@ -637,15 +728,86 @@ class ResilientAWSManager:
                     publish_future.result(timeout=5)
                     self._message_queue.remove(msg)
                     processed += 1
+                    self._debug_publish_log("queue_publish_success_removed", topic=msg['topic'], payload=msg['payload'], extra={"processed": processed, "queue_len": len(self._message_queue)})
                 except Exception as e:
                     logger.error(f"Failed to send queued message: {e}")
+                    self._debug_publish_log("queue_publish_failed_kept", topic=msg['topic'], payload=msg['payload'], extra={"error": str(e), "error_type": type(e).__name__})
                     break
 
             if processed > 0:
                 logger.info(f"Processed {processed} queued messages")
 
+    def _acquire_status_publish_lock(self):
+        """Acquire inter-process lock for status publishing to prevent duplicates"""
+        try:
+            # Create lock file directory if needed
+            Path(self._status_publish_lock_file).parent.mkdir(parents=True, exist_ok=True)
+            
+            # Try to open and lock the file (non-blocking)
+            lock_handle = open(self._status_publish_lock_file, 'w')
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Write our PID for debugging
+                lock_handle.write(f"pid={os.getpid()}\n")
+                lock_handle.write(f"thing={self.thing_name}\n")
+                lock_handle.write(f"client_id={self.client_id}\n")
+                lock_handle.flush()
+                self._status_publish_lock_handle = lock_handle
+                logger.info(f"Status publish lock acquired: {self._status_publish_lock_file}")
+            except IOError:
+                # Lock is held by another process
+                lock_handle.close()
+                logger.warning(f"Status publish lock already held by another process (PID {self._read_lock_pid()})")
+                self._status_publish_lock_handle = None
+        except Exception as e:
+            logger.warning(f"Failed to acquire status publish lock: {e}")
+            self._status_publish_lock_handle = None
+    
+    def _read_lock_pid(self) -> Optional[str]:
+        """Read PID from lock file for debugging"""
+        try:
+            with open(self._status_publish_lock_file, 'r') as f:
+                for line in f:
+                    if line.startswith('pid='):
+                        return line.strip().split('=', 1)[1]
+        except Exception:
+            pass
+        return None
+    
+    def _release_status_publish_lock(self):
+        """Release inter-process lock for status publishing"""
+        if self._status_publish_lock_handle:
+            try:
+                fcntl.flock(self._status_publish_lock_handle, fcntl.LOCK_UN)
+                self._status_publish_lock_handle.close()
+                if Path(self._status_publish_lock_file).exists():
+                    Path(self._status_publish_lock_file).unlink()
+                logger.info(f"Status publish lock released: {self._status_publish_lock_file}")
+            except Exception as e:
+                logger.warning(f"Error releasing status publish lock: {e}")
+            finally:
+                self._status_publish_lock_handle = None
+    
     def publish_status(self) -> bool:
-        """Publish device status"""
+        """Publish device status with deduplication to prevent duplicate publishes"""
+        # Check if we hold the status publish lock
+        if self._status_publish_lock_handle is None:
+            logger.warning("Status publish lock not held - skipping publish to prevent duplicates")
+            return False
+        
+        # Inter-process deduplication: check minimum interval between publishes
+        min_publish_interval = 30.0  # Minimum 30 seconds between status publishes
+        current_time = time.time()
+        time_since_last = current_time - ResilientAWSManager._last_status_publish_time
+        
+        if time_since_last < min_publish_interval:
+            logger.info(f"Status publish skipped (too soon: {time_since_last:.1f}s < {min_publish_interval}s)")
+            return False
+        
+        # Update last publish time (with thread safety)
+        with ResilientAWSManager._status_publish_lock:
+            ResilientAWSManager._last_status_publish_time = current_time
+        
         try:
             # Get system info
             wifi_ssid, wifi_strength = self._get_wifi_info()
@@ -674,6 +836,7 @@ class ResilientAWSManager:
             }
 
             logger.info(f"Publishing status with messageId: {message_id}")
+            self._debug_publish_log("status_publish_call", topic=self.shadow_update_topic, payload=shadow_payload)
             # Use QoS 0 for status updates - prevents MQTT-level duplicates on LTE
             # Status is periodic (every 5 min), so occasional loss is acceptable
             return self.publish_with_retry(self.shadow_update_topic, shadow_payload, use_qos0=True)
@@ -911,6 +1074,12 @@ class ResilientAWSManager:
         if self.duplicate_prevention:
             self.duplicate_prevention.cleanup()
             logger.info("Process lock released")
+        
+        # Clean up status publish lock
+        self._release_status_publish_lock()
+        
+        # Clean up status publish lock
+        self._release_status_publish_lock()
 
     def get_status(self) -> Dict[str, Any]:
         """Get current manager status"""

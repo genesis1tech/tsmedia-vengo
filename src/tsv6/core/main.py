@@ -17,6 +17,7 @@ import json
 import uuid
 import queue
 from concurrent.futures import ThreadPoolExecutor
+import traceback
 
 # Import PIL for image handling
 try:
@@ -535,9 +536,22 @@ class EnhancedVideoPlayer:
     def start_status_publishing(self):
         """Start AWS status publishing thread"""
         # Diagnostic logging to identify issues
+        debug_enabled = os.getenv("TSV6_DEBUG_AWS_PUBLISH", "0") == "1"
+        if not hasattr(self, "_status_publisher_instance_id"):
+            self._status_publisher_instance_id = str(uuid.uuid4())
+
         print("🔍 start_status_publishing() called")
+        print(f"   pid: {os.getpid()}")
+        print(f"   player_instance_id: {self._status_publisher_instance_id}")
         print(f"   aws_manager: {self.aws_manager is not None}")
         print(f"   status_publish_active: {self.status_publish_active}")
+        if debug_enabled:
+            try:
+                stack = traceback.extract_stack(limit=8)
+                caller = stack[-2] if len(stack) >= 2 else stack[-1]
+                print(f"   caller: {caller.filename}:{caller.lineno} in {caller.name}")
+            except Exception:
+                pass
         
         if not self.aws_manager:
             print("❌ Cannot start status publishing: aws_manager is None")
@@ -564,6 +578,8 @@ class EnhancedVideoPlayer:
         def publish_status():
             """Background task to publish status every 5 minutes"""
             print("📡 Starting AWS status publishing interval (5 min)...")
+            print(f"   pid: {os.getpid()}")
+            print(f"   player_instance_id: {self._status_publisher_instance_id}")
             consecutive_failures = 0
             publish_count = 0
 
