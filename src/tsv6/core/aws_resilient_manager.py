@@ -176,7 +176,8 @@ class ResilientAWSManager:
         self._queue_lock = threading.Lock()
         
         # Cached LTE signal strength to avoid blocking startup (Issue: mmcli 10s timeout)
-        self._cached_lte_signal: int = 0
+        # Initialize to -1 to indicate "not yet fetched" vs actual 0% signal
+        self._cached_lte_signal: int = -1  # -1 = not yet fetched, 0-100 = valid signal
         self._lte_signal_lock = threading.Lock()
         self._lte_signal_thread: Optional[threading.Thread] = None
         
@@ -712,6 +713,9 @@ class ResilientAWSManager:
             if lte_primary:
                 # Get LTE signal strength from ModemManager (as percentage with % symbol)
                 pct = self._get_lte_signal_strength(env)
+                # Handle -1 (not yet fetched) - show "Connecting..." instead of misleading "0%"
+                if pct < 0:
+                    return "LTE Hologram", "Connecting..."
                 return "LTE Hologram", f"{pct}%"
 
             # Otherwise get WiFi info
@@ -786,11 +790,16 @@ class ResilientAWSManager:
         
         Returns cached value immediately and updates in background to avoid
         blocking startup/UI with mmcli's potential 10s+ response time.
+        
+        Returns:
+            int: Signal strength percentage (0-100), or -1 if not yet fetched.
+                 Callers should check for -1 and display "Connecting..." or similar.
         """
         # Start background refresh if not already running
         self._refresh_lte_signal_async(env)
         
         # Return cached value immediately (non-blocking)
+        # NOTE: -1 means "not yet fetched" - caller should handle this
         with self._lte_signal_lock:
             return self._cached_lte_signal
     
