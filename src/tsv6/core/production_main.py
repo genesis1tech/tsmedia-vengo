@@ -201,27 +201,45 @@ class ProductionVideoPlayer:
             self.watchdog_monitor = None
     
     def _initialize_connection_indicator(self):
-        """Initialize and start connection status indicator overlay"""
+        """Initialize and start connection status indicator overlay.
+        
+        CRITICAL FIX: Tkinter must be used from the main thread. Since this
+        application already has a main Tk window (video player), we cannot
+        run another Tk mainloop. Instead, start the indicator as a separate
+        subprocess to avoid cross-thread Tkinter issues.
+        """
         try:
-            self.connection_indicator = ConnectionStatusIndicator()
-            self.connection_indicator_thread = threading.Thread(
-                target=self._run_connection_indicator,
-                daemon=True,
-                name="ConnectionIndicator"
+            # Import here to catch DisplayNotAvailableError
+            from tsv6.services.connection_status_indicator import (
+                ConnectionStatusIndicator, DisplayNotAvailableError
             )
-            self.connection_indicator_thread.start()
-            self.logger.info("Connection status indicator started")
+            
+            # Start indicator as a separate subprocess to avoid Tkinter threading issues
+            # Each Tkinter application needs its own process (or at minimum, thread)
+            # but Tkinter is not thread-safe for cross-thread widget access
+            import subprocess
+            import sys
+            
+            indicator_module = "tsv6.services.connection_status_indicator"
+            self.connection_indicator_process = subprocess.Popen(
+                [sys.executable, "-m", indicator_module],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True  # Detach from parent process group
+            )
+            self.logger.info(f"Connection status indicator started as subprocess (PID: {self.connection_indicator_process.pid})")
+            
+            # Store for shutdown
+            self.connection_indicator = None  # No direct object reference when using subprocess
+            
+        except FileNotFoundError as e:
+            self.logger.warning(f"Failed to start connection indicator subprocess: {e}")
+            self.connection_indicator = None
+            self.connection_indicator_process = None
         except Exception as e:
             self.logger.warning(f"Failed to initialize connection indicator: {e}")
             self.connection_indicator = None
-    
-    def _run_connection_indicator(self):
-        """Run the connection indicator in a background thread"""
-        try:
-            if self.connection_indicator:
-                self.connection_indicator.run()
-        except Exception as e:
-            self.logger.error(f"Connection indicator error: {e}")
+            self.connection_indicator_process = None
     
     def _initialize_network_monitor(self):
         """Initialize network monitoring with enhanced recovery integration"""
@@ -1327,9 +1345,17 @@ class ProductionVideoPlayer:
         self.shutdown_event.set()
         
         try:
-            # Stop connection status indicator
-            if self.connection_indicator:
-                self.connection_indicator.stop()
+            # Stop connection status indicator subprocess
+            if hasattr(self, 'connection_indicator_process') and self.connection_indicator_process:
+                try:
+                    self.connection_indicator_process.terminate()
+                    self.connection_indicator_process.wait(timeout=2.0)
+                    self.logger.info("Connection indicator subprocess terminated")
+                except subprocess.TimeoutExpired:
+                    self.connection_indicator_process.kill()
+                    self.logger.warning("Connection indicator subprocess killed after timeout")
+                except Exception as e:
+                    self.logger.warning(f"Error stopping connection indicator: {e}")
             
             # Stop barcode scanning
             if self.barcode_scanner:

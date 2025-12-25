@@ -368,9 +368,14 @@ class ConnectivityManager:
                 except Exception:
                     pass
 
-            # Restore wlan0 to managed mode (not AP mode)
+            # Restore WiFi interface to managed mode (not AP mode)
+            # Use configured interface from wifi_monitor, fallback to wlan0
+            wifi_interface = "wlan0"
+            if self.wifi_monitor and hasattr(self.wifi_monitor, 'cfg'):
+                wifi_interface = getattr(self.wifi_monitor.cfg, 'interface', 'wlan0')
+            
             subprocess.run(
-                ["sudo", "ip", "addr", "flush", "dev", "wlan0"],
+                ["sudo", "ip", "addr", "flush", "dev", wifi_interface],
                 capture_output=True, timeout=5
             )
 
@@ -480,14 +485,18 @@ class ConnectivityManager:
     def _on_wifi_status(self, status: Dict[str, Any]) -> None:
         """Handle WiFi status update"""
         self._wifi_status = status
-        # NetworkMonitor emits keys like wifi_ok/internet_ok/connectivity_ok.
-        # ConnectivityManager historically expected 'connected'. Log mismatch to validate.
-        if 'connected' not in status and 'connectivity_ok' in status:
-            logger.warning(
-                "WiFi status schema mismatch: expected key 'connected' but got %s",
-                sorted(list(status.keys())),
-            )
-        self._wifi_connected = status.get('connected', False)
+        # FIX: NetworkMonitor emits 'wifi_ok' and 'connectivity_ok' keys, not 'connected'.
+        # Use the correct keys to determine WiFi connectivity.
+        # Priority: wifi_ok (indicates WiFi link is up) > connectivity_ok (indicates internet) > connected (legacy)
+        if 'wifi_ok' in status:
+            # Modern NetworkMonitor: wifi_ok indicates WiFi association
+            self._wifi_connected = status.get('wifi_ok', False)
+        elif 'connectivity_ok' in status:
+            # Alternative: connectivity_ok indicates network connectivity
+            self._wifi_connected = status.get('connectivity_ok', False)
+        else:
+            # Legacy fallback
+            self._wifi_connected = status.get('connected', False)
 
         # Chain to original callback
         if hasattr(self, '_orig_wifi_status') and self._orig_wifi_status:
