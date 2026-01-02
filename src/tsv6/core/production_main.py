@@ -379,7 +379,7 @@ class ProductionVideoPlayer:
                 failover_timeout_secs=connectivity_config.get("failover_timeout_secs", 60.0),
                 failback_check_interval_secs=connectivity_config.get("failback_check_interval_secs", 300.0),
                 failback_stability_secs=connectivity_config.get("failback_stability_secs", 30.0),
-                status_report_interval_secs=connectivity_config.get("status_report_interval_secs", 300.0),
+                status_report_interval_secs=connectivity_config.get("status_report_interval_secs", 900.0),
             )
 
             self.connectivity_manager = ConnectivityManager(
