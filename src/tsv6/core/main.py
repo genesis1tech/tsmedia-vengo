@@ -321,14 +321,7 @@ class OptimizedBarcodeScanner:
                     total_latency_ms = int((time.time() - item['timestamp']) * 1000)
                     print(f"✅ Transaction {item['transaction_id'][:8]}... sent")
                     print(f"   Total latency: {total_latency_ms}ms (queue: {latency_ms}ms, publish: {publish_time_ms}ms)")
-
-                    # Start NFC emulation with scanid as UTM parameter
-                    # Broadcasts URL for 10 seconds or until next scan
-                    if self.nfc_emulator:
-                        try:
-                            self.nfc_emulator.start_emulation(item['transaction_id'])
-                        except Exception as e:
-                            print(f"⚠ NFC emulation failed to start: {e}")
+                    # NFC emulation is started later when openDoor response is received
                 else:
                     print(f"❌ Failed to send transaction {item['transaction_id'][:8]}...")
                 
@@ -1245,6 +1238,7 @@ class EnhancedVideoPlayer:
         product_name = product_data.get('productName', 'Product')
         product_brand = product_data.get('productBrand', '')
         barcode = product_data.get('barcode', '')
+        transaction_id = product_data.get('transactionID', '')
 
         if not image_url:
             print("⚠ No product image URL provided")
@@ -1254,6 +1248,15 @@ class EnhancedVideoPlayer:
         self._hide_processing_overlay()
 
         print(f"🖼️ Displaying product image: {product_name}")
+
+        # Start NFC emulation now that barcode is confirmed valid (openDoor received)
+        # Broadcasts URL with transaction_id as UTM for 10 seconds or until next scan
+        if transaction_id and self.barcode_scanner and self.barcode_scanner.nfc_emulator:
+            try:
+                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id)
+                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}...")
+            except Exception as e:
+                print(f"⚠ NFC emulation failed to start: {e}")
 
         def image_ready_callback(image_path, success):
             """Called when image download is complete"""
