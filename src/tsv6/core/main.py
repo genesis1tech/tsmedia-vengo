@@ -82,6 +82,15 @@ except ImportError as e:
     MEMORY_OPTIMIZER_AVAILABLE = False
     print(f"⚠ Memory Optimizer not available: {e}")
 
+# Import NFC emulator for broadcasting URL with scanid
+try:
+    from tsv6.hardware.nfc import NFCEmulator
+    NFC_EMULATOR_AVAILABLE = True
+    print("✓ NFC Emulator imported successfully")
+except ImportError as e:
+    NFC_EMULATOR_AVAILABLE = False
+    print(f"⚠ NFC Emulator not available: {e}")
+
 
 class OptimizedBarcodeScanner:
     """Optimized barcode scanner with threading for instant AWS IoT transmission"""
@@ -126,7 +135,38 @@ class OptimizedBarcodeScanner:
             self.memory_optimizer = get_global_memory_optimizer()
         else:
             self.memory_optimizer = None
-    
+
+        # NFC emulator for broadcasting URL with scanid after successful scan
+        if NFC_EMULATOR_AVAILABLE:
+            try:
+                self.nfc_emulator = NFCEmulator(
+                    base_url=os.getenv('NFC_BASE_URL', 'genesis1.tech'),
+                    timeout=10  # 10 second emulation timeout
+                )
+                self.nfc_emulator.on_tag_read = self._on_nfc_tag_read
+                self.nfc_emulator.on_status_change = self._on_nfc_status_change
+                print("✓ NFC Emulator initialized (10s broadcast timeout)")
+            except Exception as e:
+                print(f"Failed to initialize NFC Emulator: {e}")
+                self.nfc_emulator = None
+        else:
+            self.nfc_emulator = None
+
+    def _on_nfc_tag_read(self, scanid: str):
+        """Callback when NFC tag is read by a phone"""
+        print(f"📱 NFC tag read by phone! scanid: {scanid[:8]}...")
+
+    def _on_nfc_status_change(self, status: str, scanid: str):
+        """Callback for NFC emulation status changes"""
+        if status == "started":
+            print(f"📡 NFC broadcasting: https://genesis1.tech?utm={scanid[:8]}...")
+        elif status == "read":
+            print(f"✅ NFC tag tapped! URL opened on phone")
+        elif status == "timeout":
+            print(f"⏱️ NFC broadcast timeout (10s) - no tap detected")
+        elif status == "error":
+            print(f"❌ NFC emulation error")
+
     def generate_uuid(self):
         """Generate a transaction ID"""
         return str(uuid.uuid4())
@@ -205,7 +245,12 @@ class OptimizedBarcodeScanner:
                     barcode_data = barcode_data.strip()
                     transaction_id = self.generate_uuid()
                     timestamp = time.time()
-                    
+
+                    # Stop any running NFC emulation (new scan supersedes previous)
+                    if self.nfc_emulator and self.nfc_emulator.is_running():
+                        print("🛑 Stopping previous NFC broadcast (new scan)")
+                        self.nfc_emulator.stop_emulation()
+
                     # Check if this is a QR code
                     is_qr = False
                     if self.barcode_reader and hasattr(self.barcode_reader, 'is_qr_code'):
@@ -276,6 +321,7 @@ class OptimizedBarcodeScanner:
                     total_latency_ms = int((time.time() - item['timestamp']) * 1000)
                     print(f"✅ Transaction {item['transaction_id'][:8]}... sent")
                     print(f"   Total latency: {total_latency_ms}ms (queue: {latency_ms}ms, publish: {publish_time_ms}ms)")
+                    # NFC emulation is started later when openDoor response is received
                 else:
                     print(f"❌ Failed to send transaction {item['transaction_id'][:8]}...")
                 
@@ -313,19 +359,23 @@ class OptimizedBarcodeScanner:
         """Stop the barcode scanning"""
         print("🛑 Stopping barcode scanner...")
         self.running = False
-        
+
+        # Stop NFC emulation if running
+        if self.nfc_emulator:
+            self.nfc_emulator.stop_emulation()
+
         # Wait for threads to finish
         if self.scan_thread:
             self.scan_thread.join(timeout=2)
         if self.publish_thread:
             self.publish_thread.join(timeout=2)
-        
+
         # Shutdown callback executor
         self.callback_executor.shutdown(wait=False)
-        
+
         # Perform memory cleanup (Issue #39)
         self.cleanup_memory()
-        
+
         print("🛑 Barcode scanning stopped")
     
     def cleanup_memory(self):
@@ -1188,6 +1238,8 @@ class EnhancedVideoPlayer:
         product_name = product_data.get('productName', 'Product')
         product_brand = product_data.get('productBrand', '')
         barcode = product_data.get('barcode', '')
+        # Note: AWS response uses 'transactionId' (lowercase 'd')
+        transaction_id = product_data.get('transactionId', '')
 
         if not image_url:
             print("⚠ No product image URL provided")
@@ -1197,6 +1249,15 @@ class EnhancedVideoPlayer:
         self._hide_processing_overlay()
 
         print(f"🖼️ Displaying product image: {product_name}")
+
+        # Start NFC emulation now that barcode is confirmed valid (openDoor received)
+        # Broadcasts URL with transaction_id as UTM for 10 seconds or until next scan
+        if transaction_id and self.barcode_scanner and self.barcode_scanner.nfc_emulator:
+            try:
+                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id)
+                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}...")
+            except Exception as e:
+                print(f"⚠ NFC emulation failed to start: {e}")
 
         def image_ready_callback(image_path, success):
             """Called when image download is complete"""
@@ -1386,6 +1447,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1454,6 +1516,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1521,6 +1584,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1594,6 +1658,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack(pady=10)
                 
                 # Add product name with larger font
