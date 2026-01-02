@@ -188,6 +188,7 @@ class ConnectionStatusIndicator:
 
             if self.canvas and self.dot_id:
                 self.canvas.itemconfig(self.dot_id, fill=color, outline=color)
+                self.root.lift()  # Stay on top of fullscreen windows
 
         except Exception as e:
             logger.error(f"Error updating indicator: {e}")
