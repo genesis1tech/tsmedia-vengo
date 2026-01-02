@@ -1238,7 +1238,8 @@ class EnhancedVideoPlayer:
         product_name = product_data.get('productName', 'Product')
         product_brand = product_data.get('productBrand', '')
         barcode = product_data.get('barcode', '')
-        transaction_id = product_data.get('transactionID', '')
+        # Note: AWS response uses 'transactionId' (lowercase 'd')
+        transaction_id = product_data.get('transactionId', '')
 
         if not image_url:
             print("⚠ No product image URL provided")
