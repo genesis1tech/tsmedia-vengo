@@ -1456,6 +1456,11 @@ class EnhancedVideoPlayer:
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
 
+                # Force overlay to be on top of VLC video
+                self.image_overlay.lift()
+                self.image_overlay.focus_force()
+                self.root.update_idletasks()
+
                 # Schedule hide after 5 seconds (as requested)
                 self.image_display_timer = self.root.after(5000, self._hide_image_overlay)
 
@@ -1528,6 +1533,11 @@ class EnhancedVideoPlayer:
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
 
+                # Force overlay to be on top of VLC video
+                self.image_overlay.lift()
+                self.image_overlay.focus_force()
+                self.root.update_idletasks()
+
                 # Schedule hide after 5 seconds (as requested)
                 self.image_display_timer = self.root.after(5000, self._hide_image_overlay)
 
@@ -1598,6 +1608,11 @@ class EnhancedVideoPlayer:
 
                 # Keep reference to photo to prevent garbage collection
                 self.processing_overlay.photo = photo
+
+                # Force overlay to be on top of VLC video
+                self.processing_overlay.lift()
+                self.processing_overlay.focus_force()
+                self.root.update_idletasks()
 
                 # Schedule auto-hide after 15 seconds as a safety timeout
                 # (in case AWS response never arrives)
@@ -1713,10 +1728,15 @@ class EnhancedVideoPlayer:
                 
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
-                
-                # Schedule hide after 2.5 seconds
+
+                # Force overlay to be on top of VLC video
+                self.image_overlay.lift()
+                self.image_overlay.focus_force()
+                self.root.update_idletasks()
+
+                # Schedule hide after 4 seconds
                 self.image_display_timer = self.root.after(4000, self._hide_image_overlay)
-                
+
                 print(f"✅ Displaying full-screen image: {product_name}")
             else:
                 print("❌ Failed to load image for display")
