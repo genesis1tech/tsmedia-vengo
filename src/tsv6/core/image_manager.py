@@ -178,22 +178,29 @@ class ImageManager:
             return None
 
         try:
-            # Open and resize image
-            with Image.open(image_path) as img:
-                # Convert to RGB if needed
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
+            # Open image - don't use context manager as we need PIL image
+            # to persist until PhotoImage is rendered by Tkinter
+            img = Image.open(image_path)
 
-                if maintain_aspect_ratio:
-                    # Calculate size maintaining aspect ratio
-                    img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                else:
-                    # Force exact size (may stretch image to fill entire area)
-                    img = img.resize(target_size, Image.Resampling.LANCZOS)
+            # Convert to RGB if needed (creates a copy)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
 
-                # Create tkinter-compatible image
-                photo = ImageTk.PhotoImage(img)
-                return photo
+            if maintain_aspect_ratio:
+                # Calculate size maintaining aspect ratio
+                img.thumbnail(target_size, Image.Resampling.LANCZOS)
+            else:
+                # Force exact size (may stretch image to fill entire area)
+                img = img.resize(target_size, Image.Resampling.LANCZOS)
+
+            # Create tkinter-compatible image
+            photo = ImageTk.PhotoImage(img)
+
+            # CRITICAL: Keep reference to PIL image to prevent garbage collection
+            # Without this, the underlying image data can be freed before Tkinter renders
+            photo._pil_image = img
+
+            return photo
 
         except Exception as e:
             print(f"❌ Failed to load image {image_path}: {e}")

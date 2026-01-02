@@ -1447,6 +1447,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1515,6 +1516,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1582,6 +1584,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
@@ -1655,6 +1658,7 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
+                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack(pady=10)
                 
                 # Add product name with larger font
