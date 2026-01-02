@@ -173,6 +173,7 @@ class ResilientAWSManager:
         self.command_topic = f"device/{thing_name}/command"
         self.barcode_response_topic = f"{thing_name}/openDoor"
         self.no_match_topic = f"{thing_name}/noMatch"
+        self.lte_status_topic = f"device/{thing_name}/lte/status"  # Compact payload for 4G LTE
         
         # Callbacks
         self.on_connection_success: Optional[Callable] = None
@@ -813,6 +814,23 @@ class ResilientAWSManager:
             wifi_ssid, wifi_strength = self._get_wifi_info()
             cpu_temp = self._get_cpu_temperature()
 
+            # Check if LTE is primary - use compact payload to reduce data costs
+            if self._is_lte_primary():
+                # Parse signal strength (may be "XX%" string or int)
+                signal_value = wifi_strength
+                if isinstance(wifi_strength, str):
+                    # Extract numeric value from "XX%" or handle "Connecting..."
+                    if wifi_strength == "Connecting...":
+                        signal_value = -1
+                    else:
+                        signal_value = int(wifi_strength.replace('%', ''))
+
+                lte_payload = self._build_lte_status_payload(wifi_ssid, signal_value, cpu_temp)
+                logger.info(f"Publishing LTE compact status to {self.lte_status_topic}")
+                self._debug_publish_log("lte_status_publish", topic=self.lte_status_topic, payload=lte_payload)
+                return self.publish_with_retry(self.lte_status_topic, lte_payload, use_qos0=True)
+
+            # WiFi mode: use full shadow payload for backward compatibility
             # Generate unique message ID to track duplicates (full UUID to avoid collisions)
             message_id = str(uuid.uuid4())
 
@@ -844,6 +862,48 @@ class ResilientAWSManager:
         except Exception as e:
             logger.error(f"Failed to publish status: {type(e).__name__}: {e or repr(e)}")
             return False
+
+    def _is_lte_primary(self) -> bool:
+        """Check if LTE is the primary connection by examining the default route."""
+        try:
+            env = os.environ.copy()
+            env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
+            lte_interface = os.getenv('LTE_INTERFACE', 'wwan0')
+
+            result = subprocess.run(
+                ["ip", "route", "show", "default"],
+                capture_output=True, text=True, timeout=5, env=env
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                if lines:
+                    # First default route is the primary (lowest metric)
+                    first_route = lines[0]
+                    if lte_interface in first_route:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _build_lte_status_payload(self, wifi_ssid: str, wifi_strength: int, cpu_temp: float) -> dict:
+        """Build compact status payload for 4G LTE mode (~75% smaller than full payload).
+
+        Key mapping:
+            n = thingName
+            s = wifiSSID (actually LTE SSID)
+            w = wifiStrength (signal strength)
+            t = temperature (CPU temp in F)
+            m = timeConnectedMins
+            c = connectionState
+        """
+        return {
+            "n": self.thing_name,
+            "s": wifi_ssid,
+            "w": wifi_strength,
+            "t": cpu_temp,
+            "m": int((time.time() - (self.connection_start_time or time.time())) / 60),
+            "c": self.state.value
+        }
 
     def _get_wifi_info(self) -> tuple[str, int]:
         """Get connection information (WiFi or LTE based on primary route)"""
