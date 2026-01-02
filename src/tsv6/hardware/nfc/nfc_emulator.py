@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Default configuration
 DEFAULT_BASE_URL = "genesis1.tech"
-DEFAULT_SERIAL_PORT = "/dev/ttyUSB0"
+# PN532 is typically on ttyUSB5 (CH340), can be overridden via NFC_SERIAL_PORT env var
+DEFAULT_SERIAL_PORT = os.getenv("NFC_SERIAL_PORT", "/dev/ttyUSB5")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_EMULATION_TIMEOUT = 120  # seconds
 

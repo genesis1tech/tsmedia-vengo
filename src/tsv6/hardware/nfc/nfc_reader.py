@@ -9,6 +9,7 @@ Hardware: PN532 NFC module via USB/UART (CH340 adapter)
 Protocol: PN532 HSU (High Speed UART) mode
 """
 
+import os
 import time
 import logging
 from typing import Optional, Tuple, Callable
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 # Configuration defaults
-DEFAULT_SERIAL_PORT = '/dev/ttyUSB0'
+# PN532 is typically on ttyUSB5 (CH340), can be overridden via NFC_SERIAL_PORT env var
+DEFAULT_SERIAL_PORT = os.getenv("NFC_SERIAL_PORT", "/dev/ttyUSB5")
 DEFAULT_BAUD_RATE = 115200
 
 # PN532 protocol constants
