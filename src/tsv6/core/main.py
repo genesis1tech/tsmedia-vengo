@@ -1423,6 +1423,9 @@ class EnhancedVideoPlayer:
             )
 
             if photo:
+                # CRITICAL: Store reference immediately to prevent garbage collection
+                self._current_photo = photo
+
                 # Create FULL-SCREEN overlay frame
                 self.image_overlay = tk.Toplevel(self.root)
                 self.image_overlay.configure(background=config.display.product_image_background_color)
@@ -1492,6 +1495,9 @@ class EnhancedVideoPlayer:
             )
 
             if photo:
+                # CRITICAL: Store reference immediately to prevent garbage collection
+                self._current_photo = photo
+
                 # Create FULL-SCREEN overlay frame
                 self.image_overlay = tk.Toplevel(self.root)
                 self.image_overlay.configure(background=config.display.product_image_background_color)
@@ -1560,6 +1566,9 @@ class EnhancedVideoPlayer:
             )
 
             if photo:
+                # CRITICAL: Store reference immediately to prevent garbage collection
+                self._current_processing_photo = photo
+
                 # Create FULL-SCREEN overlay frame
                 self.processing_overlay = tk.Toplevel(self.root)
                 self.processing_overlay.configure(background=config.display.product_image_background_color)
@@ -1629,11 +1638,15 @@ class EnhancedVideoPlayer:
             max_height = int(screen_height * 0.5)
             
             photo = self.image_manager.load_image_for_display(
-                image_path, 
+                image_path,
                 (max_width, max_height)
             )
-            
+
             if photo:
+                # CRITICAL: Store reference immediately to prevent garbage collection
+                # before Tkinter can render the image
+                self._current_photo = photo
+
                 # Create FULL-SCREEN overlay frame
                 self.image_overlay = tk.Toplevel(self.root)
                 self.image_overlay.configure(background=config.display.product_image_background_color)
@@ -1716,7 +1729,9 @@ class EnhancedVideoPlayer:
     def _hide_image_overlay(self):
         """Hide image overlay and restart video playback"""
         try:
-            # Explicitly clean up PhotoImage reference to prevent memory leak (Issue #85)
+            # Explicitly clean up PhotoImage references to prevent memory leak
+            if hasattr(self, '_current_photo'):
+                self._current_photo = None
             if self.image_overlay and hasattr(self.image_overlay, 'photo'):
                 self.image_overlay.photo = None
 
@@ -1761,7 +1776,9 @@ class EnhancedVideoPlayer:
                          paused for next overlay to handle. Use True for timeout case.
         """
         try:
-            # Explicitly clean up PhotoImage reference to prevent memory leak
+            # Explicitly clean up PhotoImage references to prevent memory leak
+            if hasattr(self, '_current_processing_photo'):
+                self._current_processing_photo = None
             if self.processing_overlay and hasattr(self.processing_overlay, 'photo'):
                 self.processing_overlay.photo = None
 
