@@ -576,16 +576,16 @@ class EnhancedVideoPlayer:
             print(f"❌ Initial status publish error: {type(e).__name__}: {e}")
 
         def publish_status():
-            """Background task to publish status every 5 minutes"""
-            print("📡 Starting AWS status publishing interval (5 min)...")
+            """Background task to publish status every 15 minutes"""
+            print("📡 Starting AWS status publishing interval (15 min)...")
             print(f"   pid: {os.getpid()}")
             print(f"   player_instance_id: {self._status_publisher_instance_id}")
             consecutive_failures = 0
             publish_count = 0
 
             while self.status_publish_active and self.aws_manager:
-                # Wait 5 minutes before next publish (initial status already sent)
-                for _ in range(3000):  # 300 seconds (5 min) in 0.1s increments
+                # Wait 15 minutes before next publish (initial status already sent)
+                for _ in range(9000):  # 900 seconds (15 min) in 0.1s increments
                     if not self.status_publish_active:
                         break
                     time.sleep(0.1)
