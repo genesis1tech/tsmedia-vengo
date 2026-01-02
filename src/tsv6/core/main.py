@@ -1652,96 +1652,106 @@ class EnhancedVideoPlayer:
             max_width = int(screen_width * 0.5)
             max_height = int(screen_height * 0.5)
             
-            photo = self.image_manager.load_image_for_display(
-                image_path,
-                (max_width, max_height)
-            )
+            # Temporarily disable garbage collection to prevent PhotoImage from being freed
+            # before Tkinter can render it (fixes "pyimage doesn't exist" error)
+            import gc
+            gc_was_enabled = gc.isenabled()
+            gc.disable()
 
-            if photo:
-                # CRITICAL: Store reference immediately to prevent garbage collection
-                # before Tkinter can render the image
-                self._current_photo = photo
+            try:
+                photo = self.image_manager.load_image_for_display(
+                    image_path,
+                    (max_width, max_height)
+                )
 
-                # Create FULL-SCREEN overlay frame
-                self.image_overlay = tk.Toplevel(self.root)
-                self.image_overlay.configure(background=config.display.product_image_background_color)
-                self.image_overlay.attributes('-topmost', True)
-                self.image_overlay.overrideredirect(True)
-                self.image_overlay.configure(cursor="none")
-                
-                # Position to cover ENTIRE screen (including button area)
-                self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
-                
-                # Create main container frame
-                main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
-                main_frame.pack(expand=True, fill='both')
-                
-                # Create content frame for centering
-                content_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
-                content_frame.place(relx=0.5, rely=0.5, anchor='center')
-                
-                # Add product image
-                image_label = tk.Label(
-                    content_frame,
-                    image=photo,
-                    background=config.display.product_image_background_color
-                )
-                image_label.image = photo  # Keep reference to prevent garbage collection
-                image_label.pack(pady=10)
-                
-                # Add product name with larger font
-                name_label = tk.Label(
-                    content_frame,
-                    text=product_name,
-                    fg='black',
-                    background=config.display.product_image_background_color,
-                    font=('Arial', 24, 'bold'),
-                    wraplength=int(screen_width * 0.8),
-                    justify='center'
-                )
-                name_label.pack(pady=10)
-                
-                # Add product brand if available
-                if product_brand:
-                    brand_label = tk.Label(
+                if photo:
+                    # CRITICAL: Store reference immediately to prevent garbage collection
+                    self._current_photo = photo
+
+                    # Create FULL-SCREEN overlay frame
+                    self.image_overlay = tk.Toplevel(self.root)
+                    self.image_overlay.configure(background=config.display.product_image_background_color)
+                    self.image_overlay.attributes('-topmost', True)
+                    self.image_overlay.overrideredirect(True)
+                    self.image_overlay.configure(cursor="none")
+
+                    # Position to cover ENTIRE screen (including button area)
+                    self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
+
+                    # Create main container frame
+                    main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
+                    main_frame.pack(expand=True, fill='both')
+
+                    # Create content frame for centering
+                    content_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
+                    content_frame.place(relx=0.5, rely=0.5, anchor='center')
+
+                    # Add product image
+                    image_label = tk.Label(
                         content_frame,
-                        text=f"Brand: {product_brand}",
-                        fg='gray',
+                        image=photo,
+                        background=config.display.product_image_background_color
+                    )
+                    image_label.image = photo  # Keep reference to prevent garbage collection
+                    image_label.pack(pady=10)
+
+                    # Add product name with larger font
+                    name_label = tk.Label(
+                        content_frame,
+                        text=product_name,
+                        fg='black',
                         background=config.display.product_image_background_color,
-                        font=('Arial', 18, 'normal'),
+                        font=('Arial', 24, 'bold'),
                         wraplength=int(screen_width * 0.8),
                         justify='center'
                     )
-                    brand_label.pack(pady=5)
-                
-                # Add barcode if available
-                if barcode:
-                    barcode_label = tk.Label(
-                        content_frame,
-                        text=f"Barcode: {barcode}",
-                        fg='gray',
-                        background=config.display.product_image_background_color,
-                        font=('Arial', 16, 'normal'),
-                        justify='center'
-                    )
-                    barcode_label.pack(pady=5)
-                
-                # Keep reference to photo to prevent garbage collection
-                self.image_overlay.photo = photo
+                    name_label.pack(pady=10)
 
-                # Force overlay to be on top of VLC video
-                self.image_overlay.lift()
-                self.image_overlay.focus_force()
-                self.root.update_idletasks()
+                    # Add product brand if available
+                    if product_brand:
+                        brand_label = tk.Label(
+                            content_frame,
+                            text=f"Brand: {product_brand}",
+                            fg='gray',
+                            background=config.display.product_image_background_color,
+                            font=('Arial', 18, 'normal'),
+                            wraplength=int(screen_width * 0.8),
+                            justify='center'
+                        )
+                        brand_label.pack(pady=5)
 
-                # Schedule hide after 4 seconds
-                self.image_display_timer = self.root.after(4000, self._hide_image_overlay)
+                    # Add barcode if available
+                    if barcode:
+                        barcode_label = tk.Label(
+                            content_frame,
+                            text=f"Barcode: {barcode}",
+                            fg='gray',
+                            background=config.display.product_image_background_color,
+                            font=('Arial', 16, 'normal'),
+                            justify='center'
+                        )
+                        barcode_label.pack(pady=5)
 
-                print(f"✅ Displaying full-screen image: {product_name}")
-            else:
-                print("❌ Failed to load image for display")
-                self._hide_image_overlay()
-                
+                    # Keep reference to photo to prevent garbage collection
+                    self.image_overlay.photo = photo
+
+                    # Force overlay to be on top of VLC video
+                    self.image_overlay.lift()
+                    self.image_overlay.focus_force()
+                    self.root.update_idletasks()
+
+                    # Schedule hide after 4 seconds
+                    self.image_display_timer = self.root.after(4000, self._hide_image_overlay)
+
+                    print(f"✅ Displaying full-screen image: {product_name}")
+                else:
+                    print("❌ Failed to load image for display")
+                    self._hide_image_overlay()
+            finally:
+                # Re-enable garbage collection
+                if gc_was_enabled:
+                    gc.enable()
+
         except Exception as e:
             print(f"❌ Error showing image overlay: {e}")
             self._hide_image_overlay()
