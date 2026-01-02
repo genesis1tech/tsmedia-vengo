@@ -140,7 +140,7 @@ class OptimizedBarcodeScanner:
         if NFC_EMULATOR_AVAILABLE:
             try:
                 self.nfc_emulator = NFCEmulator(
-                    base_url=os.getenv('NFC_BASE_URL', 'genesis1.tech'),
+                    base_url=os.getenv('NFC_BASE_URL', 'tsrewards.vercel.app'),
                     timeout=10  # 10 second emulation timeout
                 )
                 self.nfc_emulator.on_tag_read = self._on_nfc_tag_read
@@ -159,7 +159,7 @@ class OptimizedBarcodeScanner:
     def _on_nfc_status_change(self, status: str, scanid: str):
         """Callback for NFC emulation status changes"""
         if status == "started":
-            print(f"📡 NFC broadcasting: https://genesis1.tech?utm={scanid[:8]}...")
+            print(f"📡 NFC broadcasting: https://tsrewards.vercel.app?utm={scanid[:8]}...")
         elif status == "read":
             print(f"✅ NFC tag tapped! URL opened on phone")
         elif status == "timeout":
