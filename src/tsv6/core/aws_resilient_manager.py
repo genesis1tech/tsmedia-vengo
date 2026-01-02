@@ -821,7 +821,15 @@ class ResilientAWSManager:
                 if isinstance(wifi_strength, str):
                     # Extract numeric value from "XX%" or handle "Connecting..."
                     if wifi_strength == "Connecting...":
-                        signal_value = -1
+                        # Wait briefly for background signal fetch to complete (up to 5s)
+                        for _ in range(50):
+                            time.sleep(0.1)
+                            with self._lte_signal_lock:
+                                if self._cached_lte_signal >= 0:
+                                    signal_value = self._cached_lte_signal
+                                    break
+                        else:
+                            signal_value = -1  # Still not available after waiting
                     else:
                         signal_value = int(wifi_strength.replace('%', ''))
 
