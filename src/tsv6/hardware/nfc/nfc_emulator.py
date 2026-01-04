@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Default configuration
-DEFAULT_BASE_URL = "genesis1.tech"
+DEFAULT_BASE_URL = "tsrewards.vercel.app"
 # PN532 is typically on ttyUSB5 (CH340), can be overridden via NFC_SERIAL_PORT env var
 DEFAULT_SERIAL_PORT = os.getenv("NFC_SERIAL_PORT", "/dev/ttyUSB5")
 DEFAULT_BAUD_RATE = 115200
@@ -55,7 +55,7 @@ class NFCEmulator:
         Initialize the NFC Emulator.
 
         Args:
-            base_url: Base URL without protocol (e.g., "genesis1.tech")
+            base_url: Base URL without protocol (e.g., "tsrewards.vercel.app")
             serial_port: Serial port for PN532 (e.g., "/dev/ttyUSB0")
             baud_rate: Baud rate for serial communication
             timeout: Emulation timeout in seconds
@@ -289,7 +289,7 @@ def emulate_once(scanid: str, base_url: str = DEFAULT_BASE_URL, timeout: int = 1
 
     Args:
         scanid: Unique scan/transaction ID to embed in the URL
-        base_url: Base URL (default: genesis1.tech)
+        base_url: Base URL (default: tsrewards.vercel.app)
         timeout: Emulation timeout in seconds
 
     Returns:
@@ -317,7 +317,7 @@ if __name__ == '__main__':
 
     scanid = str(uuid.uuid4())
     print(f"Starting NFC emulation with scanid: {scanid}")
-    print(f"URL: https://genesis1.tech?utm={scanid}")
+    print(f"URL: https://tsrewards.vercel.app?utm={scanid}")
     print()
     print("Tap your phone to open the URL!")
     print("(Press Ctrl+C to exit)")
