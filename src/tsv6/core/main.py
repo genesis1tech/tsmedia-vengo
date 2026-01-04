@@ -1250,14 +1250,8 @@ class EnhancedVideoPlayer:
 
         print(f"🖼️ Displaying product image: {product_name}")
 
-        # Start NFC emulation now that barcode is confirmed valid (openDoor received)
-        # Broadcasts URL with transaction_id as UTM for 10 seconds or until next scan
-        if transaction_id and self.barcode_scanner and self.barcode_scanner.nfc_emulator:
-            try:
-                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id)
-                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}...")
-            except Exception as e:
-                print(f"⚠ NFC emulation failed to start: {e}")
+        # NOTE: NFC emulation is now started by production_main.py after servo closes
+        # This ensures NFC broadcasts only after the door has closed
 
         def image_ready_callback(image_path, success):
             """Called when image download is complete"""
@@ -1269,7 +1263,30 @@ class EnhancedVideoPlayer:
 
         # Start image download
         self.image_manager.download_image(image_url, image_ready_callback)
-    
+
+    def start_nfc_for_transaction(self, transaction_id: str):
+        """
+        Start NFC URL broadcasting for a transaction.
+
+        Called by production_main.py after the servo door has closed.
+        Broadcasts URL with transaction_id as UTM for 10 seconds or until next scan.
+
+        Args:
+            transaction_id: The transaction ID to embed in the URL
+        """
+        if not transaction_id:
+            print("⚠ No transaction ID provided for NFC")
+            return
+
+        if self.barcode_scanner and self.barcode_scanner.nfc_emulator:
+            try:
+                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id)
+                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}...")
+            except Exception as e:
+                print(f"⚠ NFC emulation failed to start: {e}")
+        else:
+            print("⚠ NFC emulator not available")
+
     def display_no_match_image(self):
         """
         Display no match image when noMatch message is received from AWS
