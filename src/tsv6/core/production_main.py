@@ -393,6 +393,14 @@ class ProductionVideoPlayer:
                 on_lte_wait_end=self._on_lte_wait_end,
             )
 
+            # CRITICAL: Set WiFi intentionally disabled flag IMMEDIATELY if LTE is primary
+            # This must happen BEFORE NetworkMonitor.start() is called to prevent
+            # the monitor from attempting WiFi recovery while we want WiFi disabled
+            if mode in (ConnectivityMode.LTE_PRIMARY_WIFI_BACKUP, ConnectivityMode.LTE_ONLY):
+                if self.network_monitor and hasattr(self.network_monitor, 'set_wifi_intentionally_disabled'):
+                    self.logger.info("LTE-first mode: marking WiFi as intentionally disabled before monitoring starts")
+                    self.network_monitor.set_wifi_intentionally_disabled(True)
+
             self.logger.info(f"Connectivity manager initialized (mode: {mode.value})")
 
         except Exception as e:

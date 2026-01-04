@@ -458,11 +458,51 @@ class WiFiProvisioningUI:
                 pass
 
 
+def _should_skip_wifi_provisioning() -> bool:
+    """
+    Check if WiFi provisioning should be skipped because LTE is the primary connection.
+
+    When LTE is enabled and is the primary connection mode, WiFi provisioning
+    should not run - the device will use LTE for connectivity.
+
+    Returns:
+        True if WiFi provisioning should be skipped, False otherwise
+    """
+    # Check connectivity mode from environment
+    connectivity_mode = os.environ.get('TSV6_CONNECTIVITY_MODE', '').lower()
+    lte_enabled = os.environ.get('TSV6_LTE_ENABLED', 'false').lower() == 'true'
+
+    # Skip WiFi provisioning if LTE is the primary connection mode
+    if connectivity_mode in ('lte_only', 'lte_primary_wifi_backup'):
+        logger.info(
+            f"LTE is primary connection mode ({connectivity_mode}) - "
+            "skipping WiFi provisioning UI"
+        )
+        return True
+
+    # Also skip if LTE is explicitly enabled (even without mode set)
+    if lte_enabled and not connectivity_mode:
+        logger.info(
+            "LTE is enabled (TSV6_LTE_ENABLED=true) - "
+            "skipping WiFi provisioning UI"
+        )
+        return True
+
+    return False
+
+
 def main():
     """Main entry point"""
     print('=' * 60)
     print('  TSV6 WiFi Provisioning UI Service')
     print('=' * 60)
+
+    # CRITICAL: Skip WiFi provisioning if LTE is the primary connection mode
+    # This ensures the WiFi setup screen doesn't show when using 4G LTE
+    if _should_skip_wifi_provisioning():
+        print('LTE is primary connection - WiFi provisioning not needed')
+        print('Exiting WiFi provisioning UI service')
+        sys.exit(0)
 
     try:
         ui = WiFiProvisioningUI()

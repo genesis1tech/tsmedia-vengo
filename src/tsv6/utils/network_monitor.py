@@ -405,12 +405,21 @@ class NetworkMonitor:
 
     def _recover(self) -> bool:
         """Perform staged network recovery"""
+        # CRITICAL: Skip ALL recovery if WiFi is intentionally disabled (LTE-first mode)
+        # This ensures WiFi stays disabled when LTE is the primary connection
+        if self._wifi_intentionally_disabled:
+            logger.debug(
+                "WiFi intentionally disabled - skipping ALL WiFi recovery "
+                "(LTE-first mode active)"
+            )
+            return False
+
         current_time = time.time()
-        
+
         # Increased from 30s to 120s in working config
         if current_time - self._recovery.last_recovery_time < 120:
             return False
-        
+
         self._recovery.last_recovery_time = current_time
         recovery_action = self._determine_recovery_action()
         
@@ -542,40 +551,50 @@ class NetworkMonitor:
                 self._emit(self.on_status, status)
 
                 if not connectivity_ok:
-                    self._recovery.consecutive_failures += 1
-
-                    logger.warning(f"Network issue detected: Failure #{self._recovery.consecutive_failures}, WiFi: {wifi_ok}, Internet: {internet_ok}, SSID: {ssid}, RSSI: {rssi}dBm, Gateway: {self.cfg.ping_target_local} (reachable: {local_ping_ok}), Public IP: {self.cfg.ping_target_public} (reachable: {public_ping_ok}), Recovery stage: {self._recovery.current_stage}")
-
-                    if self._last_connected:
-                        logger.error(f"Network disconnected: WiFi={wifi_ok}, Internet={internet_ok}")
-                        self._emit(self.on_disconnect, status)
-                        
-                        if self.error_recovery:
-                            severity = "medium" if self._recovery.consecutive_failures < 3 else "high"
-                            self.error_recovery.report_error(
-                                component="network",
-                                error_type="connectivity_loss",
-                                error_message=f"Network connectivity lost (WiFi: {wifi_ok}, Internet: {internet_ok})",
-                                severity=severity,
-                                context={
-                                    "ssid": ssid, 
-                                    "rssi": rssi, 
-                                    "consecutive_failures": self._recovery.consecutive_failures,
-                                    "gateway": self.cfg.ping_target_local,
-                                    "local_ping": local_ping_ok,
-                                    "public_ping": public_ping_ok
-                                }
-                            )
-
-                    logger.info(f"Attempting recovery (backoff: {self._backoff:.1f}s)")
-                    recovery_attempted = self._recover()
-                    if recovery_attempted:
-                        logger.info(f"Recovery executed, sleeping {min(self._backoff, 30):.1f}s")
-                        time.sleep(min(self._backoff, 30))
-                        self._backoff = min(self._backoff * 1.2, self.cfg.max_backoff_secs)
+                    # CRITICAL: Skip failure counting and recovery if WiFi is intentionally disabled
+                    # This ensures WiFi stays disabled when LTE is the primary connection
+                    if self._wifi_intentionally_disabled:
+                        logger.debug(
+                            "WiFi intentionally disabled - not counting connectivity failure "
+                            "(LTE-first mode active, WiFi down is expected)"
+                        )
+                        # Don't count failures, don't trigger disconnect callback, don't attempt recovery
+                        self._last_connected = False  # Track state but don't trigger callbacks
                     else:
-                        logger.debug(f"Recovery skipped (too frequent), sleeping 10s")
-                        time.sleep(10)
+                        self._recovery.consecutive_failures += 1
+
+                        logger.warning(f"Network issue detected: Failure #{self._recovery.consecutive_failures}, WiFi: {wifi_ok}, Internet: {internet_ok}, SSID: {ssid}, RSSI: {rssi}dBm, Gateway: {self.cfg.ping_target_local} (reachable: {local_ping_ok}), Public IP: {self.cfg.ping_target_public} (reachable: {public_ping_ok}), Recovery stage: {self._recovery.current_stage}")
+
+                        if self._last_connected:
+                            logger.error(f"Network disconnected: WiFi={wifi_ok}, Internet={internet_ok}")
+                            self._emit(self.on_disconnect, status)
+
+                            if self.error_recovery:
+                                severity = "medium" if self._recovery.consecutive_failures < 3 else "high"
+                                self.error_recovery.report_error(
+                                    component="network",
+                                    error_type="connectivity_loss",
+                                    error_message=f"Network connectivity lost (WiFi: {wifi_ok}, Internet: {internet_ok})",
+                                    severity=severity,
+                                    context={
+                                        "ssid": ssid,
+                                        "rssi": rssi,
+                                        "consecutive_failures": self._recovery.consecutive_failures,
+                                        "gateway": self.cfg.ping_target_local,
+                                        "local_ping": local_ping_ok,
+                                        "public_ping": public_ping_ok
+                                    }
+                                )
+
+                        logger.info(f"Attempting recovery (backoff: {self._backoff:.1f}s)")
+                        recovery_attempted = self._recover()
+                        if recovery_attempted:
+                            logger.info(f"Recovery executed, sleeping {min(self._backoff, 30):.1f}s")
+                            time.sleep(min(self._backoff, 30))
+                            self._backoff = min(self._backoff * 1.2, self.cfg.max_backoff_secs)
+                        else:
+                            logger.debug(f"Recovery skipped (too frequent), sleeping 10s")
+                            time.sleep(10)
                         
                 else:
                     had_failures = self._recovery.consecutive_failures > 0

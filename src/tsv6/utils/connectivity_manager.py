@@ -248,69 +248,97 @@ class ConnectivityManager:
             logger.warning("ConnectivityManager snapshot failed (%s): %s", reason, e)
 
     def _enable_wifi(self) -> bool:
-        """Enable WiFi connection via NetworkManager"""
-        if not self._wifi_conn_name:
-            logger.warning("Cannot enable WiFi: no connection name configured")
-            return False
+        """Enable WiFi (radio + connection) via NetworkManager.
 
+        This re-enables WiFi when failing over from LTE or when LTE is unavailable.
+        """
         try:
             self._log_network_snapshot("before_enable_wifi")
-            logger.info(f"Enabling WiFi connection: {self._wifi_conn_name}")
+            logger.info(f"Enabling WiFi (radio + connection: {self._wifi_conn_name})")
+
+            # Step 1: Enable WiFi radio first
             result = subprocess.run(
-                ["sudo", "nmcli", "connection", "up", self._wifi_conn_name],
-                capture_output=True, text=True, timeout=30
+                ["sudo", "nmcli", "radio", "wifi", "on"],
+                capture_output=True, text=True, timeout=10
             )
-            if result.returncode == 0:
-                logger.info(f"WiFi connection '{self._wifi_conn_name}' activated")
-                self._wifi_disabled_by_us = False
-                # Notify network monitor that WiFi is no longer intentionally disabled
-                if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
-                    self.wifi_monitor.set_wifi_intentionally_disabled(False)
-                self._log_network_snapshot("after_enable_wifi_success")
-                return True
-            else:
-                logger.error(f"Failed to enable WiFi: {result.stderr}")
-                self._log_network_snapshot("after_enable_wifi_failure")
+            if result.returncode != 0:
+                logger.error(f"Failed to enable WiFi radio: {result.stderr}")
                 return False
+
+            logger.info("WiFi radio enabled")
+            time.sleep(2)  # Wait for radio to initialize and scan for networks
+
+            # Step 2: Notify network monitor that WiFi is no longer intentionally disabled
+            # Do this before bringing up connection so monitor knows to track WiFi
+            self._wifi_disabled_by_us = False
+            if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
+                self.wifi_monitor.set_wifi_intentionally_disabled(False)
+
+            # Step 3: Bring up the WiFi connection if we have a connection name
+            if self._wifi_conn_name:
+                result = subprocess.run(
+                    ["sudo", "nmcli", "connection", "up", self._wifi_conn_name],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    logger.info(f"WiFi connection '{self._wifi_conn_name}' activated")
+                    self._log_network_snapshot("after_enable_wifi_success")
+                    return True
+                else:
+                    logger.warning(f"WiFi radio enabled but connection failed: {result.stderr}")
+                    # Radio is on, so WiFi might still auto-connect
+                    self._log_network_snapshot("after_enable_wifi_partial")
+                    return True  # Partial success - radio is on
+            else:
+                logger.info("WiFi radio enabled (no specific connection configured)")
+                self._log_network_snapshot("after_enable_wifi_radio_only")
+                return True
+
         except Exception as e:
             logger.error(f"Error enabling WiFi: {e}")
             return False
 
     def _disable_wifi(self) -> bool:
-        """Disable WiFi connection via NetworkManager"""
-        if not self._wifi_conn_name:
-            logger.warning("Cannot disable WiFi: no connection name configured")
-            return False
+        """Disable WiFi completely (connection + radio) via NetworkManager.
 
+        This ensures WiFi stays disabled and cannot auto-reconnect when LTE is primary.
+        Disabling the radio is more reliable than just disconnecting the connection.
+        """
         try:
             self._log_network_snapshot("before_disable_wifi")
-            logger.info(f"Disabling WiFi connection: {self._wifi_conn_name}")
+            logger.info(f"Disabling WiFi (connection: {self._wifi_conn_name}, radio: will be disabled)")
+
+            # Step 1: Bring down the WiFi connection if we have a connection name
+            if self._wifi_conn_name:
+                result = subprocess.run(
+                    ["sudo", "nmcli", "connection", "down", self._wifi_conn_name],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    logger.info(f"WiFi connection '{self._wifi_conn_name}' deactivated")
+                elif "not active" not in result.stderr.lower() and "not an active" not in result.stderr.lower():
+                    logger.warning(f"Failed to deactivate WiFi connection: {result.stderr}")
+                # Continue even if connection down failed - we'll disable the radio
+
+            # Step 2: Disable WiFi radio to prevent auto-reconnect
             result = subprocess.run(
-                ["sudo", "nmcli", "connection", "down", self._wifi_conn_name],
-                capture_output=True, text=True, timeout=30
+                ["sudo", "nmcli", "radio", "wifi", "off"],
+                capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
-                logger.info(f"WiFi connection '{self._wifi_conn_name}' deactivated")
+                logger.info("WiFi radio disabled - WiFi completely off")
                 self._wifi_disabled_by_us = True
                 # Notify network monitor that WiFi is intentionally disabled (LTE-first mode)
-                # This prevents network monitor from triggering WiFi provisioning
+                # This prevents network monitor from triggering WiFi provisioning or recovery
                 if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
                     self.wifi_monitor.set_wifi_intentionally_disabled(True)
                 self._log_network_snapshot("after_disable_wifi_success")
                 return True
             else:
-                # Connection might already be down
-                if "not active" in result.stderr.lower() or "not an active" in result.stderr.lower():
-                    logger.info("WiFi already disconnected")
-                    self._wifi_disabled_by_us = True
-                    # Also mark as intentionally disabled
-                    if self.wifi_monitor and hasattr(self.wifi_monitor, 'set_wifi_intentionally_disabled'):
-                        self.wifi_monitor.set_wifi_intentionally_disabled(True)
-                    self._log_network_snapshot("after_disable_wifi_already_down")
-                    return True
-                logger.error(f"Failed to disable WiFi: {result.stderr}")
+                logger.error(f"Failed to disable WiFi radio: {result.stderr}")
                 self._log_network_snapshot("after_disable_wifi_failure")
                 return False
+
         except Exception as e:
             logger.error(f"Error disabling WiFi: {e}")
             return False
@@ -329,6 +357,19 @@ class ConnectivityManager:
         except Exception:
             pass
         return False
+
+    def _is_wifi_radio_enabled(self) -> bool:
+        """Check if WiFi radio is enabled via NetworkManager"""
+        try:
+            result = subprocess.run(
+                ["nmcli", "radio", "wifi"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return result.stdout.strip().lower() == "enabled"
+        except Exception as e:
+            logger.warning(f"Failed to check WiFi radio status: {e}")
+        return True  # Assume enabled on error to be safe
 
     def _is_wifi_hotspot_active(self) -> bool:
         """Check if WiFi hotspot (hostapd) is currently running"""
@@ -752,11 +793,19 @@ class ConnectivityManager:
                             if self._primary_failure_start != 0:
                                 logger.info(f"Primary ({self._primary.value}) recovered")
                             self._primary_failure_start = 0
-                            # Ensure WiFi is disabled for power saving
+
+                            # CONTINUOUS ENFORCEMENT: Ensure WiFi stays completely disabled when LTE is active
+                            # This catches cases where WiFi might have been re-enabled by other processes
                             if self.config.disable_backup_when_primary_active and self._backup == ConnectionType.WIFI:
-                                if self._is_wifi_active():
-                                    logger.info("Power saving: disabling WiFi (LTE stable)")
+                                # Check if WiFi radio is somehow enabled - more aggressive than just checking connection
+                                if self._is_wifi_radio_enabled():
+                                    logger.warning("WiFi radio found enabled while LTE is active - disabling radio")
                                     self._disable_wifi()
+                                # Also ensure the intentionally_disabled flag stays set on NetworkMonitor
+                                if self.wifi_monitor and hasattr(self.wifi_monitor, 'is_wifi_intentionally_disabled'):
+                                    if not self.wifi_monitor.is_wifi_intentionally_disabled():
+                                        logger.warning("WiFi intentionally_disabled flag was reset - resetting to True")
+                                        self.wifi_monitor.set_wifi_intentionally_disabled(True)
 
                     elif self._active_connection == self._backup:
                         # On backup connection (WiFi failover)
