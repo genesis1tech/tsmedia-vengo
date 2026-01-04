@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Default configuration
 DEFAULT_BASE_URL = "tsrewards--test.expo.app"
-# PN532 is on ttyUSB2 (CH340), can be overridden via NFC_SERIAL_PORT env var
-DEFAULT_SERIAL_PORT = os.getenv("NFC_SERIAL_PORT", "/dev/ttyUSB2")
+# PN532 via CH340 adapter - use stable by-id path to avoid port reassignment on reboot
+DEFAULT_SERIAL_PORT = os.getenv("NFC_SERIAL_PORT", "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_EMULATION_TIMEOUT = 120  # seconds
 
