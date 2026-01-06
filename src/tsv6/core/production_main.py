@@ -1075,10 +1075,11 @@ class ProductionVideoPlayer:
                 self.error_recovery.report_success("servo_controller")
 
                 # Start NFC broadcasting now that door is closed
-                # Broadcasts URL with transaction_id for 10 seconds or until next scan
+                # Broadcasts URL with transaction_id and barcode for 10 seconds or until next scan
                 transaction_id = product_data.get('transactionId', '')
+                barcode = product_data.get('barcode', '')
                 if transaction_id and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
-                    self.video_player.start_nfc_for_transaction(transaction_id)
+                    self.video_player.start_nfc_for_transaction(transaction_id, barcode)
             elif status == "obstructed":
                 # Persistent obstruction - report to AWS
                 self._handle_obstruction_detected()
