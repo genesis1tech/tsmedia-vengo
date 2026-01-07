@@ -132,30 +132,34 @@ class NFCEmulator:
             logger.error(f"Unexpected error during PN532 wake-up: {e}")
             return False
 
-    def _build_url(self, scanid: str) -> str:
+    def _build_url(self, scanid: str, barcode: str = "") -> str:
         """
-        Build the full URL with scanid as UTM parameter.
+        Build the full URL with scanid and barcode as query parameters.
 
         Args:
             scanid: Unique scan/transaction ID
+            barcode: Barcode that was scanned
 
         Returns:
             Full URL (without protocol, as NDEF handles that)
         """
-        return f"{self.base_url}?utm={scanid}"
+        if barcode:
+            return f"{self.base_url}?scanid={scanid}&barcode={barcode}"
+        return f"{self.base_url}?scanid={scanid}"
 
-    def start_emulation(self, scanid: str) -> bool:
+    def start_emulation(self, scanid: str, barcode: str = "") -> bool:
         """
-        Start NFC tag emulation with the given scanid.
+        Start NFC tag emulation with the given scanid and barcode.
 
         This method starts emulation in a background thread. The tag will
-        broadcast a URL with the scanid as the UTM parameter until:
+        broadcast a URL with the scanid and barcode as UTM parameters until:
         - A phone reads the tag
         - The timeout expires
         - stop_emulation() is called
 
         Args:
             scanid: Unique scan/transaction ID to embed in the URL
+            barcode: Barcode that was scanned
 
         Returns:
             True if emulation started successfully, False otherwise
@@ -169,27 +173,28 @@ class NFCEmulator:
 
         self._emulation_thread = threading.Thread(
             target=self._emulation_worker,
-            args=(scanid,),
+            args=(scanid, barcode),
             name="NFCEmulator",
             daemon=True
         )
         self._emulation_thread.start()
 
-        logger.info(f"NFC emulation started with scanid: {scanid}")
+        logger.info(f"NFC emulation started with scanid: {scanid}, barcode: {barcode}")
         return True
 
-    def _emulation_worker(self, scanid: str):
+    def _emulation_worker(self, scanid: str, barcode: str = ""):
         """
         Background worker thread for NFC emulation.
 
         Args:
             scanid: Unique scan/transaction ID
+            barcode: Barcode that was scanned
         """
         ndef_file = None
 
         try:
             # Build URL and NDEF data
-            url = self._build_url(scanid)
+            url = self._build_url(scanid, barcode)
             ndef_data = self._build_ndef_uri(url)
 
             logger.info(f"Emulating NFC tag with URL: https://{url}")
@@ -281,7 +286,7 @@ class NFCEmulator:
         return self._current_scanid if self._running else None
 
 
-def emulate_once(scanid: str, base_url: str = DEFAULT_BASE_URL, timeout: int = 120) -> bool:
+def emulate_once(scanid: str, barcode: str = "", base_url: str = DEFAULT_BASE_URL, timeout: int = 120) -> bool:
     """
     Convenience function for one-shot NFC emulation.
 
@@ -289,7 +294,8 @@ def emulate_once(scanid: str, base_url: str = DEFAULT_BASE_URL, timeout: int = 1
 
     Args:
         scanid: Unique scan/transaction ID to embed in the URL
-        base_url: Base URL (default: tsrewards--test.expo.app)
+        barcode: Barcode that was scanned
+        base_url: Base URL (default: tsrewards--test.expo.app/hook)
         timeout: Emulation timeout in seconds
 
     Returns:
@@ -300,7 +306,7 @@ def emulate_once(scanid: str, base_url: str = DEFAULT_BASE_URL, timeout: int = 1
     emulator = NFCEmulator(base_url=base_url, timeout=timeout)
     emulator.on_tag_read = lambda sid: tag_read.set()
 
-    if emulator.start_emulation(scanid):
+    if emulator.start_emulation(scanid, barcode):
         # Wait for tag read or timeout
         tag_read.wait(timeout=timeout + 5)  # Extra 5s buffer
         emulator.stop_emulation()
@@ -317,7 +323,7 @@ if __name__ == '__main__':
 
     scanid = str(uuid.uuid4())
     print(f"Starting NFC emulation with scanid: {scanid}")
-    print(f"URL: https://tsrewards--test.expo.app/hook?utm={scanid}")
+    print(f"URL: https://tsrewards--test.expo.app/hook?scanid={scanid}")
     print()
     print("Tap your phone to open the URL!")
     print("(Press Ctrl+C to exit)")

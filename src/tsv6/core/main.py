@@ -1264,15 +1264,16 @@ class EnhancedVideoPlayer:
         # Start image download
         self.image_manager.download_image(image_url, image_ready_callback)
 
-    def start_nfc_for_transaction(self, transaction_id: str):
+    def start_nfc_for_transaction(self, transaction_id: str, barcode: str = ""):
         """
         Start NFC URL broadcasting for a transaction.
 
         Called by production_main.py after the servo door has closed.
-        Broadcasts URL with transaction_id as UTM for 10 seconds or until next scan.
+        Broadcasts URL with transaction_id and barcode for 10 seconds or until next scan.
 
         Args:
             transaction_id: The transaction ID to embed in the URL
+            barcode: The barcode that was scanned
         """
         if not transaction_id:
             print("⚠ No transaction ID provided for NFC")
@@ -1280,8 +1281,8 @@ class EnhancedVideoPlayer:
 
         if self.barcode_scanner and self.barcode_scanner.nfc_emulator:
             try:
-                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id)
-                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}...")
+                self.barcode_scanner.nfc_emulator.start_emulation(transaction_id, barcode)
+                print(f"📡 NFC broadcasting URL with scanid: {transaction_id[:8]}..., barcode: {barcode}")
             except Exception as e:
                 print(f"⚠ NFC emulation failed to start: {e}")
         else:
