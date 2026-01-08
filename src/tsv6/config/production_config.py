@@ -81,7 +81,7 @@ class PerformanceConfig:
 class SleepConfig:
     """Sleep mode configuration for power saving"""
     enabled: bool = True
-    sleep_time: str = "22:30"  # Time to enter sleep mode (24-hour format HH:MM) 10:30 PM
+    sleep_time: str = "00:00"  # Time to enter sleep mode (24-hour format HH:MM) Midnight
     wake_time: str = "06:00"  # Time to wake from sleep mode (24-hour format HH:MM) 6:00 AM
     tsv6_service_name: str = "tsv6.service"  # Service to manage during sleep
     publish_status_on_sleep: bool = True  # Publish a status message when entering sleep
