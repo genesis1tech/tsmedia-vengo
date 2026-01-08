@@ -164,44 +164,71 @@ class NFCEmulator:
         Returns:
             True if emulation started successfully, False otherwise
         """
+        url = self._build_url(scanid, barcode)
+        return self.start_emulation_with_url(f"https://{url}", scanid)
+
+    def start_emulation_with_url(self, full_url: str, identifier: str = "") -> bool:
+        """
+        Start NFC tag emulation with a complete URL.
+
+        This method starts emulation in a background thread. The tag will
+        broadcast the provided URL until:
+        - A phone reads the tag
+        - The timeout expires
+        - stop_emulation() is called
+
+        Args:
+            full_url: Complete URL to broadcast (e.g., "https://example.com/path?param=value")
+            identifier: Optional identifier for logging/callbacks (defaults to URL hash)
+
+        Returns:
+            True if emulation started successfully, False otherwise
+        """
         if self._running:
             logger.warning("Emulation already running, stopping first")
             self.stop_emulation()
 
-        self._current_scanid = scanid
+        # Use identifier or generate one from URL
+        self._current_scanid = identifier or full_url[-8:]
         self._running = True
 
         self._emulation_thread = threading.Thread(
-            target=self._emulation_worker,
-            args=(scanid, barcode),
+            target=self._emulation_worker_url,
+            args=(full_url,),
             name="NFCEmulator",
             daemon=True
         )
         self._emulation_thread.start()
 
-        logger.info(f"NFC emulation started with scanid: {scanid}, barcode: {barcode}")
+        logger.info(f"NFC emulation started with URL: {full_url}")
         return True
 
-    def _emulation_worker(self, scanid: str, barcode: str = ""):
+    def _emulation_worker_url(self, full_url: str):
         """
         Background worker thread for NFC emulation.
 
         Args:
-            scanid: Unique scan/transaction ID
-            barcode: Barcode that was scanned
+            full_url: Complete URL to broadcast (including https://)
         """
         ndef_file = None
+        identifier = self._current_scanid or "unknown"
 
         try:
-            # Build URL and NDEF data
-            url = self._build_url(scanid, barcode)
-            ndef_data = self._build_ndef_uri(url)
+            # Strip https:// prefix for NDEF encoding (it uses prefix code 0x04)
+            if full_url.startswith("https://"):
+                url_without_protocol = full_url[8:]  # Remove "https://"
+            elif full_url.startswith("http://"):
+                url_without_protocol = full_url[7:]  # Remove "http://"
+            else:
+                url_without_protocol = full_url
 
-            logger.info(f"Emulating NFC tag with URL: https://{url}")
+            ndef_data = self._build_ndef_uri(url_without_protocol)
+
+            logger.info(f"Emulating NFC tag with URL: {full_url}")
 
             # Notify status change
             if self.on_status_change:
-                self.on_status_change("started", scanid)
+                self.on_status_change("started", identifier)
 
             # Write NDEF data to temp file
             with tempfile.NamedTemporaryFile(mode='wb', suffix='.bin', delete=False) as f:
@@ -225,30 +252,30 @@ class NFCEmulator:
 
                 # Check if tag was read
                 if 'Target Released' in stderr or self._emulation_process.returncode == 0:
-                    logger.info(f"NFC tag read! scanid: {scanid}")
+                    logger.info(f"NFC tag read! identifier: {identifier}")
                     if self.on_tag_read:
-                        self.on_tag_read(scanid)
+                        self.on_tag_read(identifier)
                     if self.on_status_change:
-                        self.on_status_change("read", scanid)
+                        self.on_status_change("read", identifier)
                 else:
                     logger.debug(f"Emulation ended without read. stderr: {stderr}")
                     if self.on_status_change:
-                        self.on_status_change("timeout", scanid)
+                        self.on_status_change("timeout", identifier)
 
             except subprocess.TimeoutExpired:
                 logger.info("NFC emulation timeout - no phone detected")
                 self._emulation_process.kill()
                 if self.on_status_change:
-                    self.on_status_change("timeout", scanid)
+                    self.on_status_change("timeout", identifier)
 
         except FileNotFoundError:
             logger.error("nfc-emulate-forum-tag4 not found. Install libnfc-bin package.")
             if self.on_status_change:
-                self.on_status_change("error", scanid)
+                self.on_status_change("error", identifier)
         except Exception as e:
             logger.error(f"NFC emulation error: {e}")
             if self.on_status_change:
-                self.on_status_change("error", scanid)
+                self.on_status_change("error", identifier)
         finally:
             # Cleanup temp file
             if ndef_file and os.path.exists(ndef_file):

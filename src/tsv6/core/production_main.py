@@ -1074,12 +1074,16 @@ class ProductionVideoPlayer:
                 print("Door sequence completed successfully")
                 self.error_recovery.report_success("servo_controller")
 
-                # Start NFC broadcasting now that door is closed
-                # Broadcasts URL with transaction_id and barcode for 10 seconds or until next scan
+                # Extract NFC URL from AWS response (provided by Lambda)
+                nfc_url = product_data.get('nfcUrl', '')
                 transaction_id = product_data.get('transactionId', '')
-                barcode = product_data.get('barcode', '')
-                if transaction_id and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
-                    self.video_player.start_nfc_for_transaction(transaction_id, barcode)
+
+                # Start NFC broadcasting with URL from AWS
+                if nfc_url and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
+                    self.video_player.start_nfc_for_transaction(nfc_url, transaction_id)
+                elif not nfc_url:
+                    self.logger.warning("No nfcUrl in AWS response - skipping NFC broadcast")
+                    print("⚠ No NFC URL provided by AWS - skipping NFC broadcast")
             elif status == "obstructed":
                 # Persistent obstruction - report to AWS
                 self._handle_obstruction_detected()
