@@ -1891,8 +1891,9 @@ class EnhancedVideoPlayer:
                     self.image_overlay.focus_force()
                     self.root.update_idletasks()
 
-                    # Schedule hide after 4 seconds
-                    self.image_display_timer = self.root.after(4000, self._hide_image_overlay)
+                    # Schedule hide after 10 seconds (matches NFC broadcast duration)
+                    # If user scans another item, the new scan will trigger a new overlay
+                    self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
 
                     qr_status = "with QR code" if qr_photo else "without QR code"
                     print(f"✅ Displaying full-screen image: {product_name} ({qr_status})")
