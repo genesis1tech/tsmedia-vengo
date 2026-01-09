@@ -1706,49 +1706,39 @@ class EnhancedVideoPlayer:
                 max_width = int(screen_width * 0.5)
                 max_height = int(screen_height * 0.5)
 
-            # Temporarily disable garbage collection to prevent PhotoImage from being freed
-            # before Tkinter can render it (fixes "pyimage doesn't exist" error)
-            import gc
-            gc_was_enabled = gc.isenabled()
-            gc.disable()
+            # Load product image using image manager (same pattern as working tag version)
+            photo = self.image_manager.load_image_for_display(
+                image_path,
+                (max_width, max_height)
+            )
 
-            try:
-                photo = self.image_manager.load_image_for_display(
-                    image_path,
-                    (max_width, max_height)
-                )
+            if photo:
+                # Create FULL-SCREEN overlay frame
+                self.image_overlay = tk.Toplevel(self.root)
+                self.image_overlay.configure(background=config.display.product_image_background_color)
+                self.image_overlay.attributes('-topmost', True)
+                self.image_overlay.overrideredirect(True)
+                self.image_overlay.configure(cursor="none")
 
-                if photo:
-                    # CRITICAL: Store reference immediately to prevent garbage collection
-                    self._current_photo = photo
+                # Position to cover ENTIRE screen (including button area)
+                self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
 
-                    # Create FULL-SCREEN overlay frame
-                    self.image_overlay = tk.Toplevel(self.root)
-                    self.image_overlay.configure(background=config.display.product_image_background_color)
-                    self.image_overlay.attributes('-topmost', True)
-                    self.image_overlay.overrideredirect(True)
-                    self.image_overlay.configure(cursor="none")
+                # Create main container frame
+                main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
+                main_frame.pack(expand=True, fill='both')
 
-                    # Position to cover ENTIRE screen (including button area)
-                    self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
-
-                    # Create main container frame
-                    main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
-                    main_frame.pack(expand=True, fill='both')
-
-                    # Generate QR code if NFC URL is provided
-                    qr_photo = None
-                    if nfc_url and QR_GENERATOR_AVAILABLE:
-                        try:
-                            # Generate QR code for the NFC URL
-                            qr_size = int(min(screen_width * 0.3, screen_height * 0.5))
-                            qr_image = generate_qr_code(nfc_url, size=qr_size)
-                            if qr_image:
-                                qr_photo = ImageTk.PhotoImage(qr_image)
-                                self._current_qr_photo = qr_photo  # Keep reference
-                                print(f"✅ QR code generated for NFC URL")
-                        except Exception as qr_error:
-                            print(f"⚠ Could not generate QR code: {qr_error}")
+                # Generate QR code if NFC URL is provided
+                qr_photo = None
+                if nfc_url and QR_GENERATOR_AVAILABLE:
+                    try:
+                        # Generate QR code for the NFC URL
+                        qr_size = int(min(screen_width * 0.3, screen_height * 0.5))
+                        qr_image = generate_qr_code(nfc_url, size=qr_size)
+                        if qr_image:
+                            qr_photo = ImageTk.PhotoImage(qr_image)
+                            print(f"✅ QR code generated for NFC URL")
+                    except Exception as qr_error:
+                        print(f"⚠ Could not generate QR code: {qr_error}")
 
                     if qr_photo:
                         # Two-column layout: Product info on left, QR code on right
@@ -1897,13 +1887,9 @@ class EnhancedVideoPlayer:
 
                     qr_status = "with QR code" if qr_photo else "without QR code"
                     print(f"✅ Displaying full-screen image: {product_name} ({qr_status})")
-                else:
-                    print("❌ Failed to load image for display")
-                    self._hide_image_overlay()
-            finally:
-                # Re-enable garbage collection
-                if gc_was_enabled:
-                    gc.enable()
+            else:
+                print("❌ Failed to load image for display")
+                self._hide_image_overlay()
 
         except Exception as e:
             print(f"❌ Error showing image overlay: {e}")
@@ -1912,11 +1898,7 @@ class EnhancedVideoPlayer:
     def _hide_image_overlay(self):
         """Hide image overlay and restart video playback"""
         try:
-            # Explicitly clean up PhotoImage references to prevent memory leak
-            if hasattr(self, '_current_photo'):
-                self._current_photo = None
-            if hasattr(self, '_current_qr_photo'):
-                self._current_qr_photo = None
+            # Explicitly clean up PhotoImage reference to prevent memory leak
             if self.image_overlay and hasattr(self.image_overlay, 'photo'):
                 self.image_overlay.photo = None
             if self.image_overlay and hasattr(self.image_overlay, 'qr_photo'):
@@ -1930,10 +1912,6 @@ class EnhancedVideoPlayer:
             if self.image_display_timer:
                 self.root.after_cancel(self.image_display_timer)
                 self.image_display_timer = None
-
-            # Force garbage collection to free PhotoImage memory (Issue #85)
-            import gc
-            gc.collect()
 
             # Restart current video from beginning for clean experience
             if self.video_files:
@@ -1977,10 +1955,6 @@ class EnhancedVideoPlayer:
             if self.processing_display_timer:
                 self.root.after_cancel(self.processing_display_timer)
                 self.processing_display_timer = None
-
-            # Force garbage collection to free PhotoImage memory
-            import gc
-            gc.collect()
 
             # Only resume video if explicitly requested (e.g., timeout case)
             # When transitioning to product/no-match overlay, leave video paused
