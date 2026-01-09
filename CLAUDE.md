@@ -284,6 +284,27 @@ The `OptimizedBarcodeScanner` class in `main.py` **must** include NFC emulator s
 4. NFC stop call before adding new barcode to queue
 5. `start_nfc_for_transaction` method in `EnhancedVideoPlayer` class
 
+### Critical: Product Image Overlay (PhotoImage Fix)
+The product image overlay in `main.py` requires proper Tkinter PhotoImage handling to prevent "pyimage doesn't exist" errors:
+
+**In `image_manager.py` (`load_image_for_display` method):**
+- Accept `master` parameter: `def load_image_for_display(self, image_path, target_size, maintain_aspect_ratio=True, master=None)`
+- Pass master to PhotoImage: `photo = ImageTk.PhotoImage(img, master=master)`
+- Keep PIL image reference: `photo._pil_image = img`
+- Do NOT use context manager (`with Image.open()`) - it closes the image prematurely
+
+**In `main.py` (`_show_image_overlay` method):**
+- Pass `master=self.root` to all `load_image_for_display()` calls
+- Keep reference on label: `image_label.image = photo`
+- Keep reference on overlay: `self.image_overlay.photo = photo`
+- Do NOT call `gc.collect()` in overlay hide methods
+
+**If "pyimage1 doesn't exist" error occurs:**
+1. Verify `master=self.root` is passed to `load_image_for_display()`
+2. Verify `image_label.image = photo` is set after creating the label
+3. Remove any `gc.collect()` calls from `_hide_image_overlay` and `_hide_processing_overlay`
+4. Ensure `image_manager.py` stores `photo._pil_image = img`
+
 ### Known Issues
 - **Issue #39:** Memory pressure on Pi 4 - Addressed via `MemoryOptimizer`
 - **Issue #48:** Python dependencies in setup script
