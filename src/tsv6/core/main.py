@@ -1588,42 +1588,17 @@ class EnhancedVideoPlayer:
                 image_label.image = photo
                 image_label.pack(pady=10)
 
-                # Add product name with larger font
+                # Add product name
                 name_label = tk.Label(
                     content_frame,
                     text=product_name,
                     fg='black',
                     background=config.display.product_image_background_color,
-                    font=('Arial', 24, 'bold'),
+                    font=('Arial', 18, 'bold'),
                     wraplength=int(screen_width * 0.4),
                     justify='center'
                 )
                 name_label.pack(pady=10)
-
-                # Add product brand if available
-                if product_brand:
-                    brand_label = tk.Label(
-                        content_frame,
-                        text=f"Brand: {product_brand}",
-                        fg='gray',
-                        background=config.display.product_image_background_color,
-                        font=('Arial', 18, 'normal'),
-                        wraplength=int(screen_width * 0.4),
-                        justify='center'
-                    )
-                    brand_label.pack(pady=5)
-
-                # Add barcode if available
-                if barcode:
-                    barcode_label = tk.Label(
-                        content_frame,
-                        text=f"Barcode: {barcode}",
-                        fg='gray',
-                        background=config.display.product_image_background_color,
-                        font=('Arial', 16, 'normal'),
-                        justify='center'
-                    )
-                    barcode_label.pack(pady=5)
 
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
@@ -1631,8 +1606,8 @@ class EnhancedVideoPlayer:
                 # Right side: QR code for NFC URL (if available)
                 if nfc_url and QR_GENERATOR_AVAILABLE:
                     try:
-                        # Generate QR code image
-                        qr_size = 150  # Size of QR code
+                        # Generate large black QR code image
+                        qr_size = 350  # Extra large for easy scanning
                         qr_image = generate_qr_code(nfc_url, size=qr_size)
 
                         if qr_image:
@@ -1641,7 +1616,7 @@ class EnhancedVideoPlayer:
 
                             # Create QR code frame on the right
                             qr_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
-                            qr_frame.pack(side='right', padx=20)
+                            qr_frame.pack(side='right', padx=30)
 
                             # Add QR code image
                             qr_label = tk.Label(
@@ -1652,16 +1627,16 @@ class EnhancedVideoPlayer:
                             qr_label.image = qr_photo  # Keep reference
                             qr_label.pack(pady=10)
 
-                            # Add "Scan for rewards" text
+                            # Add "Scan For Rewards" text with large black font
                             scan_label = tk.Label(
                                 qr_frame,
-                                text="Scan for rewards",
+                                text="Scan For Rewards",
                                 fg='black',
                                 background=config.display.product_image_background_color,
-                                font=('Arial', 14, 'bold'),
+                                font=('Arial', 24, 'bold'),
                                 justify='center'
                             )
-                            scan_label.pack(pady=5)
+                            scan_label.pack(pady=10)
 
                             # Keep reference to QR photo
                             self.image_overlay.qr_photo = qr_photo

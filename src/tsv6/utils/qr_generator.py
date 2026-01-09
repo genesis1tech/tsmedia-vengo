@@ -188,10 +188,17 @@ class QRDisplayManager:
         return self.quiet_zone_margin
 
 # Convenience function for backwards compatibility
-def generate_qr_code(data, size=200, path=None):
+def generate_qr_code(data, size=200, path=None, fill_color="black", back_color="white"):
     """
     Simple function to generate a QR code (backwards compatibility)
     Creates a standard QR code without background image
+
+    Args:
+        data: Text/URL to encode in QR code
+        size: Size of the QR code in pixels
+        path: Optional path to save the image
+        fill_color: Color of the QR code modules (default black)
+        back_color: Background color (default white)
     """
     try:
         qr = qrcode.QRCode(
@@ -202,14 +209,14 @@ def generate_qr_code(data, size=200, path=None):
         )
         qr.add_data(data)
         qr.make(fit=True)
-        
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+        img = qr.make_image(fill_color=fill_color, back_color=back_color).convert("RGB")
         img = img.resize((size, size), Image.LANCZOS)
-        
+
         if path:
             img.save(path)
             print(f"QR code saved to: {path}")
-        
+
         return img
     except Exception as e:
         print(f"Error generating QR code: {e}")
