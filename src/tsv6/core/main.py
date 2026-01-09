@@ -17,7 +17,6 @@ import json
 import uuid
 import queue
 from concurrent.futures import ThreadPoolExecutor
-import traceback
 
 # Import PIL for image handling
 try:
@@ -82,16 +81,7 @@ except ImportError as e:
     MEMORY_OPTIMIZER_AVAILABLE = False
     print(f"⚠ Memory Optimizer not available: {e}")
 
-# Import NFC emulator for broadcasting URL with scanid
-try:
-    from tsv6.hardware.nfc import NFCEmulator
-    NFC_EMULATOR_AVAILABLE = True
-    print("✓ NFC Emulator imported successfully")
-except ImportError as e:
-    NFC_EMULATOR_AVAILABLE = False
-    print(f"⚠ NFC Emulator not available: {e}")
-
-# Import QR code generator for NFC URL display
+# Import QR generator for NFC URL display
 try:
     from tsv6.utils.qr_generator import generate_qr_code
     QR_GENERATOR_AVAILABLE = True
@@ -144,38 +134,7 @@ class OptimizedBarcodeScanner:
             self.memory_optimizer = get_global_memory_optimizer()
         else:
             self.memory_optimizer = None
-
-        # NFC emulator for broadcasting URL with scanid after successful scan
-        if NFC_EMULATOR_AVAILABLE:
-            try:
-                self.nfc_emulator = NFCEmulator(
-                    base_url=os.getenv('NFC_BASE_URL', 'tsrewards--test.expo.app'),
-                    timeout=10  # 10 second emulation timeout
-                )
-                self.nfc_emulator.on_tag_read = self._on_nfc_tag_read
-                self.nfc_emulator.on_status_change = self._on_nfc_status_change
-                print("✓ NFC Emulator initialized (10s broadcast timeout)")
-            except Exception as e:
-                print(f"Failed to initialize NFC Emulator: {e}")
-                self.nfc_emulator = None
-        else:
-            self.nfc_emulator = None
-
-    def _on_nfc_tag_read(self, scanid: str):
-        """Callback when NFC tag is read by a phone"""
-        print(f"📱 NFC tag read by phone! scanid: {scanid[:8]}...")
-
-    def _on_nfc_status_change(self, status: str, scanid: str):
-        """Callback for NFC emulation status changes"""
-        if status == "started":
-            print(f"📡 NFC broadcasting: https://tsrewards--test.expo.app?utm={scanid[:8]}...")
-        elif status == "read":
-            print(f"✅ NFC tag tapped! URL opened on phone")
-        elif status == "timeout":
-            print(f"⏱️ NFC broadcast timeout (10s) - no tap detected")
-        elif status == "error":
-            print(f"❌ NFC emulation error")
-
+    
     def generate_uuid(self):
         """Generate a transaction ID"""
         return str(uuid.uuid4())
@@ -254,12 +213,7 @@ class OptimizedBarcodeScanner:
                     barcode_data = barcode_data.strip()
                     transaction_id = self.generate_uuid()
                     timestamp = time.time()
-
-                    # Stop any running NFC emulation (new scan supersedes previous)
-                    if self.nfc_emulator and self.nfc_emulator.is_running():
-                        print("🛑 Stopping previous NFC broadcast (new scan)")
-                        self.nfc_emulator.stop_emulation()
-
+                    
                     # Check if this is a QR code
                     is_qr = False
                     if self.barcode_reader and hasattr(self.barcode_reader, 'is_qr_code'):
@@ -330,7 +284,6 @@ class OptimizedBarcodeScanner:
                     total_latency_ms = int((time.time() - item['timestamp']) * 1000)
                     print(f"✅ Transaction {item['transaction_id'][:8]}... sent")
                     print(f"   Total latency: {total_latency_ms}ms (queue: {latency_ms}ms, publish: {publish_time_ms}ms)")
-                    # NFC emulation is started later when openDoor response is received
                 else:
                     print(f"❌ Failed to send transaction {item['transaction_id'][:8]}...")
                 
@@ -368,23 +321,19 @@ class OptimizedBarcodeScanner:
         """Stop the barcode scanning"""
         print("🛑 Stopping barcode scanner...")
         self.running = False
-
-        # Stop NFC emulation if running
-        if self.nfc_emulator:
-            self.nfc_emulator.stop_emulation()
-
+        
         # Wait for threads to finish
         if self.scan_thread:
             self.scan_thread.join(timeout=2)
         if self.publish_thread:
             self.publish_thread.join(timeout=2)
-
+        
         # Shutdown callback executor
         self.callback_executor.shutdown(wait=False)
-
+        
         # Perform memory cleanup (Issue #39)
         self.cleanup_memory()
-
+        
         print("🛑 Barcode scanning stopped")
     
     def cleanup_memory(self):
@@ -595,22 +544,9 @@ class EnhancedVideoPlayer:
     def start_status_publishing(self):
         """Start AWS status publishing thread"""
         # Diagnostic logging to identify issues
-        debug_enabled = os.getenv("TSV6_DEBUG_AWS_PUBLISH", "0") == "1"
-        if not hasattr(self, "_status_publisher_instance_id"):
-            self._status_publisher_instance_id = str(uuid.uuid4())
-
         print("🔍 start_status_publishing() called")
-        print(f"   pid: {os.getpid()}")
-        print(f"   player_instance_id: {self._status_publisher_instance_id}")
         print(f"   aws_manager: {self.aws_manager is not None}")
         print(f"   status_publish_active: {self.status_publish_active}")
-        if debug_enabled:
-            try:
-                stack = traceback.extract_stack(limit=8)
-                caller = stack[-2] if len(stack) >= 2 else stack[-1]
-                print(f"   caller: {caller.filename}:{caller.lineno} in {caller.name}")
-            except Exception:
-                pass
         
         if not self.aws_manager:
             print("❌ Cannot start status publishing: aws_manager is None")
@@ -622,36 +558,14 @@ class EnhancedVideoPlayer:
         
         print("✅ Starting status publisher thread...")
         self.status_publish_active = True
-
-        # Publish initial status immediately before starting the interval loop
-        print("📡 Publishing initial device status...")
-        try:
-            initial_success = self.aws_manager.publish_status()
-            if initial_success:
-                print("✅ Initial device status published to AWS")
-            else:
-                print("⚠️  Failed to publish initial device status")
-        except Exception as e:
-            print(f"❌ Initial status publish error: {type(e).__name__}: {e}")
-
+        
         def publish_status():
-            """Background task to publish status every 15 minutes"""
-            print("📡 Starting AWS status publishing interval (15 min)...")
-            print(f"   pid: {os.getpid()}")
-            print(f"   player_instance_id: {self._status_publisher_instance_id}")
+            """Background task to publish status every 60 seconds"""
+            print("📡 Starting AWS status publishing...")
             consecutive_failures = 0
             publish_count = 0
-
+            
             while self.status_publish_active and self.aws_manager:
-                # Wait 15 minutes before next publish (initial status already sent)
-                for _ in range(9000):  # 900 seconds (15 min) in 0.1s increments
-                    if not self.status_publish_active:
-                        break
-                    time.sleep(0.1)
-
-                if not self.status_publish_active:
-                    break
-
                 try:
                     # Publish device status
                     success = self.aws_manager.publish_status()
@@ -662,17 +576,23 @@ class EnhancedVideoPlayer:
                     else:
                         consecutive_failures += 1
                         print(f"⚠️  Failed to publish device status (attempt {consecutive_failures})")
-
+                        
                     if consecutive_failures >= 5:
                         print(f"❌ Status publishing failed {consecutive_failures} consecutive times")
-
+                        
                 except Exception as e:
                     consecutive_failures += 1
                     print(f"❌ Status publish error (attempt {consecutive_failures}): {type(e).__name__}: {e}")
                     import traceback
                     traceback.print_exc()
-
-            print(f"📡 AWS status publishing stopped (published {publish_count} interval updates)")
+                
+                # Wait 60 seconds before next publish
+                for _ in range(600):  # 60 seconds in 0.1s increments
+                    if not self.status_publish_active:
+                        break
+                    time.sleep(0.1)
+            
+            print(f"📡 AWS status publishing stopped (published {publish_count} times)")
         
         # Start status publishing thread
         status_thread = threading.Thread(target=publish_status, name="StatusPublisher")
@@ -1247,9 +1167,6 @@ class EnhancedVideoPlayer:
         product_name = product_data.get('productName', 'Product')
         product_brand = product_data.get('productBrand', '')
         barcode = product_data.get('barcode', '')
-        # Note: AWS response uses 'transactionId' (lowercase 'd')
-        transaction_id = product_data.get('transactionId', '')
-        # Get NFC URL for QR code display
         nfc_url = product_data.get('nfcUrl', '')
 
         if not image_url:
@@ -1261,47 +1178,19 @@ class EnhancedVideoPlayer:
 
         print(f"🖼️ Displaying product image: {product_name}")
         if nfc_url:
-            print(f"🔗 NFC URL for QR code: {nfc_url[:50]}...")
-
-        # NOTE: NFC emulation is now started by production_main.py after servo closes
-        # This ensures NFC broadcasts only after the door has closed
+            print(f"📱 NFC URL available for QR code: {nfc_url[:50]}...")
 
         def image_ready_callback(image_path, success):
             """Called when image download is complete"""
             if success and image_path and self.root:
-                # Schedule image display on main thread with NFC URL for QR code
-                self.root.after(0, self._show_image_overlay, image_path, product_name, product_brand, barcode, nfc_url)
+                # Schedule image display on main thread
+                self.root.after(0, lambda: self._show_image_overlay(image_path, product_name, product_brand, barcode, nfc_url))
             else:
                 print("❌ Failed to download product image")
 
         # Start image download
         self.image_manager.download_image(image_url, image_ready_callback)
-
-    def start_nfc_for_transaction(self, nfc_url: str, transaction_id: str = ""):
-        """
-        Start NFC URL broadcasting for a transaction.
-
-        Called by production_main.py after the servo door has closed.
-        Broadcasts the provided URL for 10 seconds or until next scan.
-
-        Args:
-            nfc_url: The complete URL to broadcast via NFC
-            transaction_id: Optional transaction ID for logging
-        """
-        if not nfc_url:
-            print("⚠ No NFC URL provided")
-            return
-
-        if self.barcode_scanner and self.barcode_scanner.nfc_emulator:
-            try:
-                self.barcode_scanner.nfc_emulator.start_emulation_with_url(nfc_url, transaction_id)
-                display_id = transaction_id[:8] if transaction_id else "N/A"
-                print(f"📡 NFC broadcasting URL: {nfc_url[:50]}... (txn: {display_id})")
-            except Exception as e:
-                print(f"⚠ NFC emulation failed to start: {e}")
-        else:
-            print("⚠ NFC emulator not available")
-
+    
     def display_no_match_image(self):
         """
         Display no match image when noMatch message is received from AWS
@@ -1378,7 +1267,7 @@ class EnhancedVideoPlayer:
         # This prevents overwriting video_was_playing when transitioning between overlays
         if self.is_playing:
             self.video_was_playing = self.is_playing
-
+            
             # Use MediaListPlayer if available
             if config.video.use_medialist_player and self.list_player:
                 try:
@@ -1393,28 +1282,12 @@ class EnhancedVideoPlayer:
                         self.player.pause()
                     except Exception:
                         pass
-
+            
             self.is_playing = False
         # If already paused, don't overwrite video_was_playing state
 
-        # CRITICAL: Detach VLC from the canvas window so overlays appear on top
-        # VLC on Linux draws directly to X11 window which can bypass Tkinter layering
-        if self.player and sys.platform.startswith('linux'):
-            try:
-                self.player.set_xwindow(0)  # Detach from canvas
-                self.video_surface_bound = False
-                print("📺 VLC video surface detached for overlay")
-            except Exception as e:
-                print(f"⚠ Could not detach VLC surface: {e}")
-
     def _resume_video_after_overlay(self, restart=False):
         """Resume playback after overlay without recreating decoders"""
-        # CRITICAL: Reattach VLC to canvas window before resuming playback
-        # This restores video output that was detached in _pause_video_for_overlay
-        if not self.video_surface_bound:
-            self._ensure_video_surface()
-            print("📺 VLC video surface reattached")
-
         if self.video_was_playing:
             # Use MediaListPlayer if available
             if config.video.use_medialist_player and self.list_player:
@@ -1435,9 +1308,9 @@ class EnhancedVideoPlayer:
                     self.player.set_pause(False)
                 except Exception:
                     self.player.play()
-
+            
             self.is_playing = True
-
+            
             # Schedule video status check with optimized interval
             check_interval = config.video.video_status_check_interval_ms if hasattr(config, 'video') else 2000
             self.root.after(check_interval, self.check_video_status)
@@ -1467,13 +1340,11 @@ class EnhancedVideoPlayer:
 
             photo = self.image_manager.load_image_for_display(
                 Path(image_path),
-                (max_width, max_height)
+                (max_width, max_height),
+                master=self.root
             )
 
             if photo:
-                # CRITICAL: Store reference immediately to prevent garbage collection
-                self._current_photo = photo
-
                 # Create FULL-SCREEN overlay frame
                 self.image_overlay = tk.Toplevel(self.root)
                 self.image_overlay.configure(background=config.display.product_image_background_color)
@@ -1498,16 +1369,10 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
-                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
-
-                # Force overlay to be on top of VLC video
-                self.image_overlay.lift()
-                self.image_overlay.focus_force()
-                self.root.update_idletasks()
 
                 # Schedule hide after 5 seconds (as requested)
                 self.image_display_timer = self.root.after(5000, self._hide_image_overlay)
@@ -1544,13 +1409,11 @@ class EnhancedVideoPlayer:
 
             photo = self.image_manager.load_image_for_display(
                 Path(image_path),
-                (max_width, max_height)
+                (max_width, max_height),
+                master=self.root
             )
 
             if photo:
-                # CRITICAL: Store reference immediately to prevent garbage collection
-                self._current_photo = photo
-
                 # Create FULL-SCREEN overlay frame
                 self.image_overlay = tk.Toplevel(self.root)
                 self.image_overlay.configure(background=config.display.product_image_background_color)
@@ -1575,16 +1438,10 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
-                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
                 self.image_overlay.photo = photo
-
-                # Force overlay to be on top of VLC video
-                self.image_overlay.lift()
-                self.image_overlay.focus_force()
-                self.root.update_idletasks()
 
                 # Schedule hide after 5 seconds (as requested)
                 self.image_display_timer = self.root.after(5000, self._hide_image_overlay)
@@ -1620,13 +1477,11 @@ class EnhancedVideoPlayer:
 
             photo = self.image_manager.load_image_for_display(
                 Path(image_path),
-                (max_width, max_height)
+                (max_width, max_height),
+                master=self.root
             )
 
             if photo:
-                # CRITICAL: Store reference immediately to prevent garbage collection
-                self._current_processing_photo = photo
-
                 # Create FULL-SCREEN overlay frame
                 self.processing_overlay = tk.Toplevel(self.root)
                 self.processing_overlay.configure(background=config.display.product_image_background_color)
@@ -1651,16 +1506,10 @@ class EnhancedVideoPlayer:
                     image=photo,
                     background=config.display.product_image_background_color
                 )
-                image_label.image = photo  # Keep reference to prevent garbage collection
                 image_label.pack()
 
                 # Keep reference to photo to prevent garbage collection
                 self.processing_overlay.photo = photo
-
-                # Force overlay to be on top of VLC video
-                self.processing_overlay.lift()
-                self.processing_overlay.focus_force()
-                self.root.update_idletasks()
 
                 # Schedule auto-hide after 15 seconds as a safety timeout
                 # (in case AWS response never arrives)
@@ -1680,7 +1529,7 @@ class EnhancedVideoPlayer:
             self._hide_processing_overlay(resume_video=True)
     
     def _show_image_overlay(self, image_path, product_name, product_brand="", barcode="", nfc_url=""):
-        """Show full-screen image overlay with optional QR code (thread-safe)"""
+        """Show full-screen image overlay with optional NFC QR code (thread-safe)"""
         try:
             if self.is_showing_image:
                 return  # Already showing an image
@@ -1696,20 +1545,14 @@ class EnhancedVideoPlayer:
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
 
-            # Calculate image size - smaller if QR code will be shown
-            if nfc_url and QR_GENERATOR_AVAILABLE:
-                # With QR code: product image on left (40% width), QR on right
-                max_width = int(screen_width * 0.35)
-                max_height = int(screen_height * 0.45)
-            else:
-                # Without QR code: centered product image (50% of screen)
-                max_width = int(screen_width * 0.5)
-                max_height = int(screen_height * 0.5)
+            # Calculate image size (max 50% of screen for better text visibility)
+            max_width = int(screen_width * 0.5)
+            max_height = int(screen_height * 0.5)
 
-            # Load product image using image manager (same pattern as working tag version)
             photo = self.image_manager.load_image_for_display(
                 image_path,
-                (max_width, max_height)
+                (max_width, max_height),
+                master=self.root
             )
 
             if photo:
@@ -1727,170 +1570,88 @@ class EnhancedVideoPlayer:
                 main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
                 main_frame.pack(expand=True, fill='both')
 
-                # Generate QR code if NFC URL is provided
-                qr_photo = None
+                # Create horizontal layout frame for product info and QR code
+                horizontal_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
+                horizontal_frame.place(relx=0.5, rely=0.5, anchor='center')
+
+                # Left side: Product info
+                content_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
+                content_frame.pack(side='left', padx=20)
+
+                # Add product image
+                image_label = tk.Label(
+                    content_frame,
+                    image=photo,
+                    background=config.display.product_image_background_color
+                )
+                # CRITICAL: Keep reference on label to prevent garbage collection
+                image_label.image = photo
+                image_label.pack(pady=10)
+
+                # Add product name
+                name_label = tk.Label(
+                    content_frame,
+                    text=product_name,
+                    fg='black',
+                    background=config.display.product_image_background_color,
+                    font=('Arial', 18, 'bold'),
+                    wraplength=int(screen_width * 0.4),
+                    justify='center'
+                )
+                name_label.pack(pady=10)
+
+                # Keep reference to photo to prevent garbage collection
+                self.image_overlay.photo = photo
+
+                # Right side: QR code for NFC URL (if available)
                 if nfc_url and QR_GENERATOR_AVAILABLE:
                     try:
-                        # Generate QR code for the NFC URL
-                        qr_size = int(min(screen_width * 0.3, screen_height * 0.5))
+                        # Generate large black QR code image
+                        qr_size = 350  # Extra large for easy scanning
                         qr_image = generate_qr_code(nfc_url, size=qr_size)
+
                         if qr_image:
-                            qr_photo = ImageTk.PhotoImage(qr_image)
-                            print(f"✅ QR code generated for NFC URL")
+                            # Convert PIL image to PhotoImage
+                            qr_photo = ImageTk.PhotoImage(qr_image, master=self.root)
+
+                            # Create QR code frame on the right
+                            qr_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
+                            qr_frame.pack(side='right', padx=30)
+
+                            # Add QR code image
+                            qr_label = tk.Label(
+                                qr_frame,
+                                image=qr_photo,
+                                background=config.display.product_image_background_color
+                            )
+                            qr_label.image = qr_photo  # Keep reference
+                            qr_label.pack(pady=10)
+
+                            # Add "Scan For Rewards" text with large black font
+                            scan_label = tk.Label(
+                                qr_frame,
+                                text="Scan For Rewards",
+                                fg='black',
+                                background=config.display.product_image_background_color,
+                                font=('Arial', 24, 'bold'),
+                                justify='center'
+                            )
+                            scan_label.pack(pady=10)
+
+                            # Keep reference to QR photo
+                            self.image_overlay.qr_photo = qr_photo
+                            print("✅ QR code generated for NFC URL")
                     except Exception as qr_error:
-                        print(f"⚠ Could not generate QR code: {qr_error}")
+                        print(f"⚠ Failed to generate QR code: {qr_error}")
 
-                    if qr_photo:
-                        # Two-column layout: Product info on left, QR code on right
-                        # Create horizontal container
-                        content_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
-                        content_frame.place(relx=0.5, rely=0.5, anchor='center')
+                # Schedule hide after 10 seconds
+                self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
 
-                        # Left side: Product image and info
-                        left_frame = tk.Frame(content_frame, background=config.display.product_image_background_color)
-                        left_frame.pack(side='left', padx=20)
-
-                        # Add product image
-                        image_label = tk.Label(
-                            left_frame,
-                            image=photo,
-                            background=config.display.product_image_background_color
-                        )
-                        image_label.image = photo
-                        image_label.pack(pady=5)
-
-                        # Add product name
-                        name_label = tk.Label(
-                            left_frame,
-                            text=product_name,
-                            fg='black',
-                            background=config.display.product_image_background_color,
-                            font=('Arial', 20, 'bold'),
-                            wraplength=int(screen_width * 0.4),
-                            justify='center'
-                        )
-                        name_label.pack(pady=5)
-
-                        # Add product brand if available
-                        if product_brand:
-                            brand_label = tk.Label(
-                                left_frame,
-                                text=f"Brand: {product_brand}",
-                                fg='gray',
-                                background=config.display.product_image_background_color,
-                                font=('Arial', 14, 'normal'),
-                                wraplength=int(screen_width * 0.4),
-                                justify='center'
-                            )
-                            brand_label.pack(pady=2)
-
-                        # Right side: QR code
-                        right_frame = tk.Frame(content_frame, background=config.display.product_image_background_color)
-                        right_frame.pack(side='right', padx=20)
-
-                        # Add "Scan for Rewards" label above QR
-                        qr_title_label = tk.Label(
-                            right_frame,
-                            text="Scan for Rewards",
-                            fg='#006400',  # Dark green
-                            background=config.display.product_image_background_color,
-                            font=('Arial', 18, 'bold'),
-                            justify='center'
-                        )
-                        qr_title_label.pack(pady=5)
-
-                        # Add QR code image
-                        qr_label = tk.Label(
-                            right_frame,
-                            image=qr_photo,
-                            background=config.display.product_image_background_color
-                        )
-                        qr_label.image = qr_photo
-                        qr_label.pack(pady=5)
-
-                        # Add instruction text below QR
-                        qr_instruction_label = tk.Label(
-                            right_frame,
-                            text="Use your phone camera",
-                            fg='gray',
-                            background=config.display.product_image_background_color,
-                            font=('Arial', 12, 'normal'),
-                            justify='center'
-                        )
-                        qr_instruction_label.pack(pady=2)
-
-                        # Store QR photo reference in overlay
-                        self.image_overlay.qr_photo = qr_photo
-
-                    else:
-                        # Single column layout (no QR code)
-                        content_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
-                        content_frame.place(relx=0.5, rely=0.5, anchor='center')
-
-                        # Add product image
-                        image_label = tk.Label(
-                            content_frame,
-                            image=photo,
-                            background=config.display.product_image_background_color
-                        )
-                        image_label.image = photo
-                        image_label.pack(pady=10)
-
-                        # Add product name with larger font
-                        name_label = tk.Label(
-                            content_frame,
-                            text=product_name,
-                            fg='black',
-                            background=config.display.product_image_background_color,
-                            font=('Arial', 24, 'bold'),
-                            wraplength=int(screen_width * 0.8),
-                            justify='center'
-                        )
-                        name_label.pack(pady=10)
-
-                        # Add product brand if available
-                        if product_brand:
-                            brand_label = tk.Label(
-                                content_frame,
-                                text=f"Brand: {product_brand}",
-                                fg='gray',
-                                background=config.display.product_image_background_color,
-                                font=('Arial', 18, 'normal'),
-                                wraplength=int(screen_width * 0.8),
-                                justify='center'
-                            )
-                            brand_label.pack(pady=5)
-
-                        # Add barcode if available
-                        if barcode:
-                            barcode_label = tk.Label(
-                                content_frame,
-                                text=f"Barcode: {barcode}",
-                                fg='gray',
-                                background=config.display.product_image_background_color,
-                                font=('Arial', 16, 'normal'),
-                                justify='center'
-                            )
-                            barcode_label.pack(pady=5)
-
-                    # Keep reference to photo to prevent garbage collection
-                    self.image_overlay.photo = photo
-
-                    # Force overlay to be on top of VLC video
-                    self.image_overlay.lift()
-                    self.image_overlay.focus_force()
-                    self.root.update_idletasks()
-
-                    # Schedule hide after 10 seconds (matches NFC broadcast duration)
-                    # If user scans another item, the new scan will trigger a new overlay
-                    self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
-
-                    qr_status = "with QR code" if qr_photo else "without QR code"
-                    print(f"✅ Displaying full-screen image: {product_name} ({qr_status})")
+                print(f"✅ Displaying full-screen image: {product_name}")
             else:
                 print("❌ Failed to load image for display")
                 self._hide_image_overlay()
-
+                
         except Exception as e:
             print(f"❌ Error showing image overlay: {e}")
             self._hide_image_overlay()
@@ -1898,11 +1659,9 @@ class EnhancedVideoPlayer:
     def _hide_image_overlay(self):
         """Hide image overlay and restart video playback"""
         try:
-            # Explicitly clean up PhotoImage reference to prevent memory leak
+            # Explicitly clean up PhotoImage reference to prevent memory leak (Issue #85)
             if self.image_overlay and hasattr(self.image_overlay, 'photo'):
                 self.image_overlay.photo = None
-            if self.image_overlay and hasattr(self.image_overlay, 'qr_photo'):
-                self.image_overlay.qr_photo = None
 
             if self.image_overlay:
                 self.image_overlay.destroy()
@@ -1941,9 +1700,7 @@ class EnhancedVideoPlayer:
                          paused for next overlay to handle. Use True for timeout case.
         """
         try:
-            # Explicitly clean up PhotoImage references to prevent memory leak
-            if hasattr(self, '_current_processing_photo'):
-                self._current_processing_photo = None
+            # Explicitly clean up PhotoImage reference to prevent memory leak
             if self.processing_overlay and hasattr(self.processing_overlay, 'photo'):
                 self.processing_overlay.photo = None
 
