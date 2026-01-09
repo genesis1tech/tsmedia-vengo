@@ -52,7 +52,7 @@ class ConnectivityManagerConfig:
     failback_stability_secs: float = 30.0     # Primary must be stable before switching back
 
     # Status reporting
-    status_report_interval_secs: float = 900.0  # 15 minutes (saves LTE data costs)
+    status_report_interval_secs: float = 60.0  # 60 seconds
 
     # Connection priorities (higher = preferred when both available)
     wifi_priority: int = 100
