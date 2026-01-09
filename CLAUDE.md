@@ -107,10 +107,13 @@ src/tsv6/
 │   ├── stservo/              # STServo bus servo controller
 │   │   ├── controller.py     # STServo controller wrapper
 │   │   └── vendor/           # Waveshare SCServo SDK
-│   ├── nfc/                  # NFC emulator for URL broadcasting
+│   ├── sim7600/              # 4G LTE modem controller
+│   │   ├── controller.py     # SIM7600NA-H HAT controller
+│   │   └── at_commands.py    # AT command library & parser
+│   ├── nfc/                  # NFC hardware support
 │   │   ├── __init__.py       # NFCEmulator export
-│   │   ├── nfc_emulator.py   # NFC tag emulation via serial
-│   │   └── nfc_reader.py     # NFC reader interface
+│   │   ├── nfc_emulator.py   # NFC tag emulation (PN532)
+│   │   └── nfc_reader.py     # NFC card reader (PN532)
 │   ├── display_driver_monitor.py
 │   └── display_fix.py
 │
@@ -120,18 +123,32 @@ src/tsv6/
 ├── ota/                       # Over-The-Air updates
 │   └── ota_manager.py        # OTA update manager
 │
+├── provisioning/              # Device provisioning
+│   └── wifi_provisioner.py   # Captive portal WiFi setup
+│
+├── services/                  # Background services
+│   ├── connection_status_indicator.py  # Status dot overlay
+│   ├── obstruction_handler.py          # Obstruction UI handler
+│   └── wifi_provisioning_ui.py         # Provisioning guide UI
+│
 └── utils/                     # Utility modules
     ├── connection_check.py
+    ├── connection_tracker.py  # AWS connection uptime tracking
+    ├── connectivity_manager.py # WiFi/LTE failover orchestrator
     ├── device_manager.py
     ├── display_manager.py
     ├── enhanced_health_monitor.py
     ├── error_recovery.py     # Comprehensive error recovery system
     ├── filesystem_ops.py
     ├── health_monitor.py
+    ├── lte_monitor.py        # 4G LTE connectivity monitor
     ├── memory_optimizer.py   # Memory management (Issue #39)
     ├── network_diagnostics.py
-    ├── network_monitor.py    # Network connectivity monitoring
+    ├── network_monitor.py    # WiFi connectivity monitoring
+    ├── process_manager.py    # Child process management
     ├── qr_generator.py
+    ├── sleep_display.py      # Sleep mode display
+    ├── splash_screen.py      # Startup splash screen
     ├── systemd_recovery_manager.py
     ├── task_manager.py
     └── startup_sequence.py
@@ -178,6 +195,57 @@ src/tsv6/
 - Memory pressure monitoring
 - Automatic garbage collection
 - Resource cleanup handlers
+
+**7. 4G LTE System** (`src/tsv6/hardware/sim7600/`)
+- Waveshare SIM7600NA-H 4G HAT controller
+- AT command protocol with 100+ commands
+- Network registration monitoring (2G/3G/LTE)
+- Signal quality tracking (RSSI, dBm)
+- PDP context management for data connection
+- GPIO power control for hard reset (BCM 6)
+- Hologram.io APN support (default)
+- RNDIS/NDIS USB network interface
+
+**8. LTE Monitor** (`src/tsv6/utils/lte_monitor.py`)
+- Background LTE connectivity monitoring
+- **Staged Recovery** (4 levels):
+  - Soft (2 failures): Network re-registration
+  - Intermediate (4 failures): PDP context restart
+  - Hard (6 failures): Full modem restart
+  - Critical (10 failures): GPIO power cycle
+- ModemManager mode (default) or AT command mode
+- Integration with ErrorRecoverySystem
+
+**9. Connectivity Manager** (`src/tsv6/utils/connectivity_manager.py`)
+- Master orchestrator for WiFi/LTE failover
+- **Connectivity Modes**:
+  - `wifi_only`: WiFi only
+  - `lte_only`: 4G LTE only
+  - `wifi_primary_lte_backup`: WiFi primary with LTE fallback
+  - `lte_primary_wifi_backup`: LTE primary with WiFi fallback (default)
+- Automatic failover with configurable timeout (60s)
+- Failback stability check (30s)
+- Power saving: auto-disable backup when primary active
+- LTE startup wait (90s) with splash screen
+
+**10. Connection Tracker** (`src/tsv6/utils/connection_tracker.py`)
+- AWS IoT connection uptime/downtime tracking
+- 24-hour rolling window uptime calculation
+- **Deadline Monitor**: 30-minute forced reboot if disconnected
+- Reconnection attempt counting
+- Thread-safe state management
+
+**11. WiFi Provisioner** (`src/tsv6/provisioning/wifi_provisioner.py`)
+- Captive portal for first-boot WiFi setup
+- Flask web server with credential form
+- Hostapd + dnsmasq hotspot configuration
+- SSID: `TS_<device-id>`, Password: "recycleit"
+- 10-minute configuration timeout
+
+**12. Service Modules** (`src/tsv6/services/`)
+- `connection_status_indicator.py`: Colored dot overlay (green=LTE, blue=WiFi, red=none)
+- `obstruction_handler.py`: Fullscreen UI for door obstructions
+- `wifi_provisioning_ui.py`: QR code provisioning guide
 
 ### Key Design Patterns
 
@@ -332,9 +400,37 @@ The product image overlay in `main.py` requires proper Tkinter PhotoImage handli
 - Error recovery system tracks component health
 
 ### Service Files
-- `tsv6.service` - Main application service
-- `video-watchdog.service` - Watchdog monitoring service
-- Both managed via systemd
+| Service | Purpose |
+|---------|---------|
+| `tsv6.service` | Main TSV6 application |
+| `tsv6-wifi-provisioning.service` | WiFi provisioning UI (runs before main) |
+| `tsv6-connection-indicator.service` | Status dot overlay |
+| `tsv6-obstruction-handler.service` | Obstruction UI handler |
+| `tsv6-xorg@.service` | X11 display server template |
+| `video-watchdog.service` | Video playback watchdog |
+| `sleep.service` | Sleep mode scheduler |
+
+All managed via systemd.
+
+### Environment Variables
+**LTE Configuration** (in `tsv6.service`):
+```bash
+TSV6_LTE_ENABLED=false           # Enable/disable LTE modem
+TSV6_LTE_APN=hologram            # APN (Hologram.io default)
+TSV6_CONNECTIVITY_MODE=wifi_only # wifi_only, lte_only, wifi_primary_lte_backup, lte_primary_wifi_backup
+TSV6_LTE_PORT=/dev/ttyUSB2       # Serial port for modem
+TSV6_LTE_BAUD=115200             # Baud rate
+TSV6_LTE_FORCE_LTE=true          # Force LTE-only mode (no 3G fallback)
+TSV6_LTE_ROAMING=true            # Enable roaming
+TSV6_LTE_POWER_GPIO=6            # GPIO pin for modem power control
+TSV6_LTE_SIMULATION=false        # Simulation mode for testing
+```
+
+**NFC Configuration**:
+```bash
+NFC_SERIAL_PORT=/dev/ttyUSB5     # PN532 serial port
+NFC_BASE_URL=tsrewards--test.expo.app  # Base URL for NFC tags
+```
 
 ## Troubleshooting
 
@@ -372,6 +468,23 @@ The product image overlay in `main.py` requires proper Tkinter PhotoImage handli
 - Check NFC broadcasting: look for `📡 NFC broadcasting URL:` after door closes
 - If `'OptimizedBarcodeScanner' object has no attribute 'nfc_emulator'`: restore NFC init code in main.py
 - Test NFC emulator: `python -m tsv6.hardware.nfc.nfc_emulator`
+
+**4G LTE Issues:**
+- Check modem detection: `ls /dev/ttyUSB*` (should see ttyUSB0-2)
+- Check ModemManager: `mmcli -L` to list modems
+- Check network connection: `nmcli connection show hologram-lte`
+- View signal strength: `mmcli -m 0 --signal-get`
+- Check LTE monitor logs: look for `✓ LTE Monitor started` in logs
+- Verify APN settings: `TSV6_LTE_APN=hologram` in service file
+- Test modem directly: `python -m tsv6.hardware.sim7600.controller`
+- If modem unresponsive: GPIO power cycle via `TSV6_LTE_POWER_GPIO=6`
+
+**Connectivity Manager Issues:**
+- Check current mode: look for `Connectivity mode:` in startup logs
+- Verify failover: look for `Failing over to` messages
+- Check connection status indicator: should show colored dot (green=LTE, blue=WiFi)
+- Force WiFi-only: set `TSV6_CONNECTIVITY_MODE=wifi_only` in service file
+- Check connection tracker: look for uptime percentage in logs
 
 ## Development Tips
 
