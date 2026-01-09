@@ -90,6 +90,15 @@ except ImportError as e:
     QR_GENERATOR_AVAILABLE = False
     print(f"⚠ QR Generator not available: {e}")
 
+# Import NFC emulator for URL broadcasting
+try:
+    from tsv6.hardware.nfc import NFCEmulator
+    NFC_EMULATOR_AVAILABLE = True
+    print("✓ NFC Emulator imported successfully")
+except ImportError as e:
+    NFC_EMULATOR_AVAILABLE = False
+    print(f"⚠ NFC Emulator not available: {e}")
+
 
 class OptimizedBarcodeScanner:
     """Optimized barcode scanner with threading for instant AWS IoT transmission"""
@@ -134,7 +143,38 @@ class OptimizedBarcodeScanner:
             self.memory_optimizer = get_global_memory_optimizer()
         else:
             self.memory_optimizer = None
-    
+
+        # NFC emulator for broadcasting URL with scanid after successful scan
+        if NFC_EMULATOR_AVAILABLE:
+            try:
+                self.nfc_emulator = NFCEmulator(
+                    base_url=os.getenv('NFC_BASE_URL', 'tsrewards--test.expo.app'),
+                    timeout=10  # 10 second emulation timeout
+                )
+                self.nfc_emulator.on_tag_read = self._on_nfc_tag_read
+                self.nfc_emulator.on_status_change = self._on_nfc_status_change
+                print("✓ NFC Emulator initialized (10s broadcast timeout)")
+            except Exception as e:
+                print(f"Failed to initialize NFC Emulator: {e}")
+                self.nfc_emulator = None
+        else:
+            self.nfc_emulator = None
+
+    def _on_nfc_tag_read(self, scanid: str):
+        """Callback when NFC tag is read by a phone"""
+        print(f"📱 NFC tag read by phone! scanid: {scanid[:8]}...")
+
+    def _on_nfc_status_change(self, status: str, scanid: str):
+        """Callback for NFC emulation status changes"""
+        if status == "started":
+            print(f"📡 NFC broadcasting: https://tsrewards--test.expo.app?utm={scanid[:8]}...")
+        elif status == "read":
+            print(f"✅ NFC tag tapped! URL opened on phone")
+        elif status == "timeout":
+            print(f"⏱️ NFC broadcast timeout (10s) - no tap detected")
+        elif status == "error":
+            print(f"❌ NFC emulation error")
+
     def generate_uuid(self):
         """Generate a transaction ID"""
         return str(uuid.uuid4())
@@ -228,7 +268,12 @@ class OptimizedBarcodeScanner:
                             )
                             # Skip putting QR codes in the queue for AWS publishing
                             continue
-                    
+
+                    # Stop any running NFC emulation (new scan supersedes previous)
+                    if self.nfc_emulator and self.nfc_emulator.is_running():
+                        print("🛑 Stopping previous NFC broadcast (new scan)")
+                        self.nfc_emulator.stop_emulation()
+
                     # Put barcode (not QR) in queue immediately (non-blocking)
                     try:
                         self.barcode_queue.put_nowait({
@@ -321,7 +366,11 @@ class OptimizedBarcodeScanner:
         """Stop the barcode scanning"""
         print("🛑 Stopping barcode scanner...")
         self.running = False
-        
+
+        # Stop NFC emulation if running
+        if self.nfc_emulator:
+            self.nfc_emulator.stop_emulation()
+
         # Wait for threads to finish
         if self.scan_thread:
             self.scan_thread.join(timeout=2)
@@ -1190,7 +1239,32 @@ class EnhancedVideoPlayer:
 
         # Start image download
         self.image_manager.download_image(image_url, image_ready_callback)
-    
+
+    def start_nfc_for_transaction(self, nfc_url: str, transaction_id: str = ""):
+        """
+        Start NFC URL broadcasting for a transaction.
+
+        Called by production_main.py after the servo door has closed.
+        Broadcasts the provided URL for 10 seconds or until next scan.
+
+        Args:
+            nfc_url: The complete URL to broadcast via NFC
+            transaction_id: Optional transaction ID for logging
+        """
+        if not nfc_url:
+            print("⚠ No NFC URL provided")
+            return
+
+        if self.barcode_scanner and self.barcode_scanner.nfc_emulator:
+            try:
+                self.barcode_scanner.nfc_emulator.start_emulation_with_url(nfc_url, transaction_id)
+                display_id = transaction_id[:8] if transaction_id else "N/A"
+                print(f"📡 NFC broadcasting URL: {nfc_url[:50]}... (txn: {display_id})")
+            except Exception as e:
+                print(f"⚠ NFC emulation failed to start: {e}")
+        else:
+            print("⚠ NFC emulator not available")
+
     def display_no_match_image(self):
         """
         Display no match image when noMatch message is received from AWS
@@ -1644,6 +1718,22 @@ class EnhancedVideoPlayer:
                     except Exception as qr_error:
                         print(f"⚠ Failed to generate QR code: {qr_error}")
 
+                # Add countdown timer at bottom center
+                self.countdown_seconds = 10
+                self.countdown_label = tk.Label(
+                    main_frame,
+                    text=str(self.countdown_seconds),
+                    fg='black',
+                    background=config.display.product_image_background_color,
+                    font=('Arial', 32, 'bold'),
+                    justify='center'
+                )
+                self.countdown_label.place(relx=0.95, rely=0.95, anchor='se')
+
+                # Start countdown updates
+                self.countdown_timer_ids = []
+                self._update_countdown()
+
                 # Schedule hide after 10 seconds
                 self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
 
@@ -1659,6 +1749,15 @@ class EnhancedVideoPlayer:
     def _hide_image_overlay(self):
         """Hide image overlay and restart video playback"""
         try:
+            # Cancel countdown timers if active
+            if hasattr(self, 'countdown_timer_ids'):
+                for timer_id in self.countdown_timer_ids:
+                    try:
+                        self.root.after_cancel(timer_id)
+                    except:
+                        pass
+                self.countdown_timer_ids = []
+
             # Explicitly clean up PhotoImage reference to prevent memory leak (Issue #85)
             if self.image_overlay and hasattr(self.image_overlay, 'photo'):
                 self.image_overlay.photo = None
@@ -1690,6 +1789,18 @@ class EnhancedVideoPlayer:
                     self.play_current_video(restart=True)
             except Exception as restart_error:
                 print(f"❌ Failed to restart video after overlay error: {restart_error}")
+
+    def _update_countdown(self):
+        """Update the countdown timer display"""
+        try:
+            if hasattr(self, 'countdown_label') and self.countdown_label.winfo_exists():
+                self.countdown_label.config(text=str(self.countdown_seconds))
+                if self.countdown_seconds > 0:
+                    self.countdown_seconds -= 1
+                    timer_id = self.root.after(1000, self._update_countdown)
+                    self.countdown_timer_ids.append(timer_id)
+        except:
+            pass  # Overlay may have been destroyed
 
     def _hide_processing_overlay(self, resume_video=False):
         """
