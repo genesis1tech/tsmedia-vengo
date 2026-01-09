@@ -238,7 +238,7 @@ class ProductConfig:
 class TaskConfig:
     """Task scheduling and timing configuration"""
     # Task intervals (in seconds)
-    STATUS_PUBLISH_INTERVAL: int = 900  # 15 minutes (saves LTE data costs)
+    STATUS_PUBLISH_INTERVAL: int = 60  # 60 seconds
     IMAGE_CYCLE_CHECK_INTERVAL: float = 0.01  # 10ms
     SCANNER_CHECK_INTERVAL: float = 0.01  # 10ms
     NETWORK_CHECK_INTERVAL: int = 30
@@ -470,7 +470,7 @@ class ConnectivityConfig:
     failback_stability_secs: float = 30.0  # Primary must be stable before switching back
 
     # Status reporting
-    status_report_interval_secs: float = 900.0  # 15 minutes (saves LTE data costs)
+    status_report_interval_secs: float = 60.0  # 60 seconds
 
 
 class Config:
