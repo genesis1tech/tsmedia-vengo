@@ -160,7 +160,7 @@ class ImageManager:
         
         return None  # Will be provided via callback
     
-    def load_image_for_display(self, image_path: Path, target_size: tuple = (400, 400), maintain_aspect_ratio: bool = True) -> Optional["ImageTk.PhotoImage"]:
+    def load_image_for_display(self, image_path: Path, target_size: tuple = (400, 400), maintain_aspect_ratio: bool = True, master=None) -> Optional["ImageTk.PhotoImage"]:
         """
         Load and resize image for tkinter display
 
@@ -169,6 +169,7 @@ class ImageManager:
             target_size: Target size (width, height)
             maintain_aspect_ratio: If True, maintain aspect ratio (may have white space).
                                    If False, force exact size (may stretch image)
+            master: Tk master widget to associate the PhotoImage with
 
         Returns:
             ImageTk.PhotoImage object or None
@@ -193,8 +194,8 @@ class ImageManager:
                 # Force exact size (may stretch image to fill entire area)
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
 
-            # Create tkinter-compatible image
-            photo = ImageTk.PhotoImage(img)
+            # Create tkinter-compatible image with explicit master
+            photo = ImageTk.PhotoImage(img, master=master)
 
             # CRITICAL: Keep reference to PIL image to prevent garbage collection
             # Without this, the underlying image data can be freed before Tkinter renders
