@@ -107,6 +107,10 @@ src/tsv6/
 │   ├── stservo/              # STServo bus servo controller
 │   │   ├── controller.py     # STServo controller wrapper
 │   │   └── vendor/           # Waveshare SCServo SDK
+│   ├── nfc/                  # NFC emulator for URL broadcasting
+│   │   ├── __init__.py       # NFCEmulator export
+│   │   ├── nfc_emulator.py   # NFC tag emulation via serial
+│   │   └── nfc_reader.py     # NFC reader interface
 │   ├── display_driver_monitor.py
 │   └── display_fix.py
 │
@@ -139,7 +143,8 @@ src/tsv6/
 - VLC-based video player with tkinter GUI
 - Optimized barcode scanning with threading
 - AWS IoT integration for barcode transmission
-- Product image display
+- Product image display with QR code for NFC URL
+- NFC emulator integration for URL broadcasting
 - Servo control for door mechanism
 
 **2. Production System** (`src/tsv6/core/production_main.py`)
@@ -264,6 +269,21 @@ Common test fixtures:
 - Command/response pattern for barcode scanning
 - OTA update support via AWS IoT Jobs
 
+### Critical: NFC Emulator Integration
+The `OptimizedBarcodeScanner` class in `main.py` **must** include NFC emulator support:
+- Import: `from tsv6.hardware.nfc import NFCEmulator` with `NFC_EMULATOR_AVAILABLE` flag
+- Initialize `self.nfc_emulator` in `__init__` with callbacks for tag read and status changes
+- Stop NFC emulation when new barcode is scanned (prevents stale broadcasts)
+- Include `start_nfc_for_transaction(nfc_url, transaction_id)` method called by `production_main.py`
+- Stop NFC emulation in `stop_scanning()` method
+
+**If NFC stops working after code changes**, verify these components exist in `main.py`:
+1. NFC import block with try/except
+2. `self.nfc_emulator` initialization in `OptimizedBarcodeScanner.__init__`
+3. `_on_nfc_tag_read` and `_on_nfc_status_change` callback methods
+4. NFC stop call before adding new barcode to queue
+5. `start_nfc_for_transaction` method in `EnhancedVideoPlayer` class
+
 ### Known Issues
 - **Issue #39:** Memory pressure on Pi 4 - Addressed via `MemoryOptimizer`
 - **Issue #48:** Python dependencies in setup script
@@ -324,6 +344,13 @@ Common test fixtures:
 - Ensure user is in dialout group: `groups | grep dialout`
 - Check servo ID and baud rate configuration in environment variables
 - Test STServo controller: `python -m tsv6.hardware.stservo.controller`
+
+**NFC Emulator Issues:**
+- Check NFC serial adapter: `ls /dev/serial/by-id/` for stable path
+- Verify NFC emulator initialized: look for `✓ NFC Emulator initialized` in logs
+- Check NFC broadcasting: look for `📡 NFC broadcasting URL:` after door closes
+- If `'OptimizedBarcodeScanner' object has no attribute 'nfc_emulator'`: restore NFC init code in main.py
+- Test NFC emulator: `python -m tsv6.hardware.nfc.nfc_emulator`
 
 ## Development Tips
 
