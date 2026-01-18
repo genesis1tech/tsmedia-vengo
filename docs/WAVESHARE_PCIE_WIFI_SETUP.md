@@ -308,8 +308,8 @@ On enterprise APs like the Netgear WBE710 this is straightforward. Consumer APs 
 
 After creating a 6 GHz-only network and connecting:
 ```bash
-$ iw dev wlan0 info
-Interface wlan0
+$ iw dev wlan1 info
+Interface wlan1
     ifindex 3
     wdev 0x1
     addr c8:15:4e:26:d3:bf
@@ -345,7 +345,7 @@ nmcli -v  # Should show 1.46+
 
 After upgrading, you'll see 6 GHz support:
 ```bash
-$ nmcli -f wifi-properties dev show wlan0
+$ nmcli -f wifi-properties dev show wlan1
 ...
 WIFI-PROPERTIES.2GHZ:                   yes
 WIFI-PROPERTIES.5GHZ:                   yes
