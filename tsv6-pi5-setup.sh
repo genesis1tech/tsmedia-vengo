@@ -713,8 +713,7 @@ info "After setup completes, run:"
 echo "  cd ~/projects"
 echo "  git clone https://github.com/genesis1tech/tsv6_rpi.git"
 echo "  cd tsv6_rpi"
-echo "  uv venv && source .venv/bin/activate"
-echo "  uv pip install -r requirements.txt"
+echo "  uv sync"
 
 log "Step 9 completed - Manual project deployment instructions provided"
 
