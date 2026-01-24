@@ -605,18 +605,14 @@ fi
 info "Using project directory: $PROJECT_DIR"
 cd "$PROJECT_DIR"
 
-# Create and activate UV venv if not present
-if [ ! -d ".venv" ]; then
-    info "Creating UV virtual environment..."
-    uv venv
-fi
-
-# Install dependencies from pyproject.toml
-info "Installing dependencies from pyproject.toml via UV..."
-uv pip install --python .venv/bin/python -e . || {
-    error "Failed to install Python dependencies via UV"
+# Install dependencies using uv sync (creates venv and installs all deps)
+info "Installing dependencies from pyproject.toml via UV sync..."
+uv sync || {
+    error "Failed to install Python dependencies via UV sync"
     exit 1
 }
+
+info "✓ UV sync completed - virtual environment created and dependencies installed"
 
 # Verify key runtime libraries (no pigpio - using pyserial for STServo)
 info "Verifying key Python libraries..."
