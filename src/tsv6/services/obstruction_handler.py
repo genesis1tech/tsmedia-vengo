@@ -101,7 +101,7 @@ class ObstructionHandlerUI:
             self.SMS_STS_TORQUE_ENABLE = SMS_STS_TORQUE_ENABLE
 
             # Store positions for later
-            self.closed_position = 4030
+            self.closed_position = 4070
             self.open_position = 2868
 
             logger.info(f'Servo connected on {port} (lightweight init)')

@@ -43,7 +43,7 @@ def main():
     servo.write1ByteTxRx(servo_id, SMS_STS_TORQUE_ENABLE, 1)
 
     # Set servo to closed position (calibrated)
-    closed_position = 4039
+    closed_position = 4070
     print(f"Setting servo to closed position ({closed_position})...")
     servo.WritePosEx(servo_id, closed_position, 0, 50)  # position, speed=max, acceleration=50
 
