@@ -52,7 +52,7 @@ class STServoController:
         baudrate: int = 1000000,  # ST3020 default is 1Mbps
         servo_id: int = 1,
         open_position: int = 2868,      # Open position (calibrated)
-        closed_position: int = 4030,    # Closed position (calibrated)
+        closed_position: int = 4070,    # Closed position (calibrated)
         moving_speed: int = 0,          # 0 = maximum speed
         acceleration: int = 50,         # Acceleration value
         timeout: float = 1.0,
