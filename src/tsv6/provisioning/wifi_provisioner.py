@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import hashlib
+import html as html_module
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -130,11 +131,102 @@ class WiFiProvisioner:
             logger.debug(f"Returning {len(self.cached_networks)} cached networks")
             return self.cached_networks
 
+        # Try nmcli first (works with NetworkManager, the default on Pi OS Bookworm)
+        networks = self._scan_with_nmcli()
+        if not networks:
+            # Fall back to iwlist for legacy systems
+            logger.info("nmcli scan returned no results, falling back to iwlist")
+            networks = self._scan_with_iwlist()
+
+        # Remove duplicates and sort by signal strength
+        seen = set()
+        unique_networks = []
+        for net in networks:
+            if net['ssid'] not in seen:
+                seen.add(net['ssid'])
+                unique_networks.append(net)
+
+        # Sort by signal strength (strongest first)
+        unique_networks.sort(key=lambda x: x.get('signal', -100), reverse=True)
+        return unique_networks[:15]  # Limit to top 15
+
+    def _scan_with_nmcli(self) -> list:
+        """Scan for WiFi networks using nmcli (NetworkManager)."""
         networks = []
         try:
-            # Use iwlist to scan (need to temporarily bring up a scan interface)
             result = subprocess.run(
-                ['/usr/sbin/iwlist', 'wlan0', 'scan'],
+                ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list',
+                 'ifname', self.config.ap_interface, '--rescan', 'yes'],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    fields = self._parse_nmcli_fields(line)
+                    if len(fields) >= 2:
+                        ssid = fields[0]
+                        if not ssid or ssid == self.ap_ssid or ssid == '--':
+                            continue
+
+                        try:
+                            signal_percent = int(fields[1]) if fields[1] else 0
+                            # Convert percentage to approximate dBm
+                            signal_dbm = int((signal_percent / 2) - 100)
+                        except (ValueError, TypeError):
+                            signal_dbm = -100
+
+                        encrypted = (len(fields) >= 3 and
+                                     fields[2] != '' and fields[2] != '--')
+
+                        networks.append({
+                            'ssid': ssid,
+                            'signal': signal_dbm,
+                            'encrypted': encrypted
+                        })
+
+                if networks:
+                    logger.info(f"nmcli scan found {len(networks)} networks")
+            else:
+                logger.debug(f"nmcli scan failed (rc={result.returncode}): {result.stderr}")
+
+        except FileNotFoundError:
+            logger.debug("nmcli not found, will try iwlist")
+        except subprocess.TimeoutExpired:
+            logger.warning("nmcli WiFi scan timed out")
+        except Exception as e:
+            logger.debug(f"nmcli scan error: {e}")
+
+        return networks
+
+    def _parse_nmcli_fields(self, line: str) -> list:
+        """Parse a nmcli terse-mode output line, handling escaped colons."""
+        fields = []
+        current = []
+        i = 0
+        while i < len(line):
+            if line[i] == '\\' and i + 1 < len(line):
+                current.append(line[i + 1])
+                i += 2
+            elif line[i] == ':':
+                fields.append(''.join(current))
+                current = []
+                i += 1
+            else:
+                current.append(line[i])
+                i += 1
+        fields.append(''.join(current))
+        return fields
+
+    def _scan_with_iwlist(self) -> list:
+        """Scan for WiFi networks using iwlist (legacy fallback)."""
+        networks = []
+        try:
+            result = subprocess.run(
+                ['/usr/sbin/iwlist', self.config.ap_interface, 'scan'],
                 capture_output=True,
                 text=True,
                 timeout=15
@@ -144,42 +236,39 @@ class WiFiProvisioner:
                 current_network = {}
                 for line in result.stdout.split('\n'):
                     line = line.strip()
-                    if 'ESSID:' in line:
+                    # New cell boundary - save previous network and start fresh
+                    if 'Cell ' in line and 'Address:' in line:
+                        if current_network.get('ssid'):
+                            networks.append(current_network.copy())
+                        current_network = {}
+                    elif 'ESSID:' in line:
                         ssid = line.split('ESSID:')[1].strip('"')
-                        if ssid and ssid != self.ap_ssid:  # Don't show our own AP
+                        if ssid and ssid != self.ap_ssid:
                             current_network['ssid'] = ssid
                     elif 'Signal level=' in line:
                         try:
-                            # Extract signal level (dBm)
                             signal_part = line.split('Signal level=')[1].split()[0]
                             current_network['signal'] = int(signal_part.replace('dBm', ''))
-                        except:
+                        except (ValueError, IndexError):
                             current_network['signal'] = -100
                     elif 'Encryption key:' in line:
                         current_network['encrypted'] = 'on' in line.lower()
 
-                    # When we have a complete network entry, add it
-                    if 'ssid' in current_network and current_network['ssid']:
-                        if current_network not in networks:
-                            networks.append(current_network.copy())
-                        current_network = {}
+                # Don't forget the last network in output
+                if current_network.get('ssid'):
+                    networks.append(current_network.copy())
 
-                # Remove duplicates and sort by signal strength
-                seen = set()
-                unique_networks = []
-                for net in networks:
-                    if net['ssid'] not in seen:
-                        seen.add(net['ssid'])
-                        unique_networks.append(net)
+                if networks:
+                    logger.info(f"iwlist scan found {len(networks)} networks")
+            else:
+                logger.debug(f"iwlist scan failed (rc={result.returncode})")
 
-                # Sort by signal strength (strongest first)
-                unique_networks.sort(key=lambda x: x.get('signal', -100), reverse=True)
-                networks = unique_networks[:15]  # Limit to top 15
-
+        except FileNotFoundError:
+            logger.debug("iwlist not found")
         except subprocess.TimeoutExpired:
-            logger.warning("WiFi scan timed out")
+            logger.warning("iwlist WiFi scan timed out")
         except Exception as e:
-            logger.error(f"Error scanning WiFi networks: {e}")
+            logger.error(f"Error scanning WiFi networks with iwlist: {e}")
 
         return networks
 
@@ -286,11 +375,13 @@ class WiFiProvisioner:
                     bars = 2
                 else:
                     bars = 1
-                signal_icon = '▂' * bars + '▂' * (4 - bars)
+                bar_chars = ['▂', '▄', '▆', '█']
+                signal_icon = ''.join(bar_chars[i] if i < bars else '░' for i in range(4))
                 lock_icon = '🔒' if net.get('encrypted', True) else ''
+                escaped_ssid = html_module.escape(net['ssid'], quote=True)
                 network_options += f'''
-                <div class="network-item" onclick="selectNetwork('{net['ssid']}')">
-                    <span class="network-name">{net['ssid']}</span>
+                <div class="network-item" data-ssid="{escaped_ssid}" onclick="selectNetwork(this.dataset.ssid)">
+                    <span class="network-name">{escaped_ssid}</span>
                     <span class="network-info">{lock_icon} <span class="signal">{signal_icon}</span></span>
                 </div>'''
             network_list_html = f'<div class="network-list">{network_options}</div>'
