@@ -559,7 +559,8 @@ class WiFiProvisioner:
         Returns True if:
         - No wpa_supplicant.conf exists
         - Config exists but has no network blocks
-        - Config exists but can't connect
+        - Config exists but saved network is not visible (immediate broadcast)
+        - Config exists, network visible, but can't connect
         """
         if not self.config.enabled:
             logger.info("Provisioning disabled in config")
@@ -575,7 +576,13 @@ class WiFiProvisioner:
             logger.info("wpa_supplicant.conf has no network blocks - provisioning needed")
             return True
 
-        # Try to connect with existing config
+        # Check if saved network is visible before attempting connection
+        # This enables immediate broadcast when saved network is not found
+        if not self._is_saved_network_visible():
+            logger.info("Saved network not visible - provisioning needed (immediate broadcast)")
+            return True
+
+        # Try to connect with existing config (only if saved network is visible)
         if not self._can_connect():
             logger.info("Cannot connect with existing config - provisioning needed")
             return True
@@ -593,6 +600,54 @@ class WiFiProvisioner:
         except Exception as e:
             logger.error(f"Error reading wpa_supplicant.conf: {e}")
             return False
+
+    def _get_saved_ssids(self) -> list:
+        """
+        Extract saved SSIDs from wpa_supplicant.conf.
+
+        Returns:
+            List of saved SSID strings, or empty list if none found.
+        """
+        ssids = []
+        try:
+            with open(self.config.wpa_supplicant_conf, 'r') as f:
+                content = f.read()
+                # Match ssid="..." inside network blocks
+                # Pattern handles both quoted SSIDs and hex SSIDs
+                matches = re.findall(r'ssid="([^"]+)"', content)
+                ssids = [m for m in matches if m]
+                if ssids:
+                    logger.debug(f"Found saved SSIDs: {ssids}")
+        except Exception as e:
+            logger.error(f"Error reading saved SSIDs: {e}")
+        return ssids
+
+    def _is_saved_network_visible(self) -> bool:
+        """
+        Check if any saved network SSID is visible in WiFi scan.
+
+        This enables immediate broadcast when saved network is not found,
+        rather than waiting for connection timeout.
+
+        Returns:
+            True if at least one saved SSID is visible, False otherwise.
+        """
+        saved_ssids = self._get_saved_ssids()
+        if not saved_ssids:
+            logger.info("No saved SSIDs found in config")
+            return False
+
+        logger.info(f"Scanning for saved networks: {saved_ssids}")
+        available_networks = self._scan_wifi_networks(use_cache=False)
+        available_ssids = {net.get('ssid', '') for net in available_networks}
+
+        for ssid in saved_ssids:
+            if ssid in available_ssids:
+                logger.info(f"Saved network '{ssid}' is visible")
+                return True
+
+        logger.info(f"No saved networks visible. Available: {list(available_ssids)[:5]}")
+        return False
 
     def _can_connect(self, timeout: int = 30) -> bool:
         """
