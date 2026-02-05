@@ -506,6 +506,381 @@ network={
             mock_connect.assert_not_called()
 
 
+class TestNmcliFieldParser:
+    """Test _parse_nmcli_fields method."""
+
+    @pytest.fixture
+    def provisioner(self):
+        config = ProvisioningConfig(wpa_supplicant_conf='/tmp/test.conf')
+        with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
+            return WiFiProvisioner(config=config)
+
+    def test_simple_fields(self, provisioner):
+        """Test parsing simple colon-separated fields."""
+        result = provisioner._parse_nmcli_fields('MyNetwork:75:WPA2')
+        assert result == ['MyNetwork', '75', 'WPA2']
+
+    def test_escaped_colon_in_ssid(self, provisioner):
+        """Test parsing SSID containing a literal colon."""
+        result = provisioner._parse_nmcli_fields('My\\:Network:80:WPA2')
+        assert result == ['My:Network', '80', 'WPA2']
+
+    def test_empty_fields(self, provisioner):
+        """Test parsing with empty fields."""
+        result = provisioner._parse_nmcli_fields('HiddenNet::')
+        assert result == ['HiddenNet', '', '']
+
+    def test_empty_security(self, provisioner):
+        """Test parsing open network with no security."""
+        result = provisioner._parse_nmcli_fields('OpenNet:50:')
+        assert result == ['OpenNet', '50', '']
+
+    def test_escaped_backslash(self, provisioner):
+        """Test parsing escaped backslash."""
+        result = provisioner._parse_nmcli_fields('Net\\\\Name:60:WPA2')
+        assert result == ['Net\\Name', '60', 'WPA2']
+
+
+class TestScanWithNmcli:
+    """Test _scan_with_nmcli method."""
+
+    @pytest.fixture
+    def provisioner(self):
+        config = ProvisioningConfig(wpa_supplicant_conf='/tmp/test.conf')
+        with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
+            return WiFiProvisioner(config=config)
+
+    def test_nmcli_scan_success(self, provisioner):
+        """Test successful nmcli scan with typical output."""
+        nmcli_output = (
+            "HomeNetwork:85:WPA2\n"
+            "OfficeWiFi:60:WPA1 WPA2\n"
+            "CoffeeShop:40:WPA2\n"
+        )
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = nmcli_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_nmcli()
+
+        assert len(networks) == 3
+        assert networks[0]['ssid'] == 'HomeNetwork'
+        assert networks[0]['signal'] == -57  # (85/2) - 100
+        assert networks[0]['encrypted'] is True
+        assert networks[1]['ssid'] == 'OfficeWiFi'
+        assert networks[2]['ssid'] == 'CoffeeShop'
+
+    def test_nmcli_scan_filters_own_ap(self, provisioner):
+        """Test that our own AP SSID is filtered out."""
+        nmcli_output = "TS_12345678:90:WPA2\nRealNetwork:70:WPA2\n"
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = nmcli_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_nmcli()
+
+        assert len(networks) == 1
+        assert networks[0]['ssid'] == 'RealNetwork'
+
+    def test_nmcli_scan_filters_empty_and_placeholder(self, provisioner):
+        """Test that empty SSIDs and '--' placeholders are filtered."""
+        nmcli_output = ":50:WPA2\n--:60:\nRealNetwork:70:WPA2\n"
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = nmcli_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_nmcli()
+
+        assert len(networks) == 1
+        assert networks[0]['ssid'] == 'RealNetwork'
+
+    def test_nmcli_scan_open_network(self, provisioner):
+        """Test detection of open (unencrypted) network."""
+        nmcli_output = "OpenCafe:55:\n"
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = nmcli_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_nmcli()
+
+        assert len(networks) == 1
+        assert networks[0]['encrypted'] is False
+
+    def test_nmcli_not_found(self, provisioner):
+        """Test graceful fallback when nmcli is not installed."""
+        with patch('subprocess.run', side_effect=FileNotFoundError()):
+            networks = provisioner._scan_with_nmcli()
+
+        assert networks == []
+
+    def test_nmcli_scan_timeout(self, provisioner):
+        """Test graceful handling of scan timeout."""
+        import subprocess as sp
+        with patch('subprocess.run', side_effect=sp.TimeoutExpired(cmd='nmcli', timeout=15)):
+            networks = provisioner._scan_with_nmcli()
+
+        assert networks == []
+
+    def test_nmcli_scan_failure(self, provisioner):
+        """Test handling of non-zero return code."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "Error: device not found"
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_nmcli()
+
+        assert networks == []
+
+
+class TestScanWithIwlist:
+    """Test _scan_with_iwlist method with Cell-boundary parsing."""
+
+    @pytest.fixture
+    def provisioner(self):
+        config = ProvisioningConfig(wpa_supplicant_conf='/tmp/test.conf')
+        with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
+            return WiFiProvisioner(config=config)
+
+    def test_iwlist_standard_output(self, provisioner):
+        """Test parsing standard iwlist output (Signal before ESSID)."""
+        iwlist_output = """wlan0     Scan completed :
+          Cell 01 - Address: 00:11:22:33:44:55
+                    Channel:1
+                    Frequency:2.412 GHz (Channel 1)
+                    Quality=70/70  Signal level=-40 dBm
+                    Encryption key:on
+                    ESSID:"HomeNetwork"
+                    Bit Rates:54 Mb/s
+          Cell 02 - Address: 66:77:88:99:AA:BB
+                    Channel:6
+                    Quality=50/70  Signal level=-65 dBm
+                    Encryption key:on
+                    ESSID:"OfficeWiFi"
+"""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = iwlist_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_iwlist()
+
+        assert len(networks) == 2
+        assert networks[0]['ssid'] == 'HomeNetwork'
+        assert networks[0]['signal'] == -40
+        assert networks[0]['encrypted'] is True
+        assert networks[1]['ssid'] == 'OfficeWiFi'
+        assert networks[1]['signal'] == -65
+
+    def test_iwlist_last_network_captured(self, provisioner):
+        """Test that the last network in output is not lost."""
+        iwlist_output = """wlan0     Scan completed :
+          Cell 01 - Address: 00:11:22:33:44:55
+                    Quality=70/70  Signal level=-40 dBm
+                    Encryption key:on
+                    ESSID:"OnlyNetwork"
+"""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = iwlist_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_iwlist()
+
+        assert len(networks) == 1
+        assert networks[0]['ssid'] == 'OnlyNetwork'
+
+    def test_iwlist_filters_own_ap(self, provisioner):
+        """Test that own AP SSID is filtered in iwlist output."""
+        iwlist_output = """wlan0     Scan completed :
+          Cell 01 - Address: 00:11:22:33:44:55
+                    Signal level=-40 dBm
+                    ESSID:"TS_12345678"
+          Cell 02 - Address: 66:77:88:99:AA:BB
+                    Signal level=-50 dBm
+                    ESSID:"RealNetwork"
+"""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = iwlist_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_iwlist()
+
+        assert len(networks) == 1
+        assert networks[0]['ssid'] == 'RealNetwork'
+
+    def test_iwlist_hidden_network_skipped(self, provisioner):
+        """Test that networks with empty ESSID are skipped."""
+        iwlist_output = """wlan0     Scan completed :
+          Cell 01 - Address: 00:11:22:33:44:55
+                    Signal level=-40 dBm
+                    ESSID:""
+          Cell 02 - Address: 66:77:88:99:AA:BB
+                    Signal level=-50 dBm
+                    ESSID:"VisibleNet"
+"""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = iwlist_output
+
+        with patch('subprocess.run', return_value=mock_result):
+            networks = provisioner._scan_with_iwlist()
+
+        assert len(networks) == 1
+        assert networks[0]['ssid'] == 'VisibleNet'
+
+
+class TestScanWifiNetworks:
+    """Test _scan_wifi_networks method (nmcli-first with iwlist fallback)."""
+
+    @pytest.fixture
+    def provisioner(self):
+        config = ProvisioningConfig(wpa_supplicant_conf='/tmp/test.conf')
+        with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
+            return WiFiProvisioner(config=config)
+
+    def test_returns_cached_when_available(self, provisioner):
+        """Test that cached networks are returned when use_cache=True."""
+        provisioner.cached_networks = [
+            {'ssid': 'CachedNet', 'signal': -50, 'encrypted': True}
+        ]
+        result = provisioner._scan_wifi_networks(use_cache=True)
+        assert len(result) == 1
+        assert result[0]['ssid'] == 'CachedNet'
+
+    def test_ignores_cache_when_use_cache_false(self, provisioner):
+        """Test that cache is bypassed when use_cache=False."""
+        provisioner.cached_networks = [
+            {'ssid': 'CachedNet', 'signal': -50, 'encrypted': True}
+        ]
+        with patch.object(provisioner, '_scan_with_nmcli') as mock_nmcli:
+            mock_nmcli.return_value = [
+                {'ssid': 'FreshNet', 'signal': -45, 'encrypted': True}
+            ]
+            result = provisioner._scan_wifi_networks(use_cache=False)
+
+        assert len(result) == 1
+        assert result[0]['ssid'] == 'FreshNet'
+
+    def test_falls_back_to_iwlist_when_nmcli_empty(self, provisioner):
+        """Test that iwlist is tried when nmcli returns no results."""
+        with patch.object(provisioner, '_scan_with_nmcli', return_value=[]) as mock_nmcli, \
+             patch.object(provisioner, '_scan_with_iwlist') as mock_iwlist:
+            mock_iwlist.return_value = [
+                {'ssid': 'IwlistNet', 'signal': -60, 'encrypted': True}
+            ]
+            result = provisioner._scan_wifi_networks(use_cache=False)
+
+        mock_nmcli.assert_called_once()
+        mock_iwlist.assert_called_once()
+        assert len(result) == 1
+        assert result[0]['ssid'] == 'IwlistNet'
+
+    def test_deduplicates_networks(self, provisioner):
+        """Test that duplicate SSIDs are removed."""
+        with patch.object(provisioner, '_scan_with_nmcli') as mock_nmcli:
+            mock_nmcli.return_value = [
+                {'ssid': 'DupeNet', 'signal': -50, 'encrypted': True},
+                {'ssid': 'DupeNet', 'signal': -60, 'encrypted': True},
+                {'ssid': 'UniqueNet', 'signal': -70, 'encrypted': False},
+            ]
+            result = provisioner._scan_wifi_networks(use_cache=False)
+
+        assert len(result) == 2
+        ssids = [n['ssid'] for n in result]
+        assert ssids.count('DupeNet') == 1
+
+    def test_sorts_by_signal_strength(self, provisioner):
+        """Test that networks are sorted strongest-first."""
+        with patch.object(provisioner, '_scan_with_nmcli') as mock_nmcli:
+            mock_nmcli.return_value = [
+                {'ssid': 'Weak', 'signal': -80, 'encrypted': True},
+                {'ssid': 'Strong', 'signal': -30, 'encrypted': True},
+                {'ssid': 'Medium', 'signal': -55, 'encrypted': True},
+            ]
+            result = provisioner._scan_wifi_networks(use_cache=False)
+
+        assert result[0]['ssid'] == 'Strong'
+        assert result[1]['ssid'] == 'Medium'
+        assert result[2]['ssid'] == 'Weak'
+
+    def test_limits_to_15_networks(self, provisioner):
+        """Test that results are capped at 15 networks."""
+        with patch.object(provisioner, '_scan_with_nmcli') as mock_nmcli:
+            mock_nmcli.return_value = [
+                {'ssid': f'Net{i}', 'signal': -50 - i, 'encrypted': True}
+                for i in range(20)
+            ]
+            result = provisioner._scan_wifi_networks(use_cache=False)
+
+        assert len(result) == 15
+
+
+class TestHtmlTemplateDisplay:
+    """Test HTML template generation for network display."""
+
+    @pytest.fixture
+    def provisioner(self):
+        config = ProvisioningConfig(wpa_supplicant_conf='/tmp/test.conf')
+        with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
+            return WiFiProvisioner(config=config)
+
+    def test_signal_icon_varies_by_strength(self, provisioner):
+        """Test that signal icons differ based on signal strength."""
+        networks = [
+            {'ssid': 'Strong', 'signal': -40, 'encrypted': True},   # 4 bars
+            {'ssid': 'Good', 'signal': -55, 'encrypted': True},     # 3 bars
+            {'ssid': 'Fair', 'signal': -65, 'encrypted': True},     # 2 bars
+            {'ssid': 'Weak', 'signal': -80, 'encrypted': True},     # 1 bar
+        ]
+        html = provisioner._get_html_template(networks=networks)
+        # 4 bars: ▂▄▆█, 3 bars: ▂▄▆░, 2 bars: ▂▄░░, 1 bar: ▂░░░
+        assert '▂▄▆█' in html  # Strong signal
+        assert '▂▄▆░' in html  # Good signal
+        assert '▂▄░░' in html  # Fair signal
+        assert '▂░░░' in html  # Weak signal
+
+    def test_ssid_with_quotes_escaped(self, provisioner):
+        """Test that SSIDs with quotes are properly escaped in HTML."""
+        networks = [
+            {'ssid': "Bob's WiFi", 'signal': -50, 'encrypted': True},
+        ]
+        html = provisioner._get_html_template(networks=networks)
+        # Should use HTML entity for the apostrophe
+        assert "Bob&#x27;s WiFi" in html or "Bob&#39;s WiFi" in html
+        # Should NOT have unescaped quote in onclick
+        assert "selectNetwork('Bob's WiFi')" not in html
+
+    def test_ssid_with_html_chars_escaped(self, provisioner):
+        """Test that SSIDs with HTML special chars are escaped."""
+        networks = [
+            {'ssid': '<script>alert(1)</script>', 'signal': -50, 'encrypted': True},
+        ]
+        html = provisioner._get_html_template(networks=networks)
+        # Should be escaped, not raw HTML
+        assert '&lt;script&gt;' in html
+        assert '<script>alert(1)</script>' not in html
+
+    def test_ssid_uses_data_attribute(self, provisioner):
+        """Test that SSIDs are passed via data-ssid attribute."""
+        networks = [
+            {'ssid': 'TestNetwork', 'signal': -50, 'encrypted': True},
+        ]
+        html = provisioner._get_html_template(networks=networks)
+        assert 'data-ssid="TestNetwork"' in html
+        assert 'this.dataset.ssid' in html
+
+    def test_empty_networks_shows_scanning_message(self, provisioner):
+        """Test that empty network list shows scanning message."""
+        html = provisioner._get_html_template(networks=[])
+        assert 'Scanning for networks...' in html
+
+
 # Helper function for mocking file open
 def mock_open(read_data=''):
     """Create a mock for open() that returns the given data."""
