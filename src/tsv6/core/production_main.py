@@ -1373,6 +1373,7 @@ class ProductionVideoPlayer:
                     print(f"Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
                 if self.lte_controller:
                     print(f"LTE Controller: {self.lte_controller.config.apn} APN configured")
+                print(f"Network Adapter: {os.getenv('TSV6_NETWORK_ADAPTER', 'rpi-wifi')}")
                 if self.connectivity_manager:
                     print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
                 print(f"AWS IoT: {self.aws_config['thing_name']} ready")
