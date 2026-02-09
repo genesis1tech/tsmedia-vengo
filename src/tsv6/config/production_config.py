@@ -531,6 +531,19 @@ class ProductionConfigManager:
         except Exception as e:
             print(f"❌ Failed to save runtime config: {e}")
 
+    def get_tof_config(self) -> Dict[str, Any]:
+        """Get ToF bin level sensor configuration from environment variables."""
+        return {
+            "enabled": os.getenv("TSV6_TOF_ENABLED", "false").lower() in ("true", "1", "yes"),
+            "empty_distance_mm": int(os.getenv("TSV6_TOF_EMPTY_DISTANCE", "800")),
+            "full_distance_mm": int(os.getenv("TSV6_TOF_FULL_DISTANCE", "150")),
+            "check_interval_secs": float(os.getenv("TSV6_TOF_CHECK_INTERVAL", "1800")),
+            "i2c_address": int(os.getenv("TSV6_TOF_I2C_ADDRESS", "0x29"), 0),
+            "sample_count": int(os.getenv("TSV6_TOF_SAMPLE_COUNT", "7")),
+            "timing_budget_us": int(os.getenv("TSV6_TOF_TIMING_BUDGET", "200000")),
+            "simulation_mode": os.getenv("TSV6_TOF_SIMULATION", "false").lower() in ("true", "1", "yes"),
+        }
+
     def get_full_config(self) -> Dict[str, Any]:
         """Get complete configuration as dictionary"""
         return {
@@ -543,7 +556,8 @@ class ProductionConfigManager:
             "sleep": asdict(self.sleep_config),
             "aws": self.get_aws_config(),
             "lte": self.get_lte_config(),
-            "connectivity": self.get_connectivity_config()
+            "connectivity": self.get_connectivity_config(),
+            "tof": self.get_tof_config(),
         }
     
     def update_config(self, updates: Dict[str, Any]):

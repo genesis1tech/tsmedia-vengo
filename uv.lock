@@ -102,6 +102,19 @@ wheels = [
 ]
 
 [[package]]
+name = "adafruit-circuitpython-vl53l0x"
+version = "3.6.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka" },
+    { name = "adafruit-circuitpython-busdevice" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/bc/713feada2e87e9eb7297443de72be90eced2fc6e49887330fe95b55eda97/adafruit_circuitpython_vl53l0x-3.6.17.tar.gz", hash = "sha256:46ef9d4474a57498eebf0a0a4f2238e0e9a81cb0ccfd3dce94c5c8843153a429", size = 30384, upload-time = "2025-10-20T20:34:16.689Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/22/0b5248484832260612a5d6a71adc2efa92d1efb87d07d05a7ff5761db9e0/adafruit_circuitpython_vl53l0x-3.6.17-py3-none-any.whl", hash = "sha256:03fabd87f912695acaf56fdde7bbc4c4426306af1c6b531a3e96771deaa418d8", size = 9779, upload-time = "2025-10-20T20:34:15.53Z" },
+]
+
+[[package]]
 name = "adafruit-platformdetect"
 version = "3.85.0"
 source = { registry = "https://pypi.org/simple" }
@@ -826,6 +839,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
     { name = "adafruit-circuitpython-pca9685", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-vl53l0x", marker = "sys_platform == 'linux'" },
     { name = "awscrt" },
     { name = "awsiotsdk" },
     { name = "dbus-python", marker = "sys_platform == 'linux'" },
@@ -853,6 +867,7 @@ dev = [
 requires-dist = [
     { name = "adafruit-blinka", marker = "sys_platform == 'linux'", specifier = ">=8.0.0" },
     { name = "adafruit-circuitpython-pca9685", marker = "sys_platform == 'linux'", specifier = ">=3.4.0" },
+    { name = "adafruit-circuitpython-vl53l0x", marker = "sys_platform == 'linux'", specifier = ">=1.2.0" },
     { name = "awscrt", specifier = ">=0.27.4" },
     { name = "awsiotsdk", specifier = ">=1.24.0" },
     { name = "dbus-python", marker = "sys_platform == 'linux'", specifier = ">=1.3.2" },

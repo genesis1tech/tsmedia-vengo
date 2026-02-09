@@ -180,6 +180,7 @@ class ResilientAWSManager:
         self.on_connection_lost: Optional[Callable] = None
         self.image_display_callback: Optional[Callable] = None
         self.no_match_display_callback: Optional[Callable] = None
+        self._bin_level_provider: Optional[Callable] = None
         
         # Message queue for offline scenarios
         self._message_queue = []
@@ -268,6 +269,14 @@ class ResilientAWSManager:
     def set_no_match_display_callback(self, callback: Callable):
         """Set callback for no match display"""
         self.no_match_display_callback = callback
+
+    def set_bin_level_provider(self, provider: Optional[Callable]):
+        """Set a callable that returns the latest bin fill level data.
+
+        The provider should return a dict with 'fill_level', 'fill_percentage',
+        and 'distance_mm' keys, or None if no data available yet.
+        """
+        self._bin_level_provider = provider
 
     @property
     def connected(self) -> bool:
@@ -855,6 +864,17 @@ class ResilientAWSManager:
                 "messageId": message_id  # Unique ID to track duplicates
             }
 
+            # Add bin fill level if available
+            if self._bin_level_provider:
+                try:
+                    bin_data = self._bin_level_provider()
+                    if bin_data:
+                        status["binLevel"] = bin_data.get("fill_level", "unknown")
+                        status["binFillPercent"] = bin_data.get("fill_percentage", 0)
+                        status["binDistanceMm"] = bin_data.get("distance_mm", 0)
+                except Exception as e:
+                    logger.warning(f"Failed to get bin level data: {e}")
+
             shadow_payload = {
                 "state": {
                     "reported": status
@@ -903,8 +923,9 @@ class ResilientAWSManager:
             t = temperature (CPU temp in F)
             m = timeConnectedMins
             c = connectionState
+            b = binLevel (fill level)
         """
-        return {
+        payload = {
             "n": self.thing_name,
             "s": wifi_ssid,
             "w": wifi_strength,
@@ -912,6 +933,16 @@ class ResilientAWSManager:
             "m": int((time.time() - (self.connection_start_time or time.time())) / 60),
             "c": self.state.value
         }
+
+        if self._bin_level_provider:
+            try:
+                bin_data = self._bin_level_provider()
+                if bin_data:
+                    payload["b"] = bin_data.get("fill_level", "unknown")
+            except Exception:
+                pass
+
+        return payload
 
     def _get_wifi_info(self) -> tuple[str, int]:
         """Get connection information (WiFi or LTE based on primary route)"""

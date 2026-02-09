@@ -61,6 +61,14 @@ except ImportError:
     SIM7600_AVAILABLE = False
     print("SIM7600 LTE controller not available")
 
+try:
+    from tsv6.hardware.tof_sensor import ToFSensor, ToFSensorConfig
+    from tsv6.utils.bin_level_monitor import BinLevelMonitor, BinLevelMonitorConfig
+    TOF_SENSOR_AVAILABLE = True
+except ImportError:
+    TOF_SENSOR_AVAILABLE = False
+    print("ToF sensor module not available")
+
 
 class ProductionVideoPlayer:
     """Production-ready video player with enhanced monitoring and recovery"""
@@ -94,6 +102,10 @@ class ProductionVideoPlayer:
         self.lte_controller = None
         self.lte_monitor = None
         self.connectivity_manager = None
+
+        # ToF bin level monitoring
+        self.tof_sensor = None
+        self.bin_level_monitor = None
 
         # Splash screen for LTE startup wait
         self.splash_screen = None
@@ -154,6 +166,7 @@ class ProductionVideoPlayer:
         self.error_recovery.register_component("system_health")
         self.error_recovery.register_component("memory_optimizer")
         self.error_recovery.register_component("lte_modem")
+        self.error_recovery.register_component("tof_sensor")
 
         # Initialize LTE controller if enabled (before network monitor)
         self._initialize_lte_controller()
@@ -172,7 +185,10 @@ class ProductionVideoPlayer:
         
         # Initialize health monitoring
         self._initialize_health_monitor()
-        
+
+        # Initialize ToF bin level sensor
+        self._initialize_tof_sensor()
+
         # Initialize AWS manager
         self._initialize_aws_manager()
         
@@ -226,34 +242,29 @@ class ProductionVideoPlayer:
     def _initialize_network_monitor(self):
         """Initialize network monitoring with enhanced recovery integration"""
         try:
-            # OPTIMIZED: Faster recovery for production IoT reliability (Issue #TS_538A7DD4)
-            # - Check interval: 30s → 10s (3x faster detection)
-            # - Recovery thresholds: Reduced to achieve <30s time-to-recovery
-            # - Old: 3 min to first recovery | New: 20s to first recovery (9x improvement)
+            # NetworkMonitor is observe-only (Layer 1). It does NOT perform recovery.
+            # Recovery is handled by NetworkManager (Layer 0) and the shell watchdog (Layer 2).
             network_config = NetworkMonitorConfig(
                 interface=self.config_manager.network_config.wifi_interface,
-                check_interval_secs=10.0,  # OPTIMIZED: 30s → 10s for faster detection
+                check_interval_secs=10.0,
                 weak_signal_threshold_dbm=-75,
-                # OPTIMIZED recovery thresholds for faster response
-                soft_recovery_threshold=2,     # 20s to first recovery (was 3 min)
+                # Thresholds retained for API compatibility (no longer drive recovery)
+                soft_recovery_threshold=2,     # Diagnostic only
                 intermediate_recovery_threshold=4,  # 40s to driver reload (was 6 min)
                 hard_recovery_threshold=6,          # 60s to interface restart (was 9 min)
                 critical_escalation_threshold=12    # 2 min to critical (was 12 min)
             )
-            
-            # Use the systemd recovery manager initialized in __init__
-            # (already initialized for connection deadline monitor)
             
             self.network_monitor = NetworkMonitor(
                 config=network_config,
                 on_status=self._on_network_status,
                 on_disconnect=self._on_network_disconnect,
                 on_reconnect=self._on_network_reconnect,
-                error_recovery_system=self.error_recovery,  # Pass error recovery system
-                systemd_recovery_manager=self.systemd_recovery  # Pass systemd recovery manager
+                error_recovery_system=self.error_recovery,
+                systemd_recovery_manager=self.systemd_recovery  # Kept for API compat
             )
-            
-            self.logger.info("Enhanced network monitor initialized with systemd recovery")
+
+            self.logger.info("Network monitor initialized (observe-only, recovery via NM + shell watchdog)")
             self.error_recovery.report_success("network")
             
         except Exception as e:
@@ -554,6 +565,66 @@ class ProductionVideoPlayer:
         elif memory_status.alert_level == "warning":
             self.logger.warning(alert_msg)
     
+    def _initialize_tof_sensor(self):
+        """Initialize ToF sensor and bin level monitor for recycling bin fill level tracking"""
+        try:
+            tof_config = self.config_manager.get_tof_config()
+
+            if not tof_config.get("enabled", False):
+                self.logger.info("ToF bin level sensor disabled in configuration")
+                return
+
+            if not TOF_SENSOR_AVAILABLE:
+                self.logger.warning("ToF sensor module not available - skipping")
+                return
+
+            self.logger.info("Initializing ToF bin level sensor...")
+
+            sensor_config = ToFSensorConfig(
+                i2c_address=tof_config.get("i2c_address", 0x29),
+                timing_budget_us=tof_config.get("timing_budget_us", 200_000),
+                sample_count=tof_config.get("sample_count", 7),
+                empty_distance_mm=tof_config.get("empty_distance_mm", 800),
+                full_distance_mm=tof_config.get("full_distance_mm", 150),
+                simulation_mode=tof_config.get("simulation_mode", False),
+            )
+
+            self.tof_sensor = ToFSensor(config=sensor_config)
+
+            if not self.tof_sensor.connect():
+                self.logger.warning("ToF sensor failed to connect")
+                self.error_recovery.report_error(
+                    "tof_sensor", "connection", "Initial connection failed", "medium"
+                )
+                return
+
+            monitor_config = BinLevelMonitorConfig(
+                check_interval_secs=tof_config.get("check_interval_secs", 1800.0),
+                empty_distance_mm=tof_config.get("empty_distance_mm", 800),
+                full_distance_mm=tof_config.get("full_distance_mm", 150),
+            )
+
+            self.bin_level_monitor = BinLevelMonitor(
+                tof_sensor=self.tof_sensor,
+                config=monitor_config,
+                on_level_update=self._on_bin_level_update,
+                error_recovery_system=self.error_recovery,
+            )
+
+            self.logger.info("ToF sensor and bin level monitor initialized")
+            self.error_recovery.report_success("tof_sensor")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize ToF sensor: {e}")
+            self.error_recovery.report_error("tof_sensor", "initialization", str(e), "medium")
+
+    def _on_bin_level_update(self, fill_data: dict):
+        """Handle bin fill level updates from the monitor"""
+        self.logger.info(
+            f"Bin level update: {fill_data['fill_level']} "
+            f"({fill_data['fill_percentage']}%) at {fill_data['distance_mm']}mm"
+        )
+
     def _initialize_aws_manager(self):
         """Initialize AWS IoT manager with resilience and unique client ID to prevent DUPLICATE_CLIENTID errors"""
         try:
@@ -698,45 +769,21 @@ class ProductionVideoPlayer:
         """Register enhanced recovery handlers with escalation support"""
         
         def network_recovery_handler(action: RecoveryAction, error, escalation_level: EscalationLevel):
-            self.logger.info(f"Attempting {escalation_level.value} network recovery: {action}")
+            # Network recovery is handled by NetworkManager (Layer 0) and the
+            # shell watchdog (Layer 2).  The Python NetworkMonitor is observe-only.
+            # This handler only restarts the monitor thread to reset its state.
+            self.logger.info(f"Network recovery requested ({escalation_level.value}): {action} — deferring to NetworkManager")
             try:
-                if action == RecoveryAction.RESET_CONNECTION:
-                    # Soft recovery - restart network monitor
+                if action in (RecoveryAction.RESET_CONNECTION, RecoveryAction.RELOAD_WIFI_DRIVER,
+                              RecoveryAction.RESTART_SERVICE):
+                    # Restart the observe-only monitor to reset failure counters
                     if self.network_monitor:
                         self.network_monitor.stop()
                         time.sleep(3)
                         self.network_monitor.start()
-                        return True
-                        
-                elif action == RecoveryAction.RELOAD_WIFI_DRIVER:
-                    # This is handled by the error recovery system itself
                     return True
-                    
-                elif action == RecoveryAction.RESTART_SERVICE:
-                    # Hard recovery - use systemd recovery manager if available
-                    try:
-                        from tsv6.utils.systemd_recovery_manager import SystemdRecoveryManager
-                        recovery_manager = SystemdRecoveryManager()
-                        if recovery_manager.is_available():
-                            self.logger.info("Using systemd recovery manager for hard network recovery")
-                            return recovery_manager.execute_hard_recovery()
-                    except ImportError:
-                        self.logger.warning("Systemd recovery manager not available")
-                    
-                    # Fallback to direct commands (will likely fail without sudo)
-                    self.logger.warning("Attempting direct network restart (may fail without sudo)")
-                    import subprocess
-                    subprocess.run(['systemctl', 'restart', 'networking'],
-                                 capture_output=True, timeout=30)
-                    time.sleep(10)
-                    if self.network_monitor:
-                        self.network_monitor.stop()
-                        time.sleep(2)
-                        self.network_monitor.start()
-                    return True
-                    
             except Exception as e:
-                self.logger.error(f"Network recovery failed: {e}")
+                self.logger.error(f"Network monitor restart failed: {e}")
             return False
         
         def aws_recovery_handler(action: RecoveryAction, error, escalation_level: EscalationLevel):
@@ -943,20 +990,16 @@ class ProductionVideoPlayer:
         self.logger.info("Enhanced recovery handlers registered")
     
     def _on_network_status(self, status):
-        """Handle network status updates"""
+        """Handle network status updates from observe-only NetworkMonitor"""
         if "warning" in status:
             self.logger.warning(f"Network warning: {status}")
-        
-        # Enhanced error recovery integration is handled by NetworkMonitor itself
-        # No need for additional error reporting here
-    
+
     def _on_network_disconnect(self, status):
-        """Handle network disconnection"""
+        """Handle network disconnection — recovery is handled by NetworkManager (Layer 0)"""
         self.logger.error(f"Network disconnected: {status}")
-        # Enhanced recovery is handled by NetworkMonitor and ErrorRecoverySystem
-    
+
     def _on_network_reconnect(self, status):
-        """Handle network reconnection"""
+        """Handle network reconnection (detected by observe-only monitor)"""
         self.logger.info(f"Network reconnected: {status}")
         # Trigger AWS reconnection if needed
         if self.aws_manager and not self.aws_manager.connected:
@@ -1279,14 +1322,24 @@ class ProductionVideoPlayer:
             if self.health_monitor:
                 self.health_monitor.start()
 
+            # Start bin level monitor if available
+            if self.bin_level_monitor:
+                self.bin_level_monitor.start()
+
             # Start connection deadline monitoring
             self.connection_deadline_monitor.start()
-            
+
             # Connect AWS manager
             if self.aws_manager:
+                # Wire bin level data provider to AWS status publishes
+                if self.bin_level_monitor:
+                    self.aws_manager.set_bin_level_provider(
+                        self.bin_level_monitor.get_latest_fill_data
+                    )
+
                 self.aws_manager.connect()
                 self.aws_manager.start_auto_reconnect()
-                
+
                 # Watchdog monitoring disabled - was causing errors
                 # if self.watchdog_monitor and self.watchdog_monitor.unexpected_restart:
                 #     self.logger.warning("⚠️  Unexpected restart detected")
@@ -1363,6 +1416,12 @@ class ProductionVideoPlayer:
                 self.aws_manager.disconnect()
             
             # Stop monitoring systems
+            if self.bin_level_monitor:
+                self.bin_level_monitor.stop()
+
+            if self.tof_sensor:
+                self.tof_sensor.cleanup()
+
             if self.connectivity_manager:
                 self.connectivity_manager.stop()
 
@@ -1441,7 +1500,10 @@ class ProductionVideoPlayer:
                 "deadline_minutes": self.connection_deadline_monitor.deadline_minutes,
                 "deadline_exceeded": self.connection_deadline_monitor.deadline_exceeded
             }
-        
+
+        if self.bin_level_monitor:
+            status["bin_level"] = self.bin_level_monitor.get_monitor_status()
+
         return status
     
     def _on_connection_deadline_exceeded(self, downtime_minutes: float):
