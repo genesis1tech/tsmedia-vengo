@@ -1,9 +1,11 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
 Documentation=file:///home/g1tech/tsrpi5/README.md
-After=network-online.target time-sync.target tsv6-xorg@g1tech.service
-Wants=network-online.target
+After=NetworkManager.service time-sync.target tsv6-xorg@g1tech.service
+Wants=NetworkManager.service
 Requires=tsv6-xorg@g1tech.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -25,6 +27,14 @@ Environment="ALSA_CONFIG_PATH=/dev/null"
 Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
 Environment="PULSE_SERVER="
 
+# Switch network adapter (runs as root via sudo, non-fatal)
+ExecStartPre=-/usr/bin/sudo TSV6_NETWORK_ADAPTER=${TSV6_NETWORK_ADAPTER} /bin/bash /home/g1tech/tsrpi5/scripts/switch-network-adapter.sh
+
+# WIFI GATE: Block until WiFi (or wired) connectivity is confirmed.
+# If no WiFi saved, starts provisioning UI and waits for user to configure.
+# Main app NEVER starts without network. (runs as root for systemctl access)
+ExecStartPre=/usr/bin/sudo /bin/bash /home/g1tech/tsrpi5/scripts/wifi-wait.sh
+
 # CRITICAL: Wait for X11 socket to exist (up to 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; echo "X11 socket not found after 60s"; exit 1'
 
@@ -40,8 +50,9 @@ ExecStart=/home/g1tech/.local/bin/uv run python run_production.py
 # Restart policy - only restart on failure, not on clean exit
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
+
+# Allow wifi-wait.sh to block indefinitely during provisioning
+TimeoutStartSec=infinity
 
 # Watchdog - disabled (application handles its own monitoring via error recovery)
 WatchdogSec=0
@@ -57,10 +68,18 @@ TasksMax=100
 MemoryMax=2G
 CPUQuota=150%
 
-# LTE Configuration (Hologram.io)
-Environment="TSV6_LTE_ENABLED=false"
+# Network Adapter Selection
+# Only one adapter is active at a time. Options:
+#   rpi-wifi     = Onboard Broadcom WiFi (default)
+#   intel-ax210  = PCIe Intel AX210 WiFi 6E card
+#   4g-lte       = SIM7600NA-H 4G LTE modem
+Environment="TSV6_NETWORK_ADAPTER=rpi-wifi"
+
+# Derived network settings (written by switch-network-adapter.sh, dash means optional/missing OK)
+EnvironmentFile=-/run/tsv6-network-adapter.env
+
+# LTE Configuration (Hologram.io) — only used when TSV6_NETWORK_ADAPTER=4g-lte
 Environment="TSV6_LTE_APN=hologram"
-Environment="TSV6_CONNECTIVITY_MODE=wifi_only"
 
 [Install]
 WantedBy=multi-user.target

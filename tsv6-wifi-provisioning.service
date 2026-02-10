@@ -1,12 +1,10 @@
 [Unit]
 Description=TSV6 WiFi Provisioning Service with UI
 Documentation=file:///home/g1tech/tsrpi5/README.md
-# Run before main TSV6 service
-Before=tsv6.service
-# Run after X11 is available (for UI)
-After=tsv6-xorg@g1tech.service
-Requires=tsv6-xorg@g1tech.service
-# Don't require network - we create our own if needed
+# Started on-demand by wifi-wait.sh when no WiFi is connected.
+# NOT started at boot — the wifi gate script decides when to launch this.
+After=tsv6-xorg@g1tech.service NetworkManager.service
+Wants=tsv6-xorg@g1tech.service
 
 [Service]
 Type=simple
@@ -32,8 +30,11 @@ ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && 
 # Run provisioning UI service
 ExecStart=/home/g1tech/.local/bin/uv run python src/tsv6/services/wifi_provisioning_ui.py
 
-# Allow up to 12 minutes (10 min timeout + 2 min buffer)
-TimeoutStartSec=720
+# No timeout — stays up until wifi-wait.sh stops it after connectivity confirmed
+TimeoutStartSec=infinity
+
+# Clean up AP state if service is killed (hostapd/dnsmasq, interface mode)
+ExecStopPost=-/bin/bash -c 'killall hostapd dnsmasq 2>/dev/null; ip addr flush dev wlan0; iw dev wlan0 set type managed 2>/dev/null; nmcli device set wlan0 managed yes 2>/dev/null; true'
 
 # Don't restart automatically - this is triggered on demand
 Restart=no
@@ -45,4 +46,5 @@ StandardError=journal
 SyslogIdentifier=tsv6-wifi-provision
 
 [Install]
-WantedBy=multi-user.target
+# Started on-demand by wifi-wait.sh, not at boot
+# WantedBy=multi-user.target

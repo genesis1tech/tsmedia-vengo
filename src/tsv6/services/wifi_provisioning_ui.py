@@ -150,16 +150,10 @@ class WiFiProvisioningUI:
 
                 self._update_status("Waiting for connection...")
 
-                # Wait for credentials with periodic status updates
-                timeout = self.provisioner.config.timeout_seconds
-                start_time = time.time()
-
+                # Wait for credentials — no timeout. The wifi-wait.sh gate
+                # will stop this service once connectivity is confirmed.
                 while not self.provisioner.credentials_received.is_set():
-                    if time.time() - start_time > timeout:
-                        self._update_status("Timeout - please try again", error=True)
-                        return
-
-                    # Check if shutdown requested
+                    # Check if shutdown requested (SIGTERM from systemctl stop)
                     if self.provisioner.shutdown_flag.is_set():
                         return
 
@@ -210,47 +204,13 @@ class WiFiProvisioningUI:
         """Handle successful WiFi configuration"""
         logger.info("WiFi configured successfully - closing UI")
 
-        # Cleanup provisioner
+        # Cleanup provisioner (tear down AP, return wlan0 to NM)
         if self.provisioner:
             self.provisioner._stop_access_point()
 
-        # Start main service
-        self._start_main_service()
-
-        # Close UI
+        # Close UI — wifi-wait.sh will detect connectivity and release tsv6.service
         self.root.quit()
         self.root.destroy()
-
-    def _stop_main_service(self):
-        """Stop the tsv6.service if running"""
-        try:
-            # Check if service is running
-            result = subprocess.run(
-                ['systemctl', 'is-active', 'tsv6.service'],
-                capture_output=True, text=True, timeout=5
-            )
-
-            if result.stdout.strip() == 'active':
-                logger.info('Stopping tsv6.service...')
-                subprocess.run(
-                    ['sudo', 'systemctl', 'stop', 'tsv6.service'],
-                    capture_output=True, timeout=30
-                )
-                logger.info('tsv6.service stopped')
-        except Exception as e:
-            logger.error(f'Error stopping service: {e}')
-
-    def _start_main_service(self):
-        """Start the tsv6.service"""
-        try:
-            logger.info('Starting tsv6.service...')
-            subprocess.run(
-                ['sudo', 'systemctl', 'start', 'tsv6.service'],
-                capture_output=True, timeout=30
-            )
-            logger.info('tsv6.service started')
-        except Exception as e:
-            logger.error(f'Error starting service: {e}')
 
     def run(self):
         """Run the WiFi provisioning UI"""
@@ -262,9 +222,6 @@ class WiFiProvisioningUI:
         if not self.provisioner:
             logger.error('Failed to initialize provisioner')
             return
-
-        # Stop main service if running (for WiFi drop scenario)
-        self._stop_main_service()
 
         # Create the main window
         self.root = tk.Tk()

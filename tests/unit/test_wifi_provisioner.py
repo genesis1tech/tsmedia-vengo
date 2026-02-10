@@ -150,8 +150,14 @@ class TestGetSavedSSIDs:
         with patch.object(WiFiProvisioner, '_get_device_id', return_value='12345678'):
             return WiFiProvisioner(config=config)
 
+    def test_get_saved_ssids_from_nm(self, provisioner):
+        """Test extraction of saved SSIDs from NetworkManager."""
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=['NMNetwork1', 'NMNetwork2']):
+            ssids = provisioner._get_saved_ssids()
+        assert ssids == ['NMNetwork1', 'NMNetwork2']
+
     def test_get_saved_ssids_single_network(self, provisioner, temp_wpa_config):
-        """Test extraction of single saved SSID."""
+        """Test extraction of single saved SSID from wpa_supplicant.conf (NM fallback)."""
         with open(temp_wpa_config, 'w') as f:
             f.write("""
 network={
@@ -159,11 +165,12 @@ network={
     psk="secretpassword"
 }
 """)
-        ssids = provisioner._get_saved_ssids()
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            ssids = provisioner._get_saved_ssids()
         assert ssids == ["MyHomeWiFi"]
 
     def test_get_saved_ssids_multiple_networks(self, provisioner, temp_wpa_config):
-        """Test extraction of multiple saved SSIDs."""
+        """Test extraction of multiple saved SSIDs from wpa_supplicant.conf."""
         with open(temp_wpa_config, 'w') as f:
             f.write("""
 network={
@@ -179,20 +186,23 @@ network={
     psk="password3"
 }
 """)
-        ssids = provisioner._get_saved_ssids()
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            ssids = provisioner._get_saved_ssids()
         assert ssids == ["HomeWiFi", "OfficeWiFi", "CoffeeShop"]
 
     def test_get_saved_ssids_empty_file(self, provisioner, temp_wpa_config):
-        """Test extraction from empty config."""
+        """Test extraction from empty config (NM also empty)."""
         with open(temp_wpa_config, 'w') as f:
             f.write("# No networks configured")
-        ssids = provisioner._get_saved_ssids()
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            ssids = provisioner._get_saved_ssids()
         assert ssids == []
 
     def test_get_saved_ssids_no_file(self, provisioner):
-        """Test extraction when file doesn't exist."""
+        """Test extraction when file doesn't exist (NM also empty)."""
         provisioner.config.wpa_supplicant_conf = '/nonexistent/path.conf'
-        ssids = provisioner._get_saved_ssids()
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            ssids = provisioner._get_saved_ssids()
         assert ssids == []
 
 
@@ -223,12 +233,23 @@ class TestIsSavedNetworkVisible:
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        # Mock scan to return network list including saved network
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
+        # Mock NM to return empty so it falls through to wpa_supplicant.conf
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
             mock_scan.return_value = [
                 {'ssid': 'Neighbor1', 'signal': -60},
                 {'ssid': 'MyHomeWiFi', 'signal': -45},
                 {'ssid': 'Neighbor2', 'signal': -70}
+            ]
+            assert provisioner._is_saved_network_visible() is True
+
+    def test_saved_network_visible_from_nm(self, provisioner):
+        """Test when saved network from NetworkManager IS visible in scan."""
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=['CoLab']), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
+            mock_scan.return_value = [
+                {'ssid': 'CoLab', 'signal': -55},
+                {'ssid': 'OtherNet', 'signal': -70}
             ]
             assert provisioner._is_saved_network_visible() is True
 
@@ -237,8 +258,8 @@ class TestIsSavedNetworkVisible:
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        # Mock scan to return networks that don't include saved network
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
             mock_scan.return_value = [
                 {'ssid': 'Neighbor1', 'signal': -60},
                 {'ssid': 'Neighbor2', 'signal': -70},
@@ -247,18 +268,20 @@ class TestIsSavedNetworkVisible:
             assert provisioner._is_saved_network_visible() is False
 
     def test_no_saved_ssids(self, provisioner, temp_wpa_config):
-        """Test when no SSIDs are saved in config."""
+        """Test when no SSIDs are saved in config or NM."""
         with open(temp_wpa_config, 'w') as f:
             f.write("# Empty config")
 
-        assert provisioner._is_saved_network_visible() is False
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            assert provisioner._is_saved_network_visible() is False
 
     def test_empty_scan_results(self, provisioner, temp_wpa_config):
         """Test when WiFi scan returns no networks."""
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
             mock_scan.return_value = []
             assert provisioner._is_saved_network_visible() is False
 
@@ -290,20 +313,30 @@ class TestNeedsProvisioning:
             return WiFiProvisioner(config=config)
 
     def test_needs_provisioning_no_config_file(self, provisioner):
-        """Test provisioning needed when config file doesn't exist."""
+        """Test provisioning needed when no NM connections and config file doesn't exist."""
         provisioner.config.wpa_supplicant_conf = '/nonexistent/path.conf'
-        assert provisioner.needs_provisioning() is True
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            assert provisioner.needs_provisioning() is True
 
     def test_needs_provisioning_empty_config(self, provisioner, temp_wpa_config):
-        """Test provisioning needed when config has no network blocks."""
+        """Test provisioning needed when no NM connections and config has no network blocks."""
         with open(temp_wpa_config, 'w') as f:
             f.write("# No networks")
-        assert provisioner.needs_provisioning() is True
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]):
+            assert provisioner.needs_provisioning() is True
 
     def test_needs_provisioning_disabled(self, provisioner):
         """Test provisioning not needed when disabled."""
         provisioner.config.enabled = False
         assert provisioner.needs_provisioning() is False
+
+    def test_needs_provisioning_nm_has_connections(self, provisioner):
+        """Test provisioning uses NM saved connections when available."""
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=['CoLab']), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+             patch.object(provisioner, '_can_connect', return_value=True):
+            mock_scan.return_value = [{'ssid': 'CoLab', 'signal': -55}]
+            assert provisioner.needs_provisioning() is False
 
     def test_needs_provisioning_saved_network_not_visible(self, provisioner, temp_wpa_config):
         """
@@ -313,20 +346,16 @@ class TestNeedsProvisioning:
         When the saved SSID is not found in scan results, provisioning should
         start immediately without waiting for connection timeout.
         """
-        # Create config with saved network
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        # Mock scan to return networks that DON'T include saved network
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan:
             mock_scan.return_value = [
                 {'ssid': 'Neighbor1', 'signal': -60},
                 {'ssid': 'Neighbor2', 'signal': -70}
             ]
-            # Should need provisioning immediately (no connection attempt)
             assert provisioner.needs_provisioning() is True
-
-            # Verify _scan_wifi_networks was called (checking visibility)
             mock_scan.assert_called_once_with(use_cache=False)
 
     def test_needs_provisioning_saved_network_visible_but_cannot_connect(
@@ -334,13 +363,12 @@ class TestNeedsProvisioning:
     ):
         """
         Test provisioning needed when saved network IS visible but cannot connect.
-
-        This tests the fallback to connection test when network is visible.
         """
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
             mock_scan.return_value = [{'ssid': 'MyHomeWiFi', 'signal': -45}]
             mock_connect.return_value = False
@@ -353,7 +381,8 @@ class TestNeedsProvisioning:
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="MyHomeWiFi"\n    psk="secret"\n}')
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
             mock_scan.return_value = [{'ssid': 'MyHomeWiFi', 'signal': -45}]
             mock_connect.return_value = True
@@ -405,9 +434,9 @@ class TestImmediateBroadcastBehavior:
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="OfficeWiFi"\n    psk="secret"\n}')
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
-            # Saved network not in scan results
             mock_scan.return_value = [
                 {'ssid': 'RandomNetwork1', 'signal': -55},
                 {'ssid': 'RandomNetwork2', 'signal': -65}
@@ -416,7 +445,6 @@ class TestImmediateBroadcastBehavior:
             result = provisioner.needs_provisioning()
 
             assert result is True
-            # Critical: _can_connect should NOT be called
             mock_connect.assert_not_called()
 
     def test_connection_attempt_only_when_network_visible(
@@ -428,11 +456,11 @@ class TestImmediateBroadcastBehavior:
         with open(temp_wpa_config, 'w') as f:
             f.write('network={\n    ssid="OfficeWiFi"\n    psk="secret"\n}')
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
-            # Saved network IS in scan results
             mock_scan.return_value = [
-                {'ssid': 'OfficeWiFi', 'signal': -45},  # Our saved network
+                {'ssid': 'OfficeWiFi', 'signal': -45},
                 {'ssid': 'RandomNetwork', 'signal': -65}
             ]
             mock_connect.return_value = True
@@ -440,7 +468,6 @@ class TestImmediateBroadcastBehavior:
             result = provisioner.needs_provisioning()
 
             assert result is False
-            # _can_connect should be called since network is visible
             mock_connect.assert_called_once()
 
     def test_multiple_saved_networks_one_visible(self, provisioner, temp_wpa_config):
@@ -460,9 +487,9 @@ network={
 }
 """)
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
-            # Only OfficeWiFi is visible, HomeWiFi is not
             mock_scan.return_value = [
                 {'ssid': 'OfficeWiFi', 'signal': -50},
                 {'ssid': 'Neighbor', 'signal': -70}
@@ -491,9 +518,9 @@ network={
 }
 """)
 
-        with patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
+        with patch.object(provisioner, '_get_nm_saved_ssids', return_value=[]), \
+             patch.object(provisioner, '_scan_wifi_networks') as mock_scan, \
              patch.object(provisioner, '_can_connect') as mock_connect:
-            # Neither saved network is visible
             mock_scan.return_value = [
                 {'ssid': 'CoffeeShop', 'signal': -55},
                 {'ssid': 'PublicWiFi', 'signal': -60}
@@ -502,7 +529,6 @@ network={
             result = provisioner.needs_provisioning()
 
             assert result is True
-            # No connection attempt since no saved network is visible
             mock_connect.assert_not_called()
 
 
