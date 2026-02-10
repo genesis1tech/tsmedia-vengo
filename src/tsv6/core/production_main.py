@@ -117,6 +117,10 @@ class ProductionVideoPlayer:
         # Recycling verification sensor
         self.recycle_sensor = None
 
+        # Door sequence transaction guard — prevents concurrent/looping door operations
+        self._door_sequence_active = False
+        self._door_sequence_lock = threading.Lock()
+
         # Splash screen for LTE startup wait
         self.splash_screen = None
         
@@ -1116,26 +1120,28 @@ class ProductionVideoPlayer:
         4. If not detected: show "Item Not Detected" error
         """
         try:
+            # Guard: prevent concurrent door sequences (causes open/close loop)
+            with self._door_sequence_lock:
+                if self._door_sequence_active:
+                    self.logger.warning(
+                        f"Door sequence already active — ignoring openDoor for "
+                        f"{product_data.get('barcode', '?')}"
+                    )
+                    return
+                self._door_sequence_active = True
+
             # Show deposit waiting screen (replaces processing image)
             if self.video_player and hasattr(self.video_player, 'display_deposit_waiting'):
                 self.video_player.display_deposit_waiting()
 
             # Run verified door sequence in background to avoid blocking MQTT
-            if self.servo_controller:
+            if self.servo_controller or self.recycle_sensor:
                 door_thread = threading.Thread(
                     target=self._verified_door_sequence,
                     args=(product_data,),
                     daemon=True
                 )
                 door_thread.start()
-            elif self.recycle_sensor:
-                # No servo but have sensor — run sensor-only verification
-                sensor_thread = threading.Thread(
-                    target=self._verified_door_sequence,
-                    args=(product_data,),
-                    daemon=True
-                )
-                sensor_thread.start()
             else:
                 # No servo and no sensor — fallback to immediate display
                 self.logger.warning("No servo or sensor — falling back to immediate product display")
@@ -1143,8 +1149,12 @@ class ProductionVideoPlayer:
                     self.video_player.hide_deposit_waiting()
                 if self.video_player and hasattr(self.video_player, 'display_product_image'):
                     self.video_player.display_product_image(product_data)
+                with self._door_sequence_lock:
+                    self._door_sequence_active = False
 
         except Exception as e:
+            with self._door_sequence_lock:
+                self._door_sequence_active = False
             self.logger.error(f"Failed to handle product display: {e}")
             self.error_recovery.report_error("servo_controller", "door_open_failed", str(e), "medium")
 
@@ -1228,6 +1238,11 @@ class ProductionVideoPlayer:
                 self.recycle_sensor.stop_monitoring()
             self.logger.error(f"Verified door sequence failed: {e}")
             self.error_recovery.report_error("servo_controller", "door_sequence_failed", str(e), "medium")
+
+        finally:
+            # Always release the door sequence lock so next scan can proceed
+            with self._door_sequence_lock:
+                self._door_sequence_active = False
 
     def _handle_recycle_success(self, product_data, nfc_url: str, transaction_id: str):
         """

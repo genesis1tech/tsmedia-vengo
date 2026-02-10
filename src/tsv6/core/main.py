@@ -109,6 +109,11 @@ class OptimizedBarcodeScanner:
         self.publish_thread = None
         self.current_transaction_id = None
 
+        # Barcode cooldown — prevent the same barcode from being processed twice rapidly
+        self._last_barcode = None
+        self._last_barcode_time = 0.0
+        self._barcode_cooldown_secs = 10.0  # Ignore same barcode within 10 seconds
+
         # Thread-safe queue for barcode processing
         self.barcode_queue = queue.Queue(maxsize=100)
 
@@ -269,9 +274,18 @@ class OptimizedBarcodeScanner:
                             # Skip putting QR codes in the queue for AWS publishing
                             continue
 
+                    # Cooldown: ignore same barcode within cooldown window
+                    now = time.time()
+                    if (barcode_data == self._last_barcode and
+                            (now - self._last_barcode_time) < self._barcode_cooldown_secs):
+                        print(f"Duplicate barcode within {self._barcode_cooldown_secs}s cooldown, ignoring")
+                        continue
+                    self._last_barcode = barcode_data
+                    self._last_barcode_time = now
+
                     # Stop any running NFC emulation (new scan supersedes previous)
                     if self.nfc_emulator and self.nfc_emulator.is_running():
-                        print("🛑 Stopping previous NFC broadcast (new scan)")
+                        print("Stopping previous NFC broadcast (new scan)")
                         self.nfc_emulator.stop_emulation()
 
                     # Put barcode (not QR) in queue immediately (non-blocking)
