@@ -1163,12 +1163,13 @@ class ProductionVideoPlayer:
         Execute door open/close with IR sensor verification.
 
         Sequence:
-        1. Open door (wait for movement complete, no hold)
-        2. Start IR monitoring (after door fully open — avoids false positives from door motion)
-        3. Wait for IR detection OR 3-second timeout
-        4. Stop IR monitoring (before door moves — avoids false positives)
-        5. Close door with safety monitoring
-        6. Handle result (success → product+QR, failure → error message)
+        1. Start door opening in background thread
+        2. After ~1 second (door ~50% open), start IR monitoring early
+        3. Wait for door to finish opening
+        4. Wait for IR detection OR 3-second timeout (after door fully open)
+        5. Stop IR monitoring before door closes
+        6. Close door with safety monitoring
+        7. Handle result (success → product+QR, failure → error message)
         """
         try:
             product_name = product_data.get('productName', 'Unknown')
@@ -1178,21 +1179,34 @@ class ProductionVideoPlayer:
 
             print(f"Opening door for: {product_name}")
 
-            # 1. Open door — hold_time=0 returns immediately after movement completes
+            # 1. Start door opening in background (open_door blocks until movement completes)
+            door_open_thread = None
             if self.servo_controller:
                 print("   Opening door...")
-                self.servo_controller.open_door(hold_time=0)
+                door_open_thread = threading.Thread(
+                    target=self.servo_controller.open_door,
+                    kwargs={'hold_time': 0},
+                    daemon=True
+                )
+                door_open_thread.start()
 
-            # 2. Start IR monitoring AFTER door is fully open
+            # 2. Start IR monitoring early — at ~50% of door movement (~1 second in)
+            #    This gives the sensor a head start so it doesn't miss fast deposits
             item_detected = False
             if self.recycle_sensor:
+                if door_open_thread:
+                    time.sleep(1.0)  # Wait for door to be ~50% open
                 self.recycle_sensor.start_monitoring()
                 print("   IR sensor monitoring started — waiting for item deposit...")
 
-                # 3. Wait for detection OR 3-second timeout
+                # 3. Wait for door to finish opening (remaining movement)
+                if door_open_thread:
+                    door_open_thread.join(timeout=5.0)
+
+                # 4. Wait for detection OR 3-second timeout (after door fully open)
                 item_detected = self.recycle_sensor.detection_event.wait(timeout=3.0)
 
-                # 4. Stop monitoring BEFORE door starts closing
+                # 5. Stop monitoring before door closes
                 self.recycle_sensor.stop_monitoring()
 
                 if item_detected:
@@ -1205,9 +1219,11 @@ class ProductionVideoPlayer:
                 # No sensor available — fall back to assuming success (for dev/testing)
                 self.logger.warning("No recycle sensor — skipping verification")
                 item_detected = True
+                if door_open_thread:
+                    door_open_thread.join(timeout=5.0)
                 time.sleep(3.0)  # Hold door open for 3 seconds like original behavior
 
-            # 5. Close door with obstruction detection and retry
+            # 6. Close door with obstruction detection and retry
             if self.servo_controller:
                 print("   Closing door with safety monitoring...")
                 success, status = self.servo_controller.close_door_with_safety(
