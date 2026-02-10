@@ -2,9 +2,8 @@
 """
 Connection Status Indicator Overlay
 
-Displays a small colored dot in the upper right corner of the screen:
-- Green: 4G/LTE connected
-- Blue: WiFi connected
+Displays a small colored circle in the lower right corner of the screen:
+- Green: 4G/LTE or WiFi connected
 - Red: Not connected
 
 The dot is 8px and refreshes every 5 seconds.
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Connection status colors (RGB hex)
 COLOR_4G = '#00FF00'      # Green for 4G/LTE
-COLOR_WIFI = '#0080FF'    # Blue for WiFi
+COLOR_WIFI = '#00FF00'    # Green for WiFi
 COLOR_DISCONNECTED = '#FF0000'  # Red for disconnected
 
 
@@ -44,7 +43,7 @@ class ConnectionStatusIndicator:
     DOT_SIZE = 8
     REFRESH_INTERVAL_MS = 5000  # 5 seconds
     MARGIN_RIGHT = 10
-    MARGIN_TOP = 10
+    MARGIN_BOTTOM = 10
 
     def __init__(self):
         """Initialize the connection status indicator."""
@@ -217,9 +216,9 @@ class ConnectionStatusIndicator:
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
 
-        # Calculate position (upper right corner)
+        # Calculate position (lower right corner)
         x_pos = screen_width - self.DOT_SIZE - self.MARGIN_RIGHT
-        y_pos = self.MARGIN_TOP
+        y_pos = screen_height - self.DOT_SIZE - self.MARGIN_BOTTOM
 
         # Set window size and position
         self.root.geometry(f"{self.DOT_SIZE}x{self.DOT_SIZE}+{x_pos}+{y_pos}")
