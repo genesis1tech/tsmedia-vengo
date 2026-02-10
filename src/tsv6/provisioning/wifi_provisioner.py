@@ -1088,6 +1088,16 @@ address=/#/{self.config.ap_ip}
             logger.info("Testing new WiFi connection...")
             if self._can_connect(timeout=self.config.connection_test_timeout):
                 logger.info("WiFi connection successful!")
+
+                # Set infinite retries so NM never gives up reconnecting
+                # (NM conf.d default only applies to brand-new profiles in
+                # some NM versions; explicitly setting it is belt-and-suspenders)
+                self._run_capture(
+                    ['nmcli', 'connection', 'modify', ssid,
+                     'connection.autoconnect-retries', '0'],
+                    timeout=5,
+                )
+
                 return True
             else:
                 logger.warning("WiFi connection test failed")

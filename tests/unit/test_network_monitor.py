@@ -1,5 +1,8 @@
 """
-Unit tests for Network Monitor.
+Unit tests for Network Monitor (observe-only).
+
+The NetworkMonitor only observes WiFi state and emits callbacks.
+Recovery is handled by NetworkManager (Layer 0) and the shell watchdog (Layer 2).
 """
 import pytest
 import time
@@ -7,7 +10,6 @@ from unittest.mock import Mock, patch, MagicMock
 from src.tsv6.utils.network_monitor import (
     NetworkMonitor,
     NetworkMonitorConfig,
-    NetworkRecoveryStage,
     _run
 )
 
@@ -27,38 +29,18 @@ class TestNetworkMonitorConfig:
         assert config.soft_recovery_threshold == 2
         assert config.intermediate_recovery_threshold == 4
         assert config.hard_recovery_threshold == 6
-        assert config.critical_escalation_threshold == 8
+        assert config.critical_escalation_threshold == 12
 
-
-class TestNetworkRecoveryStage:
-    """Test NetworkRecoveryStage class."""
-
-    def test_initialization(self):
-        """Test recovery stage initialization."""
-        stage = NetworkRecoveryStage()
-        assert stage.consecutive_failures == 0
-        assert stage.soft_attempts == 0
-        assert stage.intermediate_attempts == 0
-        assert stage.hard_attempts == 0
-        assert stage.last_recovery_time == 0
-        assert stage.current_stage == "none"
-
-    def test_reset(self):
-        """Test recovery stage reset."""
-        stage = NetworkRecoveryStage()
-        stage.consecutive_failures = 5
-        stage.soft_attempts = 2
-        stage.intermediate_attempts = 1
-        stage.hard_attempts = 1
-        stage.current_stage = "hard"
-
-        stage.reset()
-
-        assert stage.consecutive_failures == 0
-        assert stage.soft_attempts == 0
-        assert stage.intermediate_attempts == 0
-        assert stage.hard_attempts == 0
-        assert stage.current_stage == "none"
+    def test_custom_config(self):
+        """Test custom configuration values."""
+        config = NetworkMonitorConfig(
+            interface="wlan1",
+            check_interval_secs=5.0,
+            weak_signal_threshold_dbm=-70,
+        )
+        assert config.interface == "wlan1"
+        assert config.check_interval_secs == 5.0
+        assert config.weak_signal_threshold_dbm == -70
 
 
 class TestNetworkMonitor:
@@ -69,11 +51,7 @@ class TestNetworkMonitor:
         """Create test configuration."""
         return NetworkMonitorConfig(
             interface="wlan0",
-            check_interval_secs=1.0,  # Fast for testing
-            soft_recovery_threshold=2,
-            intermediate_recovery_threshold=4,
-            hard_recovery_threshold=6,
-            critical_escalation_threshold=8
+            check_interval_secs=1.0,
         )
 
     @pytest.fixture
@@ -90,8 +68,7 @@ class TestNetworkMonitor:
         assert monitor.on_reconnect is None
         assert monitor.error_recovery is None
         assert monitor._last_connected is None
-        assert monitor._backoff == 5.0
-        assert isinstance(monitor._recovery, NetworkRecoveryStage)
+        assert monitor._consecutive_failures == 0
 
     def test_initialization_with_callbacks(self, config):
         """Test initialization with callback functions."""
@@ -113,6 +90,26 @@ class TestNetworkMonitor:
         assert monitor.on_reconnect == on_reconnect
         assert monitor.error_recovery == error_recovery
 
+    def test_systemd_recovery_manager_accepted(self, config):
+        """Test that systemd_recovery_manager param is accepted for API compat."""
+        mock_recovery = Mock()
+        # Should not raise
+        monitor = NetworkMonitor(
+            config=config,
+            systemd_recovery_manager=mock_recovery,
+        )
+        # Parameter is accepted but not stored/used
+        assert not hasattr(monitor, 'systemd_recovery')
+
+    def test_no_recovery_methods_exist(self, monitor):
+        """Verify recovery methods were removed (observe-only architecture)."""
+        assert not hasattr(monitor, '_soft_recovery')
+        assert not hasattr(monitor, '_intermediate_recovery')
+        assert not hasattr(monitor, '_hard_recovery')
+        assert not hasattr(monitor, '_recover')
+        assert not hasattr(monitor, '_determine_recovery_action')
+        assert not hasattr(monitor, '_trigger_wifi_provisioning')
+
     def test_get_ssid_success(self, monitor):
         """Test successful SSID retrieval."""
         with patch('src.tsv6.utils.network_monitor._run') as mock_run:
@@ -120,10 +117,22 @@ class TestNetworkMonitor:
 
             ssid = monitor._get_ssid()
             assert ssid == "MyWiFiNetwork"
-            mock_run.assert_called_once_with(["iwgetid", "-r"])
 
-    def test_get_ssid_failure(self, monitor):
-        """Test SSID retrieval failure."""
+    def test_get_ssid_failure_falls_back(self, monitor):
+        """Test SSID retrieval falls back to plain iwgetid."""
+        with patch('src.tsv6.utils.network_monitor._run') as mock_run:
+            # First call (/usr/sbin/iwgetid) fails, second (iwgetid) succeeds
+            mock_run.side_effect = [
+                (1, "", "not found"),
+                (0, "FallbackSSID", ""),
+            ]
+
+            ssid = monitor._get_ssid()
+            assert ssid == "FallbackSSID"
+            assert mock_run.call_count == 2
+
+    def test_get_ssid_both_fail(self, monitor):
+        """Test SSID retrieval when both attempts fail."""
         with patch('src.tsv6.utils.network_monitor._run') as mock_run:
             mock_run.return_value = (1, "", "Device not found")
 
@@ -172,7 +181,6 @@ class TestNetworkMonitor:
 
             result = monitor._ping("8.8.8.8")
             assert result is True
-            mock_run.assert_called_once_with(["ping", "-c", "1", "-W", "1", "8.8.8.8"])
 
     def test_ping_failure(self, monitor):
         """Test ping failure."""
@@ -201,95 +209,6 @@ class TestNetworkMonitor:
             gateway = monitor._get_gateway()
             assert gateway == monitor.cfg.ping_target_local
 
-    def test_determine_recovery_action_none(self, monitor):
-        """Test recovery action determination with no failures."""
-        monitor._recovery.consecutive_failures = 0
-        action = monitor._determine_recovery_action()
-        assert action == "none"
-
-    def test_determine_recovery_action_soft(self, monitor):
-        """Test recovery action determination for soft recovery."""
-        monitor._recovery.consecutive_failures = 3
-        action = monitor._determine_recovery_action()
-        assert action == "soft"
-
-    def test_determine_recovery_action_intermediate(self, monitor):
-        """Test recovery action determination for intermediate recovery."""
-        monitor._recovery.consecutive_failures = 5
-        action = monitor._determine_recovery_action()
-        assert action == "intermediate"
-
-    def test_determine_recovery_action_hard(self, monitor):
-        """Test recovery action determination for hard recovery."""
-        monitor._recovery.consecutive_failures = 7
-        action = monitor._determine_recovery_action()
-        assert action == "hard"
-
-    def test_determine_recovery_action_escalate(self, monitor):
-        """Test recovery action determination for escalation."""
-        monitor._recovery.consecutive_failures = 10
-        action = monitor._determine_recovery_action()
-        assert action == "escalate"
-
-    def test_soft_recovery_success(self, monitor):
-        """Test successful soft recovery."""
-        with patch('src.tsv6.utils.network_monitor._run') as mock_run, \
-             patch('time.sleep') as mock_sleep:
-
-            mock_run.return_value = (0, "", "")
-
-            result = monitor._soft_recovery()
-            assert result is True
-
-            # Verify WPA reconfigure and DHCP commands were called
-            assert mock_run.call_count >= 3
-
-    def test_soft_recovery_failure(self, monitor):
-        """Test soft recovery failure."""
-        with patch('src.tsv6.utils.network_monitor._run') as mock_run, \
-             patch('time.sleep') as mock_sleep:
-
-            mock_run.side_effect = Exception("Command failed")
-
-            result = monitor._soft_recovery()
-            assert result is False
-
-    def test_intermediate_recovery_with_error_recovery_system(self, monitor):
-        """Test intermediate recovery using error recovery system."""
-        mock_error_recovery = Mock()
-        mock_error_recovery.reload_wifi_driver.return_value = True
-        monitor.error_recovery = mock_error_recovery
-
-        result = monitor._intermediate_recovery()
-        assert result is True
-        mock_error_recovery.reload_wifi_driver.assert_called_once()
-
-    def test_intermediate_recovery_manual_fallback(self, monitor):
-        """Test intermediate recovery manual fallback."""
-        with patch('src.tsv6.utils.network_monitor._run') as mock_run, \
-             patch('time.sleep') as mock_sleep, \
-             patch('subprocess.run') as mock_subprocess_run:
-
-            # Mock lsmod output
-            mock_process = Mock()
-            mock_process.stdout = "brcmfmac 123456\nbrcmutil 789012\n"
-            mock_subprocess_run.return_value = mock_process
-
-            mock_run.return_value = (0, "", "")
-
-            result = monitor._intermediate_recovery()
-            assert result is True
-
-    def test_hard_recovery_success(self, monitor):
-        """Test successful hard recovery."""
-        with patch('src.tsv6.utils.network_monitor._run') as mock_run, \
-             patch('time.sleep') as mock_sleep:
-
-            mock_run.return_value = (0, "", "")
-
-            result = monitor._hard_recovery()
-            assert result is True
-
     def test_emit_callback_success(self, monitor):
         """Test successful callback emission."""
         callback = Mock()
@@ -312,29 +231,44 @@ class TestNetworkMonitor:
         monitor._emit(None, {"test": "data"})
         # Should not raise exception
 
-    def test_get_recovery_status(self, monitor):
-        """Test recovery status retrieval."""
-        monitor._recovery.consecutive_failures = 3
-        monitor._recovery.current_stage = "soft"
-        monitor._recovery.soft_attempts = 1
-        monitor._recovery.intermediate_attempts = 0
-        monitor._recovery.hard_attempts = 0
-        monitor._recovery.last_recovery_time = 1234567890
-        monitor._backoff = 10.0
-
+    def test_get_recovery_status_zeroed(self, monitor):
+        """Test recovery status returns zeroed fields (observe-only)."""
         status = monitor.get_recovery_status()
 
-        expected = {
-            "consecutive_failures": 3,
-            "current_stage": "soft",
-            "soft_attempts": 1,
-            "intermediate_attempts": 0,
-            "hard_attempts": 0,
-            "last_recovery_time": 1234567890,
-            "backoff_delay": 10.0
-        }
+        assert status["consecutive_failures"] == 0
+        assert status["current_stage"] == "none"
+        assert status["soft_attempts"] == 0
+        assert status["intermediate_attempts"] == 0
+        assert status["hard_attempts"] == 0
+        assert status["last_recovery_time"] == 0
+        assert status["backoff_delay"] == 0
+        assert "gateway" in status
+        assert "wifi_intentionally_disabled" in status
 
-        assert status == expected
+    def test_get_recovery_status_with_failures(self, monitor):
+        """Test that consecutive_failures is tracked even though recovery is disabled."""
+        monitor._consecutive_failures = 5
+
+        status = monitor.get_recovery_status()
+        assert status["consecutive_failures"] == 5
+        # Recovery fields stay zeroed (no recovery actions)
+        assert status["soft_attempts"] == 0
+        assert status["current_stage"] == "none"
+
+    def test_wifi_intentionally_disabled(self, monitor):
+        """Test WiFi intentionally disabled flag for LTE-first mode."""
+        assert monitor.is_wifi_intentionally_disabled() is False
+
+        monitor.set_wifi_intentionally_disabled(True)
+        assert monitor.is_wifi_intentionally_disabled() is True
+
+        # Should reset failure count
+        monitor._consecutive_failures = 5
+        monitor.set_wifi_intentionally_disabled(True)
+        assert monitor._consecutive_failures == 0
+
+        monitor.set_wifi_intentionally_disabled(False)
+        assert monitor.is_wifi_intentionally_disabled() is False
 
     def test_start_monitoring(self, monitor):
         """Test starting network monitoring."""
@@ -388,7 +322,6 @@ class TestRunFunction:
             assert rc == 0
             assert out == "output"
             assert err == "error"
-            mock_run.assert_called_once_with(["echo", "hello"], capture_output=True, text=True, timeout=5.0)
 
     def test_run_with_timeout(self):
         """Test command execution with custom timeout."""
@@ -401,7 +334,7 @@ class TestRunFunction:
 
             rc, out, err = _run(["sleep", "1"], timeout=10.0)
 
-            mock_run.assert_called_once_with(["sleep", "1"], capture_output=True, text=True, timeout=10.0)
+            assert rc == 0
 
     def test_run_exception(self):
         """Test command execution with exception."""

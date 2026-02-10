@@ -4,6 +4,8 @@ Documentation=file:///home/g1tech/tsrpi5/README.md
 After=NetworkManager.service time-sync.target tsv6-xorg@g1tech.service
 Wants=NetworkManager.service
 Requires=tsv6-xorg@g1tech.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -48,8 +50,6 @@ ExecStart=/home/g1tech/.local/bin/uv run python run_production.py
 # Restart policy - only restart on failure, not on clean exit
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Allow wifi-wait.sh to block indefinitely during provisioning
 TimeoutStartSec=infinity

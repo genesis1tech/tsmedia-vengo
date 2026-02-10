@@ -248,11 +248,6 @@ class ProductionVideoPlayer:
                 interface=self.config_manager.network_config.wifi_interface,
                 check_interval_secs=10.0,
                 weak_signal_threshold_dbm=-75,
-                # Thresholds retained for API compatibility (no longer drive recovery)
-                soft_recovery_threshold=2,     # Diagnostic only
-                intermediate_recovery_threshold=4,  # 40s to driver reload (was 6 min)
-                hard_recovery_threshold=6,          # 60s to interface restart (was 9 min)
-                critical_escalation_threshold=12    # 2 min to critical (was 12 min)
             )
             
             self.network_monitor = NetworkMonitor(
@@ -261,7 +256,6 @@ class ProductionVideoPlayer:
                 on_disconnect=self._on_network_disconnect,
                 on_reconnect=self._on_network_reconnect,
                 error_recovery_system=self.error_recovery,
-                systemd_recovery_manager=self.systemd_recovery  # Kept for API compat
             )
 
             self.logger.info("Network monitor initialized (observe-only, recovery via NM + shell watchdog)")
