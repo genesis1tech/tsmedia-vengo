@@ -69,6 +69,13 @@ except ImportError:
     TOF_SENSOR_AVAILABLE = False
     print("ToF sensor module not available")
 
+try:
+    from tsv6.hardware.recycle_sensor import RecycleSensor, RecycleSensorConfig, SensorState
+    RECYCLE_SENSOR_AVAILABLE = True
+except ImportError:
+    RECYCLE_SENSOR_AVAILABLE = False
+    print("Recycle verification sensor not available")
+
 
 class ProductionVideoPlayer:
     """Production-ready video player with enhanced monitoring and recovery"""
@@ -106,6 +113,9 @@ class ProductionVideoPlayer:
         # ToF bin level monitoring
         self.tof_sensor = None
         self.bin_level_monitor = None
+
+        # Recycling verification sensor
+        self.recycle_sensor = None
 
         # Splash screen for LTE startup wait
         self.splash_screen = None
@@ -167,6 +177,7 @@ class ProductionVideoPlayer:
         self.error_recovery.register_component("memory_optimizer")
         self.error_recovery.register_component("lte_modem")
         self.error_recovery.register_component("tof_sensor")
+        self.error_recovery.register_component("recycle_sensor")
 
         # Initialize LTE controller if enabled (before network monitor)
         self._initialize_lte_controller()
@@ -197,7 +208,10 @@ class ProductionVideoPlayer:
         
         # Initialize servo controller
         self._initialize_servo_controller()
-        
+
+        # Initialize recycle verification sensor (after servo, before video player)
+        self._initialize_recycle_sensor()
+
         # Initialize video player
         self._initialize_video_player()
         
@@ -719,7 +733,28 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.error(f"Failed to initialize servo controller: {e}")
             self.error_recovery.report_error("servo_controller", "initialization", str(e), "medium")
-    
+
+    def _initialize_recycle_sensor(self):
+        """Initialize infrared sensor for recycling verification"""
+        try:
+            if RECYCLE_SENSOR_AVAILABLE:
+                sensor_config = RecycleSensorConfig(
+                    simulation_mode=os.environ.get(
+                        'TSV6_RECYCLE_SENSOR_SIMULATION', 'false'
+                    ).lower() in ('true', '1', 'yes')
+                )
+                self.recycle_sensor = RecycleSensor(config=sensor_config)
+                self.logger.info("Recycle verification sensor initialized")
+                self.error_recovery.report_success("recycle_sensor")
+            else:
+                self.logger.warning(
+                    "Recycle sensor not available - items will be marked as recycled "
+                    "without physical verification"
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to initialize recycle sensor: {e}")
+            self.error_recovery.report_error("recycle_sensor", "initialization", str(e), "low")
+
     def _initialize_video_player(self):
         """Initialize video player component"""
         try:
@@ -1071,67 +1106,229 @@ class ProductionVideoPlayer:
             self.logger.warning(f"Could not retrieve connection metrics: {e}")
     
     def _on_product_image_display(self, product_data):
-        """Handle product image display requests"""
-        try:
-            if self.video_player and hasattr(self.video_player, 'display_product_image'):
-                self.video_player.display_product_image(product_data)
+        """
+        Handle product image display requests from AWS openDoor response.
 
-            # Trigger servo with proper sequence in background thread to prevent blocking MQTT event loop
+        Two-step verification flow:
+        1. Show "Please Deposit Your Item" screen (instead of product+QR immediately)
+        2. Open door, monitor IR sensor, close door
+        3. If item detected: show product image + QR + NFC
+        4. If not detected: show "Item Not Detected" error
+        """
+        try:
+            # Show deposit waiting screen (replaces processing image)
+            if self.video_player and hasattr(self.video_player, 'display_deposit_waiting'):
+                self.video_player.display_deposit_waiting()
+
+            # Run verified door sequence in background to avoid blocking MQTT
             if self.servo_controller:
-                # Run servo sequence in background thread to avoid blocking MQTT connection
-                servo_thread = threading.Thread(
-                    target=self._servo_door_sequence,
+                door_thread = threading.Thread(
+                    target=self._verified_door_sequence,
                     args=(product_data,),
                     daemon=True
                 )
-                servo_thread.start()
+                door_thread.start()
+            elif self.recycle_sensor:
+                # No servo but have sensor — run sensor-only verification
+                sensor_thread = threading.Thread(
+                    target=self._verified_door_sequence,
+                    args=(product_data,),
+                    daemon=True
+                )
+                sensor_thread.start()
+            else:
+                # No servo and no sensor — fallback to immediate display
+                self.logger.warning("No servo or sensor — falling back to immediate product display")
+                if self.video_player and hasattr(self.video_player, 'hide_deposit_waiting'):
+                    self.video_player.hide_deposit_waiting()
+                if self.video_player and hasattr(self.video_player, 'display_product_image'):
+                    self.video_player.display_product_image(product_data)
 
         except Exception as e:
             self.logger.error(f"Failed to handle product display: {e}")
             self.error_recovery.report_error("servo_controller", "door_open_failed", str(e), "medium")
 
-    def _servo_door_sequence(self, product_data):
-        """Execute servo door open/close sequence in background thread with safety monitoring"""
+    def _verified_door_sequence(self, product_data):
+        """
+        Execute door open/close with IR sensor verification.
+
+        Sequence:
+        1. Open door (wait for movement complete, no hold)
+        2. Start IR monitoring (after door fully open — avoids false positives from door motion)
+        3. Wait for IR detection OR 3-second timeout
+        4. Stop IR monitoring (before door moves — avoids false positives)
+        5. Close door with safety monitoring
+        6. Handle result (success → product+QR, failure → error message)
+        """
         try:
-            print(f"Opening door for: {product_data.get('productName', 'Unknown')}")
+            product_name = product_data.get('productName', 'Unknown')
+            barcode = product_data.get('barcode', '')
+            transaction_id = product_data.get('transactionId', '')
+            nfc_url = product_data.get('nfcUrl', '')
 
-            # Open door (holds for 3 seconds)
-            print("   Opening door...")
-            self.servo_controller.open_door(hold_time=3.0)
+            print(f"Opening door for: {product_name}")
 
-            # Close door with obstruction detection and retry
-            print("   Closing door with safety monitoring...")
-            success, status = self.servo_controller.close_door_with_safety(
-                max_retries=3,
-                retry_delay=5.0,
-                hold_time=0.5
-            )
+            # 1. Open door — hold_time=0 returns immediately after movement completes
+            if self.servo_controller:
+                print("   Opening door...")
+                self.servo_controller.open_door(hold_time=0)
 
-            if success:
-                print("Door sequence completed successfully")
-                self.error_recovery.report_success("servo_controller")
+            # 2. Start IR monitoring AFTER door is fully open
+            item_detected = False
+            if self.recycle_sensor:
+                self.recycle_sensor.start_monitoring()
+                print("   IR sensor monitoring started — waiting for item deposit...")
 
-                # Extract NFC URL from AWS response (provided by Lambda)
-                nfc_url = product_data.get('nfcUrl', '')
-                transaction_id = product_data.get('transactionId', '')
+                # 3. Wait for detection OR 3-second timeout
+                item_detected = self.recycle_sensor.detection_event.wait(timeout=3.0)
 
-                # Start NFC broadcasting with URL from AWS
-                if nfc_url and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
-                    self.video_player.start_nfc_for_transaction(nfc_url, transaction_id)
-                elif not nfc_url:
-                    self.logger.warning("No nfcUrl in AWS response - skipping NFC broadcast")
-                    print("⚠ No NFC URL provided by AWS - skipping NFC broadcast")
-            elif status == "obstructed":
-                # Persistent obstruction - report to AWS
-                self._handle_obstruction_detected()
+                # 4. Stop monitoring BEFORE door starts closing
+                self.recycle_sensor.stop_monitoring()
+
+                if item_detected:
+                    print("   Item detected by IR sensor!")
+                    # Safety delay — let user pull hand out before door closes
+                    time.sleep(1.0)
+                else:
+                    print("   No item detected within 3 seconds")
             else:
-                # Other error
-                self.logger.error(f"Door close failed with status: {status}")
-                self.error_recovery.report_error("servo_controller", "door_close_failed", status, "medium")
+                # No sensor available — fall back to assuming success (for dev/testing)
+                self.logger.warning("No recycle sensor — skipping verification")
+                item_detected = True
+                time.sleep(3.0)  # Hold door open for 3 seconds like original behavior
+
+            # 5. Close door with obstruction detection and retry
+            if self.servo_controller:
+                print("   Closing door with safety monitoring...")
+                success, status = self.servo_controller.close_door_with_safety(
+                    max_retries=3,
+                    retry_delay=5.0,
+                    hold_time=0.5
+                )
+
+                if success:
+                    self.error_recovery.report_success("servo_controller")
+                elif status == "obstructed":
+                    if self.recycle_sensor:
+                        self.recycle_sensor.stop_monitoring()
+                    self._handle_obstruction_detected()
+                    return
+                else:
+                    self.logger.error(f"Door close failed with status: {status}")
+                    self.error_recovery.report_error("servo_controller", "door_close_failed", status, "medium")
+
+            # 6. Handle verification result
+            if item_detected:
+                self._handle_recycle_success(product_data, nfc_url, transaction_id)
+            else:
+                self._handle_recycle_failure(product_data, barcode, transaction_id)
 
         except Exception as e:
-            self.logger.error(f"Servo door sequence failed: {e}")
+            if self.recycle_sensor:
+                self.recycle_sensor.stop_monitoring()
+            self.logger.error(f"Verified door sequence failed: {e}")
             self.error_recovery.report_error("servo_controller", "door_sequence_failed", str(e), "medium")
+
+    def _handle_recycle_success(self, product_data, nfc_url: str, transaction_id: str):
+        """
+        Handle successful recycling verification.
+
+        Called AFTER door is closed and item was detected by sensor.
+        Shows product image + QR code, publishes success, starts NFC.
+        """
+        barcode = product_data.get('barcode', '')
+        self.logger.info(f"Recycle SUCCESS for barcode: {barcode}")
+        print(f"Recycle verified successfully")
+
+        # Hide deposit waiting screen and show product image + QR
+        if self.video_player:
+            if hasattr(self.video_player, 'hide_deposit_waiting'):
+                self.video_player.hide_deposit_waiting()
+            if hasattr(self.video_player, 'display_product_image'):
+                self.video_player.display_product_image(product_data)
+
+        # Publish success result to AWS
+        self._publish_recycle_result(
+            barcode=barcode,
+            transaction_id=transaction_id,
+            status="recycle_success"
+        )
+
+        # Start NFC broadcasting with URL from AWS
+        if nfc_url and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
+            self.video_player.start_nfc_for_transaction(nfc_url, transaction_id)
+        elif not nfc_url:
+            self.logger.warning("No nfcUrl in AWS response - skipping NFC broadcast")
+
+    def _handle_recycle_failure(self, product_data, barcode: str, transaction_id: str):
+        """
+        Handle failed recycling verification (item not detected by sensor).
+
+        Called AFTER door is closed when item was NOT detected.
+        Shows error message, publishes failure — no QR, no NFC.
+        """
+        self.logger.warning(f"Recycle FAILURE for barcode: {barcode} - item not detected")
+        print("Item was NOT detected by sensor")
+
+        # Hide deposit waiting screen and show failure message
+        if self.video_player:
+            if hasattr(self.video_player, 'hide_deposit_waiting'):
+                self.video_player.hide_deposit_waiting()
+            if hasattr(self.video_player, 'display_recycle_failure'):
+                self.video_player.display_recycle_failure()
+
+        # Publish failure result to AWS
+        self._publish_recycle_result(
+            barcode=barcode,
+            transaction_id=transaction_id,
+            status="recycle_unsuccess"
+        )
+
+        self.error_recovery.report_error(
+            "recycle_sensor",
+            "item_not_detected",
+            f"Item not deposited for barcode: {barcode}",
+            "low"
+        )
+
+    def _publish_recycle_result(self, barcode: str, transaction_id: str, status: str):
+        """
+        Publish recycling verification result to AWS IoT shadow.
+
+        Args:
+            barcode: Scanned barcode
+            transaction_id: Transaction ID from AWS
+            status: "recycle_success" or "recycle_unsuccess"
+        """
+        try:
+            result_payload = {
+                "state": {
+                    "reported": {
+                        "thingName": self.aws_config["thing_name"],
+                        "barcode": barcode,
+                        "transactionId": transaction_id,
+                        "recycleStatus": status,
+                        "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
+                        "deviceType": "raspberry-pi"
+                    }
+                }
+            }
+
+            if self.aws_manager and self.aws_manager.connected:
+                success = self.aws_manager.publish_with_retry(
+                    self.aws_manager.shadow_update_topic,
+                    result_payload
+                )
+                if success:
+                    self.logger.info(f"Published recycle result: {status}")
+                    print(f"Recycle result sent to AWS: {status}")
+                else:
+                    self.logger.error("Failed to publish recycle result")
+            else:
+                self.logger.warning("AWS not connected - recycle result not published")
+
+        except Exception as e:
+            self.logger.error(f"Error publishing recycle result: {e}")
 
     def _handle_obstruction_detected(self):
         """
@@ -1443,7 +1640,11 @@ class ProductionVideoPlayer:
             # Cleanup servo
             if self.servo_controller:
                 self.servo_controller.cleanup()
-            
+
+            # Cleanup recycle sensor
+            if self.recycle_sensor:
+                self.recycle_sensor.cleanup()
+
             # Stop video player
             if self.video_player and hasattr(self.video_player, 'root') and self.video_player.root:
                 try:

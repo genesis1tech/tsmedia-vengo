@@ -114,6 +114,7 @@ src/tsv6/
 │   │   ├── __init__.py       # NFCEmulator export
 │   │   ├── nfc_emulator.py   # NFC tag emulation (PN532)
 │   │   └── nfc_reader.py     # NFC card reader (PN532)
+│   ├── recycle_sensor.py     # IR sensor for item deposit verification
 │   ├── display_driver_monitor.py
 │   └── display_fix.py
 │
@@ -246,6 +247,20 @@ src/tsv6/
 - `connection_status_indicator.py`: Colored dot overlay (green=LTE, blue=WiFi, red=none)
 - `obstruction_handler.py`: Fullscreen UI for door obstructions
 - `wifi_provisioning_ui.py`: QR code provisioning guide
+
+**13. Recycling Verification Sensor** (`src/tsv6/hardware/recycle_sensor.py`)
+- M5Stack U175 IR Emitter + Receiver Unit on GPIO 17 (BCM)
+- Two-step recycling verification: scan barcode + physically deposit item
+- **Transaction Flow**:
+  1. User scans barcode → publish to AWS → show processing image
+  2. AWS responds "openDoor" → show "Please Deposit Your Item" screen
+  3. Door opens → IR sensor monitors for item (3-second window)
+  4. If item detected → close door → show product image + QR + NFC → publish `recycle_success`
+  5. If no item → close door → show "Item Not Detected" error → publish `recycle_unsuccess`
+- IR monitoring starts AFTER door fully opens, stops BEFORE door closes (avoids door motion false positives)
+- Digital GPIO input with debounce (2 consecutive readings default)
+- Simulation mode for testing: `TSV6_RECYCLE_SENSOR_SIMULATION=true`
+- Graceful fallback: if sensor unavailable, items are accepted without physical verification
 
 ### Key Design Patterns
 
@@ -432,6 +447,14 @@ NFC_SERIAL_PORT=/dev/ttyUSB5     # PN532 serial port
 NFC_BASE_URL=tsrewards--test.expo.app  # Base URL for NFC tags
 ```
 
+**Recycle Verification Sensor Configuration**:
+```bash
+TSV6_RECYCLE_SENSOR_GPIO=17              # BCM GPIO pin (M5Stack U175)
+TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05   # 50ms polling interval
+TSV6_RECYCLE_SENSOR_SIMULATION=false     # Simulation mode for testing
+TSV6_RECYCLE_SENSOR_DEBOUNCE=2           # Consecutive readings for confirmation
+```
+
 ## Troubleshooting
 
 **Memory Issues:**
@@ -485,6 +508,15 @@ NFC_BASE_URL=tsrewards--test.expo.app  # Base URL for NFC tags
 - Check connection status indicator: should show colored dot (green=LTE, blue=WiFi)
 - Force WiFi-only: set `TSV6_CONNECTIVITY_MODE=wifi_only` in service file
 - Check connection tracker: look for uptime percentage in logs
+
+**Recycle Verification Sensor Issues:**
+- Check GPIO pin: `pinctrl get 17` (should show `ip pu | hi` or `lo`)
+- Test sensor polarity: place object in front of sensor, run `pinctrl get 17` — if active-low, output should change from `hi` to `lo`
+- Check sensor initialized: look for `RecycleSensor initialized on GPIO17` in logs
+- If "Item Not Detected" always shows: check `active_low` setting matches sensor behavior
+- If sensor not available: check import error in logs, sensor falls back to accepting without verification
+- Simulation mode: set `TSV6_RECYCLE_SENSOR_SIMULATION=true` to bypass hardware
+- Test sensor directly: `python -c "from tsv6.hardware.recycle_sensor import RecycleSensor; s = RecycleSensor(); s.start_monitoring(); import time; time.sleep(3); print(s.stop_monitoring())"`
 
 ## Development Tips
 
