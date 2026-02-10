@@ -1,0 +1,43 @@
+[Unit]
+Description=TSV6 Network Connectivity Watchdog (Layer 2)
+Documentation=https://github.com/genesis1tech/tsrpi5
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/tsv6-network-watchdog.sh
+Restart=on-failure
+RestartSec=30
+
+# Watchdog: script must call systemd-notify WATCHDOG=1 within this window.
+# If it stops (because pings fail beyond grace period), systemd reboots.
+WatchdogSec=120
+FailureAction=reboot-force
+
+# Optional per-deployment overrides
+EnvironmentFile=-/etc/default/tsv6-network-watchdog
+
+# Security Hardening
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service @network-io
+SystemCallErrorNumber=EPERM
+PrivateDevices=true
+DevicePolicy=closed
+DeviceAllow=/dev/null rw
+MemoryMax=64M
+CPUQuota=5%
+
+[Install]
+WantedBy=multi-user.target
