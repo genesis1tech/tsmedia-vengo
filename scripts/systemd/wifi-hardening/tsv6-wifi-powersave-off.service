@@ -1,0 +1,28 @@
+[Unit]
+Description=TSV6 WiFi Power Save Off (belt-and-suspenders)
+Documentation=https://github.com/genesis1tech/tsrpi5
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+# Belt-and-suspenders: NM config (wifi.powersave=2) should handle this,
+# but some Broadcom firmware versions ignore the NM setting.
+# This service runs iw directly at boot to guarantee power save is off.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/iw wlan0 set power_save off
+
+# Security Hardening
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
