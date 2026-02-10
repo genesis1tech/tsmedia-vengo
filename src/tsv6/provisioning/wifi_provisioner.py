@@ -647,28 +647,31 @@ class WiFiProvisioner:
         """
         Check if WiFi provisioning is needed.
 
+        Checks NetworkManager first (primary on RPi OS Bookworm+),
+        then falls back to wpa_supplicant.conf for legacy systems.
+
         Returns True if:
-        - No wpa_supplicant.conf exists
-        - Config exists but has no network blocks
-        - Config exists but saved network is not visible (immediate broadcast)
-        - Config exists, network visible, but can't connect
+        - No saved WiFi connections in NM or wpa_supplicant.conf
+        - Saved network is not visible
+        - Can't connect with existing config
         """
         if not self.config.enabled:
             logger.info("Provisioning disabled in config")
             return False
 
-        # Check if config file exists
-        if not os.path.exists(self.config.wpa_supplicant_conf):
-            logger.info("No wpa_supplicant.conf found - provisioning needed")
-            return True
-
-        # Check if config has network blocks
-        if not self._has_network_config():
-            logger.info("wpa_supplicant.conf has no network blocks - provisioning needed")
-            return True
+        # Check NetworkManager for saved WiFi connections first
+        nm_ssids = self._get_nm_saved_ssids()
+        if nm_ssids:
+            logger.info(f"Found {len(nm_ssids)} saved WiFi connections in NetworkManager: {nm_ssids}")
+        else:
+            # Fall back to wpa_supplicant.conf
+            if os.path.exists(self.config.wpa_supplicant_conf) and self._has_network_config():
+                logger.info("Found network config in wpa_supplicant.conf")
+            else:
+                logger.info("No saved WiFi connections found - provisioning needed")
+                return True
 
         # Check if saved network is visible before attempting connection
-        # This enables immediate broadcast when saved network is not found
         if not self._is_saved_network_visible():
             logger.info("Saved network not visible - provisioning needed (immediate broadcast)")
             return True
@@ -681,36 +684,58 @@ class WiFiProvisioner:
         logger.info("WiFi is configured and working - no provisioning needed")
         return False
 
+    def _get_nm_saved_ssids(self) -> list:
+        """Get saved WiFi SSIDs from NetworkManager."""
+        try:
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                ssids = []
+                for line in result.stdout.strip().split('\n'):
+                    if ':802-11-wireless' in line:
+                        name = line.split(':')[0]
+                        if name:
+                            ssids.append(name)
+                return ssids
+        except Exception as e:
+            logger.debug(f"Error querying NetworkManager saved SSIDs: {e}")
+        return []
+
     def _has_network_config(self) -> bool:
         """Check if wpa_supplicant.conf contains network configuration"""
         try:
             with open(self.config.wpa_supplicant_conf, 'r') as f:
                 content = f.read()
-                # Look for network={} blocks
                 return bool(re.search(r'network\s*=\s*\{', content))
         except Exception as e:
-            logger.error(f"Error reading wpa_supplicant.conf: {e}")
+            logger.debug(f"Error reading wpa_supplicant.conf: {e}")
             return False
 
     def _get_saved_ssids(self) -> list:
         """
-        Extract saved SSIDs from wpa_supplicant.conf.
+        Get saved WiFi SSIDs from NetworkManager first, then wpa_supplicant.conf.
 
         Returns:
             List of saved SSID strings, or empty list if none found.
         """
-        ssids = []
+        # Try NetworkManager first (primary on RPi OS Bookworm+)
+        ssids = self._get_nm_saved_ssids()
+        if ssids:
+            logger.debug(f"Found saved SSIDs from NetworkManager: {ssids}")
+            return ssids
+
+        # Fall back to wpa_supplicant.conf
         try:
             with open(self.config.wpa_supplicant_conf, 'r') as f:
                 content = f.read()
-                # Match ssid="..." inside network blocks
-                # Pattern handles both quoted SSIDs and hex SSIDs
                 matches = re.findall(r'ssid="([^"]+)"', content)
                 ssids = [m for m in matches if m]
                 if ssids:
-                    logger.debug(f"Found saved SSIDs: {ssids}")
+                    logger.debug(f"Found saved SSIDs from wpa_supplicant.conf: {ssids}")
         except Exception as e:
-            logger.error(f"Error reading saved SSIDs: {e}")
+            logger.debug(f"Error reading saved SSIDs from wpa_supplicant.conf: {e}")
         return ssids
 
     def _is_saved_network_visible(self) -> bool:
@@ -743,26 +768,23 @@ class WiFiProvisioner:
     def _can_connect(self, timeout: int = 30) -> bool:
         """
         Test if existing WiFi config can establish connection.
-        Returns True if connected and has internet access.
+        Returns True if connected and has network access.
         """
         logger.info(f"Testing WiFi connection (timeout: {timeout}s)")
 
         start_time = time.time()
         while time.time() - start_time < timeout:
-            # Check if interface has an IP address (not AP range)
             try:
                 result = subprocess.run(
                     ['ip', 'addr', 'show', self.config.ap_interface],
                     capture_output=True, text=True, timeout=5
                 )
 
-                # Look for an IP address that's not in the AP range
-                ip_match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
-                if ip_match:
-                    ip = ip_match.group(1)
+                # Find ALL IPs on the interface (not just the first one)
+                all_ips = re.findall(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
+                for ip in all_ips:
                     if not ip.startswith('192.168.4.'):  # Not AP address
-                        # Test internet connectivity
-                        if self._test_internet():
+                        if self._test_connectivity():
                             logger.info(f"WiFi connected with IP: {ip}")
                             return True
             except Exception as e:
@@ -773,8 +795,22 @@ class WiFiProvisioner:
         logger.warning("WiFi connection test failed")
         return False
 
-    def _test_internet(self, host: str = "8.8.8.8", timeout: int = 5) -> bool:
-        """Test internet connectivity with ping"""
+    def _get_gateway(self) -> Optional[str]:
+        """Get the default gateway IP address."""
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default', 'dev', self.config.ap_interface],
+                capture_output=True, text=True, timeout=5
+            )
+            match = re.search(r'default via (\d+\.\d+\.\d+\.\d+)', result.stdout)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return None
+
+    def _ping(self, host: str, timeout: int = 5) -> bool:
+        """Ping a single host."""
         try:
             result = subprocess.run(
                 ['ping', '-c', '1', '-W', str(timeout), host],
@@ -783,6 +819,17 @@ class WiFiProvisioner:
             return result.returncode == 0
         except Exception:
             return False
+
+    def _test_connectivity(self, timeout: int = 5) -> bool:
+        """Test network connectivity — gateway first, then external hosts."""
+        gateway = self._get_gateway()
+        if gateway and self._ping(gateway, timeout):
+            return True
+        # Fall back to external hosts (may be blocked on some networks)
+        for host in ("8.8.8.8", "1.1.1.1"):
+            if self._ping(host, timeout):
+                return True
+        return False
 
     def _create_hostapd_config(self) -> bool:
         """Create hostapd configuration file"""
@@ -829,24 +876,29 @@ address=/#/{self.config.ap_ip}
         """Start WiFi access point with hostapd and dnsmasq"""
         logger.info(f"Starting access point: {self.ap_ssid}")
 
+        # Tell NM to stop managing wlan0 so we can use it for AP
+        subprocess.run(
+            ['nmcli', 'device', 'set', self.config.ap_interface, 'managed', 'no'],
+            capture_output=True
+        )
+
         # Scan for networks BEFORE starting AP (can't scan in AP mode)
         logger.info("Scanning for WiFi networks before starting AP...")
         self.cached_networks = self._scan_wifi_networks(use_cache=False)
         logger.info(f"Cached {len(self.cached_networks)} networks for captive portal")
 
         try:
-            # Stop any existing services
-            subprocess.run(['systemctl', 'stop', 'hostapd'], capture_output=True)
-            subprocess.run(['systemctl', 'stop', 'dnsmasq'], capture_output=True)
-            subprocess.run(['killall', 'wpa_supplicant'], capture_output=True)
+            # Stop any existing AP processes
             subprocess.run(['killall', 'hostapd'], capture_output=True)
             subprocess.run(['killall', 'dnsmasq'], capture_output=True)
             time.sleep(1)
 
             # Create config files
             if not self._create_hostapd_config():
+                self._stop_access_point()
                 return False
             if not self._create_dnsmasq_config():
+                self._stop_access_point()
                 return False
 
             # Configure interface
@@ -881,6 +933,7 @@ address=/#/{self.config.ap_ip}
             # Verify hostapd is running
             if hostapd_proc.poll() is not None:
                 logger.error("hostapd failed to start")
+                self._stop_access_point()
                 return False
 
             logger.info(f"Access point '{self.ap_ssid}' started successfully")
@@ -888,13 +941,15 @@ address=/#/{self.config.ap_ip}
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to start access point: {e}")
+            self._stop_access_point()
             return False
         except Exception as e:
             logger.error(f"Unexpected error starting access point: {e}")
+            self._stop_access_point()
             return False
 
     def _stop_access_point(self):
-        """Stop the access point and cleanup"""
+        """Stop the access point and return control to NetworkManager"""
         logger.info("Stopping access point")
 
         try:
@@ -909,7 +964,16 @@ address=/#/{self.config.ap_ip}
             # Reset interface
             subprocess.run(['ip', 'addr', 'flush', 'dev', self.config.ap_interface], capture_output=True)
             subprocess.run(['ip', 'link', 'set', self.config.ap_interface, 'down'], capture_output=True)
+            # Switch back to managed (client) mode
+            subprocess.run(['iw', 'dev', self.config.ap_interface, 'set', 'type', 'managed'], capture_output=True)
             subprocess.run(['ip', 'link', 'set', self.config.ap_interface, 'up'], capture_output=True)
+
+            # Return control to NetworkManager
+            subprocess.run(
+                ['nmcli', 'device', 'set', self.config.ap_interface, 'managed', 'yes'],
+                capture_output=True
+            )
+            logger.info("Returned wlan0 to NetworkManager control")
 
         except Exception as e:
             logger.error(f"Error stopping access point: {e}")
@@ -1053,61 +1117,64 @@ address=/#/{self.config.ap_ip}
             self._notify_status("hotspot_failed")
             return ProvisioningResult.ERROR
 
-        # Start web server
-        self._notify_status("starting_portal", {"ip": self.config.ap_ip, "port": self.config.web_port})
-        self._start_web_server()
+        try:
+            # Start web server
+            self._notify_status("starting_portal", {"ip": self.config.ap_ip, "port": self.config.web_port})
+            self._start_web_server()
 
-        # Print connection info
-        print("\n" + "=" * 50)
-        print("WiFi Provisioning Mode Active")
-        print("=" * 50)
-        print(f"Connect to WiFi: {self.ap_ssid}")
-        print(f"Password: {self.config.ap_password}")
-        print(f"Then open: http://{self.config.ap_ip}")
-        print(f"Timeout: {timeout // 60} minutes")
-        print("=" * 50 + "\n")
+            # Print connection info
+            print("\n" + "=" * 50)
+            print("WiFi Provisioning Mode Active")
+            print("=" * 50)
+            print(f"Connect to WiFi: {self.ap_ssid}")
+            print(f"Password: {self.config.ap_password}")
+            print(f"Then open: http://{self.config.ap_ip}")
+            print(f"Timeout: {timeout // 60} minutes")
+            print("=" * 50 + "\n")
 
-        # Wait for credentials or timeout
-        logger.info(f"Waiting for credentials (timeout: {timeout}s)")
-        self._notify_status("waiting_for_credentials", {"timeout": timeout})
-        received = self.credentials_received.wait(timeout=timeout)
+            # Wait for credentials or timeout
+            logger.info(f"Waiting for credentials (timeout: {timeout}s)")
+            self._notify_status("waiting_for_credentials", {"timeout": timeout})
+            received = self.credentials_received.wait(timeout=timeout)
 
-        if self.shutdown_flag.is_set():
-            logger.info("Shutdown requested")
-            self._stop_access_point()
-            self._notify_status("shutdown")
+            if self.shutdown_flag.is_set():
+                logger.info("Shutdown requested")
+                self._notify_status("shutdown")
+                return ProvisioningResult.ERROR
+
+            if not received:
+                logger.warning("Provisioning timed out")
+                self._notify_status("timeout")
+                return ProvisioningResult.TIMEOUT
+
+            # Apply credentials
+            if self.wifi_credentials:
+                ssid = self.wifi_credentials['ssid']
+                password = self.wifi_credentials['password']
+
+                for attempt in range(self.config.max_connection_retries):
+                    logger.info(f"Connection attempt {attempt + 1}/{self.config.max_connection_retries}")
+                    self._notify_status("connecting", {
+                        "ssid": ssid,
+                        "attempt": attempt + 1,
+                        "max_attempts": self.config.max_connection_retries
+                    })
+
+                    if self._apply_wifi_config(ssid, password):
+                        self._notify_status("connected", {"ssid": ssid})
+                        return ProvisioningResult.SUCCESS
+
+                    time.sleep(2)
+
+                logger.error("All connection attempts failed")
+                self._notify_status("connection_failed", {"ssid": ssid})
+                return ProvisioningResult.CONNECTION_FAILED
+
             return ProvisioningResult.ERROR
 
-        if not received:
-            logger.warning("Provisioning timed out")
+        finally:
+            # Always ensure AP is torn down and NM regains control
             self._stop_access_point()
-            self._notify_status("timeout")
-            return ProvisioningResult.TIMEOUT
-
-        # Apply credentials
-        if self.wifi_credentials:
-            ssid = self.wifi_credentials['ssid']
-            password = self.wifi_credentials['password']
-
-            for attempt in range(self.config.max_connection_retries):
-                logger.info(f"Connection attempt {attempt + 1}/{self.config.max_connection_retries}")
-                self._notify_status("connecting", {
-                    "ssid": ssid,
-                    "attempt": attempt + 1,
-                    "max_attempts": self.config.max_connection_retries
-                })
-
-                if self._apply_wifi_config(ssid, password):
-                    self._notify_status("connected", {"ssid": ssid})
-                    return ProvisioningResult.SUCCESS
-
-                time.sleep(2)
-
-            logger.error("All connection attempts failed")
-            self._notify_status("connection_failed", {"ssid": ssid})
-            return ProvisioningResult.CONNECTION_FAILED
-
-        return ProvisioningResult.ERROR
 
     def run(self) -> int:
         """

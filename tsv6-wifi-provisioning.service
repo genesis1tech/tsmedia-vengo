@@ -35,6 +35,9 @@ ExecStart=/home/g1tech/.local/bin/uv run python src/tsv6/services/wifi_provision
 # Allow up to 12 minutes (10 min timeout + 2 min buffer)
 TimeoutStartSec=720
 
+# Clean up AP state if service is killed (hostapd/dnsmasq, interface mode)
+ExecStopPost=-/bin/bash -c 'killall hostapd dnsmasq 2>/dev/null; ip addr flush dev wlan0; iw dev wlan0 set type managed 2>/dev/null; nmcli device set wlan0 managed yes 2>/dev/null; true'
+
 # Don't restart automatically - this is triggered on demand
 Restart=no
 RemainAfterExit=no
