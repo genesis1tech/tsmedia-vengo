@@ -1308,7 +1308,12 @@ class ProductionVideoPlayer:
 
     def _publish_recycle_result(self, barcode: str, transaction_id: str, status: str):
         """
-        Publish recycling verification result to AWS IoT shadow.
+        Publish recycling verification result to AWS IoT.
+
+        Uses a dedicated topic ({thing_name}/recycleResult) instead of the shadow
+        update topic to avoid triggering the barcode Lambda again — publishing to
+        the shadow with a barcode field causes Lambda to respond with another
+        openDoor, creating an infinite loop.
 
         Args:
             barcode: Scanned barcode
@@ -1316,22 +1321,21 @@ class ProductionVideoPlayer:
             status: "recycle_success" or "recycle_unsuccess"
         """
         try:
+            thing_name = self.aws_config["thing_name"]
+            recycle_topic = f"{thing_name}/recycleResult"
+
             result_payload = {
-                "state": {
-                    "reported": {
-                        "thingName": self.aws_config["thing_name"],
-                        "barcode": barcode,
-                        "transactionId": transaction_id,
-                        "recycleStatus": status,
-                        "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
-                        "deviceType": "raspberry-pi"
-                    }
-                }
+                "thingName": thing_name,
+                "barcode": barcode,
+                "transactionId": transaction_id,
+                "recycleStatus": status,
+                "timestampISO": datetime.datetime.utcnow().isoformat() + "Z",
+                "deviceType": "raspberry-pi"
             }
 
             if self.aws_manager and self.aws_manager.connected:
                 success = self.aws_manager.publish_with_retry(
-                    self.aws_manager.shadow_update_topic,
+                    recycle_topic,
                     result_payload
                 )
                 if success:
