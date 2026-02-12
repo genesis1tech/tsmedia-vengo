@@ -43,6 +43,7 @@ from tsv6.monitoring.watchdog_monitor import WatchdogMonitor
 from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineMonitor
 from tsv6.utils.splash_screen import SplashScreen
 from tsv6.services.connection_status_indicator import ConnectionStatusIndicator
+from tsv6.services.sensor_status_indicator import SensorStatusIndicator
 
 # Sleep mode imports
 # Removed for memory-fix branch
@@ -127,6 +128,10 @@ class ProductionVideoPlayer:
         # Connection status indicator overlay
         self.connection_indicator = None
         self.connection_indicator_thread = None
+
+        # Sensor status indicator overlay
+        self.sensor_indicator = None
+        self.sensor_indicator_thread = None
         
         # Initialize systemd recovery manager first (needed for connection deadline monitor)
         self.systemd_recovery = SystemdRecoveryManager(
@@ -256,7 +261,46 @@ class ProductionVideoPlayer:
                 self.connection_indicator.run()
         except Exception as e:
             self.logger.error(f"Connection indicator error: {e}")
-    
+
+    def _initialize_sensor_indicator(self):
+        """Initialize and start status indicator overlay (sensors + network)."""
+        try:
+            # Reuse ConnectionStatusIndicator's network checks
+            net_checker = ConnectionStatusIndicator()
+
+            self.sensor_indicator = SensorStatusIndicator(
+                bin_level_check=lambda: (
+                    self.tof_sensor is not None
+                    and getattr(self.tof_sensor, '_connected', False)
+                ),
+                recycle_check=lambda: (
+                    self.recycle_sensor is not None
+                    and getattr(self.recycle_sensor, '_connected', False)
+                ),
+                network_check=lambda: (
+                    net_checker._check_wifi_status()
+                    or net_checker._check_lte_status()
+                ),
+            )
+            self.sensor_indicator_thread = threading.Thread(
+                target=self._run_sensor_indicator,
+                daemon=True,
+                name="SensorIndicator",
+            )
+            self.sensor_indicator_thread.start()
+            self.logger.info("Status indicator started (sensors + network)")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize status indicator: {e}")
+            self.sensor_indicator = None
+
+    def _run_sensor_indicator(self):
+        """Run the status indicator in a background thread."""
+        try:
+            if self.sensor_indicator:
+                self.sensor_indicator.run()
+        except Exception as e:
+            self.logger.error(f"Status indicator error: {e}")
+
     def _initialize_network_monitor(self):
         """Initialize network monitoring with enhanced recovery integration"""
         try:
@@ -1533,8 +1577,8 @@ class ProductionVideoPlayer:
         self.running = True
         
         try:
-            # Start connection status indicator overlay first
-            self._initialize_connection_indicator()
+            # Start status indicator overlay (sensors + network, lower left)
+            self._initialize_sensor_indicator()
             
             # Start monitoring systems
             if self.network_monitor:
@@ -1629,13 +1673,13 @@ class ProductionVideoPlayer:
         self.shutdown_event.set()
         
         try:
-            # Stop connection status indicator
-            if self.connection_indicator:
+            # Stop status indicator
+            if self.sensor_indicator:
                 try:
-                    self.connection_indicator.stop()
-                    self.logger.info("Connection indicator stopped")
+                    self.sensor_indicator.stop()
+                    self.logger.info("Sensor indicator stopped")
                 except Exception as e:
-                    self.logger.warning(f"Error stopping connection indicator: {e}")
+                    self.logger.warning(f"Error stopping sensor indicator: {e}")
 
             # Stop barcode scanning
             if self.barcode_scanner:
