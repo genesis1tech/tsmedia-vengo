@@ -236,6 +236,29 @@ class TestDebounce:
         assert sensor.was_item_detected() is True
         sensor.cleanup()
 
+    def test_none_does_not_reset_debounce_counter(self, sim_config):
+        """None (data not ready) should NOT reset consecutive detection count"""
+        sim_config.simulation_mode = False
+        sim_config.debounce_count = 2
+
+        with patch(
+            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
+            return_value=True
+        ):
+            sensor = RecycleSensor(config=sim_config)
+
+        # True, None, True — should still trigger detection (None doesn't reset)
+        readings = iter([True, None, True, None, True])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
+            sensor.start_monitoring()
+            detected = sensor.detection_event.wait(timeout=1.0)
+            sensor.stop_monitoring()
+
+        assert detected is True
+        assert sensor.was_item_detected() is True
+        sensor.cleanup()
+
 
 class TestDistanceReading:
     def test_below_threshold_means_object(self, sim_config):
@@ -279,8 +302,8 @@ class TestDistanceReading:
         assert sensor._read_distance() is False
         sensor.cleanup()
 
-    def test_data_not_ready_returns_false(self, sim_config):
-        """When no new data is ready, return False"""
+    def test_data_not_ready_returns_none(self, sim_config):
+        """When no new data is ready, return None (no data, not a detection result)"""
         sim_config.simulation_mode = False
 
         with patch(
@@ -294,11 +317,11 @@ class TestDistanceReading:
         mock_sensor.data_ready = False
         sensor._sensor = mock_sensor
 
-        assert sensor._read_distance() is False
+        assert sensor._read_distance() is None
         sensor.cleanup()
 
-    def test_null_distance_returns_false(self, sim_config):
-        """When sensor returns None distance, return False"""
+    def test_null_distance_returns_none(self, sim_config):
+        """When sensor returns None distance, return None (invalid, not a detection result)"""
         sim_config.simulation_mode = False
 
         with patch(
@@ -313,11 +336,11 @@ class TestDistanceReading:
         mock_sensor.distance = None
         sensor._sensor = mock_sensor
 
-        assert sensor._read_distance() is False
+        assert sensor._read_distance() is None
         sensor.cleanup()
 
-    def test_zero_distance_returns_false(self, sim_config):
-        """When sensor returns 0 distance, return False (invalid reading)"""
+    def test_zero_distance_returns_none(self, sim_config):
+        """When sensor returns 0 distance, return None (invalid reading)"""
         sim_config.simulation_mode = False
 
         with patch(
@@ -332,7 +355,7 @@ class TestDistanceReading:
         mock_sensor.distance = 0
         sensor._sensor = mock_sensor
 
-        assert sensor._read_distance() is False
+        assert sensor._read_distance() is None
         sensor.cleanup()
 
     def test_simulation_mode_returns_false(self, sensor):

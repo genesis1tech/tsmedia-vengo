@@ -196,12 +196,14 @@ class RecycleSensor:
         except Exception as e:
             logger.warning(f"Baseline calibration error: {e}")
 
-    def _read_distance(self) -> bool:
+    def _read_distance(self) -> Optional[bool]:
         """
         Read distance from VL53L1X and determine if object is present.
 
         Returns:
-            True if object detected (distance < threshold), False otherwise.
+            True if object detected (distance < threshold),
+            False if no object (distance >= threshold),
+            None if no data ready yet (sensor still ranging).
         """
         if self.config.simulation_mode:
             return False
@@ -215,8 +217,13 @@ class RecycleSensor:
                 self._sensor.clear_interrupt()
                 if distance_cm is not None and distance_cm > 0:
                     distance_mm = int(distance_cm * 10)
-                    return distance_mm < self.config.detection_threshold_mm
-            return False
+                    detected = distance_mm < self.config.detection_threshold_mm
+                    logger.debug(f"ToF: {distance_mm}mm {'< ' if detected else '>='}{self.config.detection_threshold_mm}mm")
+                    return detected
+                else:
+                    logger.debug(f"ToF invalid reading: {distance_cm}")
+                    return None
+            return None
         except Exception as e:
             logger.error(f"Failed to read distance: {e}")
             return False
@@ -280,7 +287,9 @@ class RecycleSensor:
         consecutive_detections = 0
 
         while not self._stop_monitoring_flag.is_set():
-            if self._read_distance():
+            result = self._read_distance()
+
+            if result is True:
                 consecutive_detections += 1
 
                 if consecutive_detections >= self.config.debounce_count:
@@ -297,8 +306,10 @@ class RecycleSensor:
                                 self.on_detection()
                             except Exception as e:
                                 logger.error(f"Detection callback error: {e}")
-            else:
+            elif result is False:
+                # Actual above-threshold reading — reset counter
                 consecutive_detections = 0
+            # result is None — no data ready, keep counter as-is
 
             time.sleep(self.config.poll_interval)
 
