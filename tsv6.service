@@ -81,8 +81,9 @@ EnvironmentFile=-/run/tsv6-network-adapter.env
 # LTE Configuration (Hologram.io) — only used when TSV6_NETWORK_ADAPTER=4g-lte
 Environment="TSV6_LTE_APN=hologram"
 
-# Recycle verification IR sensor (M5Stack U175)
-Environment="TSV6_RECYCLE_SENSOR_GPIO=17"
+# Recycle verification ToF sensor (M5Stack ToF4M / VL53L1X on I2C bus 2)
+Environment="TSV6_RECYCLE_SENSOR_I2C_BUS=2"
+Environment="TSV6_RECYCLE_SENSOR_THRESHOLD_MM=110"
 Environment="TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05"
 Environment="TSV6_RECYCLE_SENSOR_SIMULATION=false"
 Environment="TSV6_RECYCLE_SENSOR_DEBOUNCE=2"

@@ -1,9 +1,10 @@
 """
-Infrared Recycling Verification Sensor
+ToF-Based Recycling Verification Sensor
 
-M5Stack U175 IR Emitter + Receiver Unit connected via GPIO.
-- Digital output: configurable active-low (default) or active-high
-- GPIO pin: BCM 17 (configurable via TSV6_RECYCLE_SENSOR_GPIO)
+M5Stack ToF4M unit (U172, VL53L1X chip) connected via I2C bus 3.
+- I2C bus 2: GPIO 4 (SDA), GPIO 5 (SCL)
+- I2C address: 0x29 (default)
+- Detection: distance below configurable threshold = item present
 
 The sensor monitors for item deposit during the door open cycle:
 - Starts AFTER servo reaches fully open position (avoids door motion false positives)
@@ -13,7 +14,7 @@ The sensor monitors for item deposit during the door open cycle:
 
 import logging
 import os
-import subprocess
+import statistics
 import threading
 import time
 from dataclasses import dataclass
@@ -21,6 +22,13 @@ from enum import Enum
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+try:
+    import adafruit_vl53l1x
+    from adafruit_extended_bus import ExtendedI2C
+    VL53L1X_AVAILABLE = True
+except ImportError:
+    VL53L1X_AVAILABLE = False
 
 
 class SensorState(Enum):
@@ -34,25 +42,28 @@ class SensorState(Enum):
 
 @dataclass
 class RecycleSensorConfig:
-    """Configuration for recycling verification sensor"""
-    gpio_pin: int = 17  # BCM GPIO pin
-    poll_interval: float = 0.05  # 50ms polling interval
-    active_low: bool = True  # Sensor outputs LOW when object detected
+    """Configuration for ToF-based recycling verification sensor"""
+    i2c_bus: int = 2                      # I2C bus number (/dev/i2c-2)
+    i2c_address: int = 0x29               # VL53L1X default address
+    poll_interval: float = 0.05           # 50ms polling interval
+    detection_threshold_mm: int = 110     # Item detected if distance < this
+    distance_mode: int = 1                # 1=short (~136cm), 2=long (~360cm)
+    timing_budget_ms: int = 50            # Ranging duration in ms
     simulation_mode: bool = False
-    # Debounce: require N consecutive readings to confirm detection
-    debounce_count: int = 2
+    debounce_count: int = 2               # Consecutive readings for confirmation
+    baseline_sample_count: int = 5        # Samples for auto-calibration
 
 
 class RecycleSensor:
     """
-    Infrared sensor for verifying item deposit into recycling bin.
+    VL53L1X ToF sensor for verifying item deposit into recycling bin.
 
-    Uses M5Stack U175 IR Emitter + Receiver Unit.
-    Digital output monitored via GPIO.
+    Uses M5Stack ToF4M unit (U172) on I2C bus 3.
+    Measures distance and detects items below a configurable threshold.
 
     Lifecycle:
         1. start_monitoring() - Called after servo fully opens door
-        2. Sensor polls GPIO continuously in background
+        2. Sensor polls distance continuously in background
         3. detection_event is set when item detected (allows wait with timeout)
         4. stop_monitoring() - Called before servo begins closing
         5. Check was_item_detected() for result
@@ -79,78 +90,135 @@ class RecycleSensor:
         # Public event for callers to wait on detection with timeout
         self.detection_event = threading.Event()
 
-        # Setup GPIO on init
+        # I2C/sensor handles
+        self._i2c = None
+        self._sensor = None
+        self._connected = False
+
+        # Baseline distance (auto-calibrated on connect)
+        self._baseline_distance_mm: Optional[int] = None
+
+        # Force simulation if library not available
+        if not VL53L1X_AVAILABLE and not self.config.simulation_mode:
+            logger.warning(
+                "adafruit-circuitpython-vl53l1x not available - "
+                "forcing simulation mode"
+            )
+            self.config.simulation_mode = True
+
+        # Auto-connect on init
         if not self.config.simulation_mode:
-            self._setup_gpio()
+            self._connect_sensor()
 
         logger.info(
-            f"RecycleSensor initialized on GPIO{self.config.gpio_pin} "
-            f"(simulation={self.config.simulation_mode})"
+            f"RecycleSensor initialized (i2c_bus={self.config.i2c_bus}, "
+            f"threshold={self.config.detection_threshold_mm}mm, "
+            f"simulation={self.config.simulation_mode})"
         )
 
     def _load_from_env(self):
         """Load configuration from environment variables"""
-        if pin := os.environ.get('TSV6_RECYCLE_SENSOR_GPIO'):
-            self.config.gpio_pin = int(pin)
-        if interval := os.environ.get('TSV6_RECYCLE_SENSOR_POLL_INTERVAL'):
-            self.config.poll_interval = float(interval)
-        if sim := os.environ.get('TSV6_RECYCLE_SENSOR_SIMULATION'):
-            self.config.simulation_mode = sim.lower() in ('true', '1', 'yes')
-        if debounce := os.environ.get('TSV6_RECYCLE_SENSOR_DEBOUNCE'):
-            self.config.debounce_count = int(debounce)
+        env_map = {
+            'TSV6_RECYCLE_SENSOR_I2C_BUS': ('i2c_bus', int),
+            'TSV6_RECYCLE_SENSOR_I2C_ADDRESS': ('i2c_address', lambda v: int(v, 0)),
+            'TSV6_RECYCLE_SENSOR_POLL_INTERVAL': ('poll_interval', float),
+            'TSV6_RECYCLE_SENSOR_THRESHOLD_MM': ('detection_threshold_mm', int),
+            'TSV6_RECYCLE_SENSOR_DISTANCE_MODE': ('distance_mode', int),
+            'TSV6_RECYCLE_SENSOR_TIMING_BUDGET': ('timing_budget_ms', int),
+            'TSV6_RECYCLE_SENSOR_SIMULATION': (
+                'simulation_mode',
+                lambda v: v.lower() in ('true', '1', 'yes')
+            ),
+            'TSV6_RECYCLE_SENSOR_DEBOUNCE': ('debounce_count', int),
+        }
+        for env_key, (attr, converter) in env_map.items():
+            val = os.environ.get(env_key)
+            if val is not None:
+                try:
+                    setattr(self.config, attr, converter(val))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid value for {env_key}={val}: {e}")
 
-    def _setup_gpio(self) -> bool:
-        """Configure GPIO pin as input with pull-up"""
+    def _connect_sensor(self) -> bool:
+        """Initialize I2C bus and VL53L1X sensor."""
+        if self.config.simulation_mode:
+            self._connected = True
+            return True
+
         try:
-            gpio = self.config.gpio_pin
-            result = subprocess.run(
-                ['pinctrl', 'set', str(gpio), 'ip', 'pu'],
-                capture_output=True,
-                text=True,
-                timeout=5
+            self._i2c = ExtendedI2C(self.config.i2c_bus)
+            self._sensor = adafruit_vl53l1x.VL53L1X(
+                self._i2c, address=self.config.i2c_address
             )
-            if result.returncode == 0:
-                logger.info(f"GPIO{gpio} configured as input with pull-up")
-                return True
-            else:
-                logger.error(f"GPIO setup failed: {result.stderr}")
-                return False
-        except FileNotFoundError:
-            logger.warning("pinctrl not found - may not be on Raspberry Pi")
-            return False
+            self._sensor.distance_mode = self.config.distance_mode
+            self._sensor.timing_budget = self.config.timing_budget_ms
+            self._connected = True
+            logger.info(
+                f"VL53L1X connected on i2c-{self.config.i2c_bus} "
+                f"at 0x{self.config.i2c_address:02x}"
+            )
+
+            # Auto-calibrate baseline
+            self._calibrate_baseline()
+            return True
         except Exception as e:
-            logger.error(f"Failed to setup GPIO: {e}")
+            logger.error(f"Failed to connect VL53L1X: {e}")
+            self._connected = False
             return False
 
-    def _read_gpio(self) -> bool:
+    def _calibrate_baseline(self):
+        """Read empty chute distance to establish baseline for diagnostics."""
+        try:
+            samples = []
+            self._sensor.start_ranging()
+            for _ in range(self.config.baseline_sample_count):
+                timeout_start = time.monotonic()
+                while not self._sensor.data_ready:
+                    if time.monotonic() - timeout_start > 1.0:
+                        break
+                    time.sleep(0.01)
+                if self._sensor.data_ready:
+                    dist_cm = self._sensor.distance
+                    self._sensor.clear_interrupt()
+                    if dist_cm is not None and dist_cm > 0:
+                        samples.append(int(dist_cm * 10))  # cm → mm
+                time.sleep(0.05)
+            self._sensor.stop_ranging()
+
+            if samples:
+                self._baseline_distance_mm = int(statistics.median(samples))
+                logger.info(
+                    f"Baseline calibrated: {self._baseline_distance_mm}mm "
+                    f"({len(samples)} samples)"
+                )
+            else:
+                logger.warning("Baseline calibration failed - using threshold only")
+        except Exception as e:
+            logger.warning(f"Baseline calibration error: {e}")
+
+    def _read_distance(self) -> bool:
         """
-        Read GPIO pin state.
+        Read distance from VL53L1X and determine if object is present.
 
         Returns:
-            True if object detected, False otherwise
+            True if object detected (distance < threshold), False otherwise.
         """
         if self.config.simulation_mode:
             return False
 
+        if not self._connected or self._sensor is None:
+            return False
+
         try:
-            gpio = self.config.gpio_pin
-            result = subprocess.run(
-                ['pinctrl', 'get', str(gpio)],
-                capture_output=True,
-                text=True,
-                timeout=1
-            )
-
-            output = result.stdout.lower()
-            is_high = 'hi' in output or 'level=1' in output
-
-            if self.config.active_low:
-                return not is_high  # Object detected when LOW
-            else:
-                return is_high  # Object detected when HIGH
-
+            if self._sensor.data_ready:
+                distance_cm = self._sensor.distance
+                self._sensor.clear_interrupt()
+                if distance_cm is not None and distance_cm > 0:
+                    distance_mm = int(distance_cm * 10)
+                    return distance_mm < self.config.detection_threshold_mm
+            return False
         except Exception as e:
-            logger.error(f"Failed to read GPIO: {e}")
+            logger.error(f"Failed to read distance: {e}")
             return False
 
     @property
@@ -190,6 +258,13 @@ class RecycleSensor:
         self._stop_monitoring_flag.clear()
         self._set_state(SensorState.MONITORING)
 
+        # Start VL53L1X continuous ranging
+        if self._connected and self._sensor and not self.config.simulation_mode:
+            try:
+                self._sensor.start_ranging()
+            except Exception as e:
+                logger.error(f"Failed to start ranging: {e}")
+
         self._monitor_thread = threading.Thread(
             target=self._monitoring_loop,
             name="RecycleSensor-Monitor",
@@ -205,7 +280,7 @@ class RecycleSensor:
         consecutive_detections = 0
 
         while not self._stop_monitoring_flag.is_set():
-            if self._read_gpio():
+            if self._read_distance():
                 consecutive_detections += 1
 
                 if consecutive_detections >= self.config.debounce_count:
@@ -242,6 +317,13 @@ class RecycleSensor:
 
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=1.0)
+
+        # Stop VL53L1X ranging
+        if self._connected and self._sensor and not self.config.simulation_mode:
+            try:
+                self._sensor.stop_ranging()
+            except Exception as e:
+                logger.error(f"Failed to stop ranging: {e}")
 
         if self._item_detected:
             self._set_state(SensorState.DETECTED)
@@ -284,11 +366,20 @@ class RecycleSensor:
     def cleanup(self):
         """Cleanup resources"""
         self.stop_monitoring()
+        self._connected = False
+        if self._i2c:
+            try:
+                self._i2c.deinit()
+            except Exception:
+                pass
+            self._i2c = None
+        self._sensor = None
         logger.info("RecycleSensor cleaned up")
 
     def __repr__(self) -> str:
         return (
-            f"RecycleSensor(gpio={self.config.gpio_pin}, "
+            f"RecycleSensor(i2c_bus={self.config.i2c_bus}, "
+            f"threshold={self.config.detection_threshold_mm}mm, "
             f"state={self._state.value}, "
             f"detected={self._item_detected})"
         )

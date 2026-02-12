@@ -739,7 +739,7 @@ class ProductionVideoPlayer:
             self.error_recovery.report_error("servo_controller", "initialization", str(e), "medium")
 
     def _initialize_recycle_sensor(self):
-        """Initialize infrared sensor for recycling verification"""
+        """Initialize ToF sensor for recycling verification"""
         try:
             if RECYCLE_SENSOR_AVAILABLE:
                 sensor_config = RecycleSensorConfig(
@@ -1190,14 +1190,14 @@ class ProductionVideoPlayer:
                 )
                 door_open_thread.start()
 
-            # 2. Start IR monitoring early — at ~50% of door movement (~1 second in)
+            # 2. Start ToF monitoring early — at ~50% of door movement (~1 second in)
             #    This gives the sensor a head start so it doesn't miss fast deposits
             item_detected = False
             if self.recycle_sensor:
                 if door_open_thread:
                     time.sleep(1.0)  # Wait for door to be ~50% open
                 self.recycle_sensor.start_monitoring()
-                print("   IR sensor monitoring started — waiting for item deposit...")
+                print("   ToF sensor monitoring started — waiting for item deposit...")
 
                 # 3. Wait for door to finish opening (remaining movement)
                 if door_open_thread:
@@ -1210,7 +1210,7 @@ class ProductionVideoPlayer:
                 self.recycle_sensor.stop_monitoring()
 
                 if item_detected:
-                    print("   Item detected by IR sensor!")
+                    print("   Item detected by ToF sensor!")
                     # Safety delay — let user pull hand out before door closes
                     time.sleep(1.0)
                 else:
