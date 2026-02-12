@@ -1190,20 +1190,17 @@ class ProductionVideoPlayer:
                 )
                 door_open_thread.start()
 
-            # 2. Start ToF monitoring early — at ~50% of door movement (~1 second in)
-            #    This gives the sensor a head start so it doesn't miss fast deposits
+            # 2. Wait for door to fully open, then start ToF monitoring
             item_detected = False
             if self.recycle_sensor:
                 if door_open_thread:
-                    time.sleep(1.0)  # Wait for door to be ~50% open
+                    door_open_thread.join(timeout=5.0)
+
+                # 3. Start monitoring after door is fully open
                 self.recycle_sensor.start_monitoring()
                 print("   ToF sensor monitoring started — waiting for item deposit...")
 
-                # 3. Wait for door to finish opening (remaining movement)
-                if door_open_thread:
-                    door_open_thread.join(timeout=5.0)
-
-                # 4. Wait for detection OR 3-second timeout (after door fully open)
+                # 4. Wait for detection OR 3-second timeout
                 item_detected = self.recycle_sensor.detection_event.wait(timeout=3.0)
 
                 # 5. Stop monitoring before door closes
