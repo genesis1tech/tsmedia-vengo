@@ -18,9 +18,12 @@ dependencies = [
     "qrcode>=8.2",
     "requests>=2.32.5",
     "rpi-gpio>=0.7.1; sys_platform == 'linux'",  # Reserved for future sensor updates
+    "lgpio>=0.2.2.0; sys_platform == 'linux'",  # GPIO access for Blinka on Pi 5 (BCM2712)
     "adafruit-blinka>=8.0.0; sys_platform == 'linux'",  # Hardware abstraction for Raspberry Pi (board, busio)
     "adafruit-circuitpython-pca9685>=3.4.0; sys_platform == 'linux'",  # PCA9685 PWM servo controller
-    "adafruit-circuitpython-vl53l0x>=1.2.0; sys_platform == 'linux'",  # VL53L0X ToF distance sensor
+    "adafruit-circuitpython-vl53l0x>=1.2.0; sys_platform == 'linux'",  # VL53L0X ToF distance sensor (bin level)
+    "adafruit-circuitpython-vl53l1x>=1.1.0; sys_platform == 'linux'",  # VL53L1X ToF distance sensor (recycling verification)
+    "adafruit-extended-bus>=1.0.0; sys_platform == 'linux'",  # Extended I2C bus selection (non-default buses)
 ]
 
 [project.optional-dependencies]

@@ -114,6 +114,7 @@ src/tsv6/
 │   │   ├── __init__.py       # NFCEmulator export
 │   │   ├── nfc_emulator.py   # NFC tag emulation (PN532)
 │   │   └── nfc_reader.py     # NFC card reader (PN532)
+│   ├── recycle_sensor.py     # ToF sensor for item deposit verification
 │   ├── display_driver_monitor.py
 │   └── display_fix.py
 │
@@ -246,6 +247,23 @@ src/tsv6/
 - `connection_status_indicator.py`: Colored dot overlay (green=LTE, blue=WiFi, red=none)
 - `obstruction_handler.py`: Fullscreen UI for door obstructions
 - `wifi_provisioning_ui.py`: QR code provisioning guide
+
+**13. Recycling Verification Sensor** (`src/tsv6/hardware/recycle_sensor.py`)
+- M5Stack ToF4M unit (U172, VL53L1X chip) on I2C bus 2 (GPIO 4=SDA, GPIO 5=SCL)
+- Two-step recycling verification: scan barcode + physically deposit item
+- **Detection**: Measures distance; if reading < configurable threshold (default 110mm), item detected
+- **Transaction Flow**:
+  1. User scans barcode → publish to AWS → show processing image
+  2. AWS responds "openDoor" → show "Please Deposit Your Item" screen
+  3. Door opens → ToF sensor monitors for item (3-second window)
+  4. If item detected → close door → show product image + QR + NFC → publish `recycle_success`
+  5. If no item → close door → show "Item Not Detected" error → publish `recycle_unsuccess`
+- ToF monitoring starts AFTER door fully opens, stops BEFORE door closes (avoids door motion false positives)
+- I2C bus 2 via `adafruit-extended-bus` ExtendedI2C(2) — requires `dtoverlay=i2c2-pi5` in boot config
+- Auto-calibrates baseline (empty chute distance) on sensor connect
+- Distance-based debounce (2 consecutive readings below threshold, default)
+- Simulation mode for testing: `TSV6_RECYCLE_SENSOR_SIMULATION=true`
+- Graceful fallback: if sensor unavailable, items are accepted without physical verification
 
 ### Key Design Patterns
 
@@ -432,6 +450,18 @@ NFC_SERIAL_PORT=/dev/ttyUSB5     # PN532 serial port
 NFC_BASE_URL=tsrewards--test.expo.app  # Base URL for NFC tags
 ```
 
+**Recycle Verification Sensor Configuration**:
+```bash
+TSV6_RECYCLE_SENSOR_I2C_BUS=2            # I2C bus number (dtoverlay=i2c2-pi5 required)
+TSV6_RECYCLE_SENSOR_I2C_ADDRESS=0x29     # VL53L1X I2C address
+TSV6_RECYCLE_SENSOR_THRESHOLD_MM=110     # Distance threshold for detection (mm)
+TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05   # 50ms polling interval
+TSV6_RECYCLE_SENSOR_SIMULATION=false     # Simulation mode for testing
+TSV6_RECYCLE_SENSOR_DEBOUNCE=2           # Consecutive readings for confirmation
+TSV6_RECYCLE_SENSOR_DISTANCE_MODE=1      # 1=short (~136cm), 2=long (~360cm)
+TSV6_RECYCLE_SENSOR_TIMING_BUDGET=50     # Ranging duration in ms
+```
+
 ## Troubleshooting
 
 **Memory Issues:**
@@ -485,6 +515,16 @@ NFC_BASE_URL=tsrewards--test.expo.app  # Base URL for NFC tags
 - Check connection status indicator: should show colored dot (green=LTE, blue=WiFi)
 - Force WiFi-only: set `TSV6_CONNECTIVITY_MODE=wifi_only` in service file
 - Check connection tracker: look for uptime percentage in logs
+
+**Recycle Verification Sensor Issues:**
+- Enable I2C bus 2: add `dtoverlay=i2c2-pi5` to `/boot/firmware/config.txt` and reboot
+- Verify I2C bus: `i2cdetect -y 2` (should show device at 0x29)
+- Check sensor initialized: look for `RecycleSensor initialized (i2c_bus=2` in logs
+- Check baseline calibration: look for `Baseline calibrated:` in startup logs
+- If "Item Not Detected" always shows: verify `TSV6_RECYCLE_SENSOR_THRESHOLD_MM` matches actual chute depth
+- If sensor not available: check import error in logs, sensor falls back to accepting without verification
+- Simulation mode: set `TSV6_RECYCLE_SENSOR_SIMULATION=true` to bypass hardware
+- Test sensor directly: `python -c "from tsv6.hardware.recycle_sensor import RecycleSensor; s = RecycleSensor(); s.start_monitoring(); import time; time.sleep(3); print(s.stop_monitoring())"`
 
 ## Development Tips
 

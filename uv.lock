@@ -115,6 +115,28 @@ wheels = [
 ]
 
 [[package]]
+name = "adafruit-circuitpython-vl53l1x"
+version = "1.2.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka" },
+    { name = "adafruit-circuitpython-busdevice" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/82/e2/02e75dfeec38982240e179aa02681cba1331172a1ca7fee644b97afa6013/adafruit_circuitpython_vl53l1x-1.2.7.tar.gz", hash = "sha256:6f9531f369ac99eead799a59d2e894bb37c90e910a8cf9651be1d659fd533496", size = 28826, upload-time = "2025-10-29T17:23:00.549Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/98/8467185dbd2d3531f3ae4453aeb049a0974d2fa09004b65a27772d596028/adafruit_circuitpython_vl53l1x-1.2.7-py3-none-any.whl", hash = "sha256:3ff0865344ca9b6adc512ae78d26de91aa805168e5cb2f80d7d711ba05b451f5", size = 8367, upload-time = "2025-10-29T17:22:59.526Z" },
+]
+
+[[package]]
+name = "adafruit-extended-bus"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/1c/26ccaf2d7a3fd3d16504173df591973b9f1de5520b0b4d81af038b9e4ed3/adafruit-extended-bus-1.0.2.tar.gz", hash = "sha256:f34e3c114e274e5aa475673794019af1ab438df6e45141e16201b6a8c4bea3ea", size = 18966, upload-time = "2021-06-14T15:03:48.711Z" }
+
+[[package]]
 name = "adafruit-platformdetect"
 version = "3.85.0"
 source = { registry = "https://pypi.org/simple" }
@@ -422,6 +444,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c72f3e33cef02e048281fec7ecec5f032d4aac52226b/jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d", size = 245115, upload-time = "2025-03-05T20:05:02.478Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67", size = 134899, upload-time = "2025-03-05T20:05:00.369Z" },
+]
+
+[[package]]
+name = "lgpio"
+version = "0.2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/33/26ec2e8049eaa2f077bf23a12dc61ca559fbfa7bea0516bf263d657ae275/lgpio-0.2.2.0.tar.gz", hash = "sha256:11372e653b200f76a0b3ef8a23a0735c85ec678a9f8550b9893151ed0f863fff", size = 90087, upload-time = "2024-03-29T21:59:55.901Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/4e/5721ae44b29e4fe9175f68c881694e3713066590739a7c87f8cee2835c25/lgpio-0.2.2.0-cp311-cp311-linux_armv7l.whl", hash = "sha256:5b3c403e1fba9c17d178f1bde102726c548fc5c4fc1ccf5ec3e18f3c08e07e04", size = 382992, upload-time = "2024-03-29T22:00:45.039Z" },
+    { url = "https://files.pythonhosted.org/packages/88/53/e57a22fe815fc68d0991655c1105b8ed872a68491d32e4e0e7d10ffb5c4d/lgpio-0.2.2.0-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:a2f71fb95b149d8ac82c7c6bae70f054f6dc42a006ad35c90c7d8e54921fbcf4", size = 364848, upload-time = "2024-04-01T22:49:45.889Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/71/11f4e3d76400e4ca43f9f9b014f5a86d9a265340c0bea45cce037277eb34/lgpio-0.2.2.0-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:e9f4f3915abe5ae0ffdb4b96f485076d80a663876d839e2d3fd9218a71b9873e", size = 370183, upload-time = "2024-04-13T14:08:14.139Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/73/e56c9afb845df53492d42bdea01df9895272bccfdd5128f34719c3a07990/lgpio-0.2.2.0-cp312-cp312-linux_armv7l.whl", hash = "sha256:6c65ac42e878764d04a71ed12fe6d46089b36e9e8127722bf29bb2e4bc91de22", size = 383956, upload-time = "2024-03-29T22:00:47.315Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/1c/becd00f66d2c65feed9a668ff9d91732394cb6baba7bec505d55de0e30c9/lgpio-0.2.2.0-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:d907db79292c721c605af08187385ddb3b7af09907e1ffca56cf0cd6558ace0a", size = 366058, upload-time = "2024-04-01T22:49:47.615Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/7a/e3b4e5225c9792c4092b2cc07504746acbe62d0a8e4cb023bdf65f6430cf/lgpio-0.2.2.0-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:2aadff092f642fcdada8457c158f87259dfda3a89ec19bae0b99ff22b34aac4b", size = 372103, upload-time = "2024-04-13T14:08:16.351Z" },
 ]
 
 [[package]]
@@ -840,10 +876,13 @@ dependencies = [
     { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
     { name = "adafruit-circuitpython-pca9685", marker = "sys_platform == 'linux'" },
     { name = "adafruit-circuitpython-vl53l0x", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-vl53l1x", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-extended-bus", marker = "sys_platform == 'linux'" },
     { name = "awscrt" },
     { name = "awsiotsdk" },
     { name = "dbus-python", marker = "sys_platform == 'linux'" },
     { name = "flask" },
+    { name = "lgpio", marker = "sys_platform == 'linux'" },
     { name = "pillow" },
     { name = "psutil" },
     { name = "pygame" },
@@ -868,10 +907,13 @@ requires-dist = [
     { name = "adafruit-blinka", marker = "sys_platform == 'linux'", specifier = ">=8.0.0" },
     { name = "adafruit-circuitpython-pca9685", marker = "sys_platform == 'linux'", specifier = ">=3.4.0" },
     { name = "adafruit-circuitpython-vl53l0x", marker = "sys_platform == 'linux'", specifier = ">=1.2.0" },
+    { name = "adafruit-circuitpython-vl53l1x", marker = "sys_platform == 'linux'", specifier = ">=1.1.0" },
+    { name = "adafruit-extended-bus", marker = "sys_platform == 'linux'", specifier = ">=1.0.0" },
     { name = "awscrt", specifier = ">=0.27.4" },
     { name = "awsiotsdk", specifier = ">=1.24.0" },
     { name = "dbus-python", marker = "sys_platform == 'linux'", specifier = ">=1.3.2" },
     { name = "flask", specifier = ">=3.0.0" },
+    { name = "lgpio", marker = "sys_platform == 'linux'", specifier = ">=0.2.2.0" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pygame", specifier = ">=2.6.1" },

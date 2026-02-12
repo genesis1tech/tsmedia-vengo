@@ -109,6 +109,11 @@ class OptimizedBarcodeScanner:
         self.publish_thread = None
         self.current_transaction_id = None
 
+        # Barcode cooldown — prevent the same barcode from being processed twice rapidly
+        self._last_barcode = None
+        self._last_barcode_time = 0.0
+        self._barcode_cooldown_secs = 10.0  # Ignore same barcode within 10 seconds
+
         # Thread-safe queue for barcode processing
         self.barcode_queue = queue.Queue(maxsize=100)
 
@@ -269,9 +274,18 @@ class OptimizedBarcodeScanner:
                             # Skip putting QR codes in the queue for AWS publishing
                             continue
 
+                    # Cooldown: ignore same barcode within cooldown window
+                    now = time.time()
+                    if (barcode_data == self._last_barcode and
+                            (now - self._last_barcode_time) < self._barcode_cooldown_secs):
+                        print(f"Duplicate barcode within {self._barcode_cooldown_secs}s cooldown, ignoring")
+                        continue
+                    self._last_barcode = barcode_data
+                    self._last_barcode_time = now
+
                     # Stop any running NFC emulation (new scan supersedes previous)
                     if self.nfc_emulator and self.nfc_emulator.is_running():
-                        print("🛑 Stopping previous NFC broadcast (new scan)")
+                        print("Stopping previous NFC broadcast (new scan)")
                         self.nfc_emulator.stop_emulation()
 
                     # Put barcode (not QR) in queue immediately (non-blocking)
@@ -1841,6 +1855,200 @@ class EnhancedVideoPlayer:
                         self.play_current_video(restart=True)
                 except Exception as restart_error:
                     print(f"❌ Failed to restart video after processing overlay error: {restart_error}")
+
+    def display_deposit_waiting(self):
+        """
+        Display "Please Deposit Your Item" screen while waiting for IR sensor detection.
+
+        Shown after AWS confirms barcode is valid (openDoor) and before door fully opens.
+        Replaced by product image (success) or failure message (no detection).
+        """
+        if not self.root:
+            return
+
+        print("Displaying deposit waiting overlay...")
+        self.root.after(0, self._show_deposit_waiting_overlay)
+
+    def _show_deposit_waiting_overlay(self):
+        """Show the deposit waiting overlay on the main thread"""
+        try:
+            # Hide processing image if still showing
+            self._hide_processing_overlay()
+
+            # Pause video if playing
+            if self.is_playing:
+                self._pause_video_for_overlay()
+
+            # Destroy any existing overlays
+            if self.image_overlay:
+                self.image_overlay.destroy()
+                self.image_overlay = None
+
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+
+            self.image_overlay = tk.Toplevel(self.root)
+            self.image_overlay.attributes('-topmost', True)
+            self.image_overlay.overrideredirect(True)
+            self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
+            self.image_overlay.configure(bg='#1a1a2e', cursor="none")
+
+            container = tk.Frame(self.image_overlay, bg='#1a1a2e')
+            container.pack(expand=True, fill='both')
+
+            # Arrow-down icon
+            icon_label = tk.Label(
+                container,
+                text="\u2193",
+                font=('Arial', 100, 'bold'),
+                fg='#3498db',
+                bg='#1a1a2e'
+            )
+            icon_label.pack(pady=(80, 20))
+
+            title_label = tk.Label(
+                container,
+                text="Please Deposit Your Item",
+                font=('Arial', 36, 'bold'),
+                fg='#ffffff',
+                bg='#1a1a2e'
+            )
+            title_label.pack(pady=(0, 30))
+
+            instruction_label = tk.Label(
+                container,
+                text="Place the item in the bin now",
+                font=('Arial', 22),
+                fg='#b0b0b0',
+                bg='#1a1a2e',
+                justify='center'
+            )
+            instruction_label.pack(pady=(0, 40))
+
+            self.image_overlay.update()
+            self.is_showing_image = True
+
+            print("Deposit waiting overlay displayed")
+
+        except Exception as e:
+            logging.error(f"Failed to display deposit waiting overlay: {e}")
+            print(f"Error displaying deposit waiting overlay: {e}")
+
+    def hide_deposit_waiting(self):
+        """
+        Hide the deposit waiting overlay.
+
+        Does NOT resume video — the next overlay (product image or failure)
+        will handle video state.
+        """
+        if not self.root:
+            return
+
+        self.root.after(0, self._hide_deposit_waiting_overlay)
+
+    def _hide_deposit_waiting_overlay(self):
+        """Hide deposit waiting overlay on the main thread"""
+        try:
+            if self.image_overlay:
+                self.image_overlay.destroy()
+                self.image_overlay = None
+
+            self.is_showing_image = False
+            print("Deposit waiting overlay hidden")
+
+        except Exception as e:
+            print(f"Error hiding deposit waiting overlay: {e}")
+            self.is_showing_image = False
+
+    def display_recycle_failure(self, duration: float = 5.0):
+        """
+        Display "Item not detected" failure message on screen.
+
+        Called when barcode was scanned but sensor did not detect item
+        deposited before door closed.
+
+        Args:
+            duration: How long to show message (seconds)
+        """
+        if not self.root:
+            return
+
+        print("Displaying recycle failure overlay...")
+        self.root.after(0, self._show_recycle_failure_overlay, duration)
+
+    def _show_recycle_failure_overlay(self, duration: float):
+        """Show recycle failure overlay on the main thread"""
+        try:
+            # Pause video if playing
+            if self.is_playing:
+                self._pause_video_for_overlay()
+
+            # Destroy any existing overlays
+            if self.image_overlay:
+                self.image_overlay.destroy()
+                self.image_overlay = None
+
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+
+            self.image_overlay = tk.Toplevel(self.root)
+            self.image_overlay.attributes('-topmost', True)
+            self.image_overlay.overrideredirect(True)
+            self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
+            self.image_overlay.configure(bg='#1a1a2e', cursor="none")
+
+            container = tk.Frame(self.image_overlay, bg='#1a1a2e')
+            container.pack(expand=True, fill='both')
+
+            # Red X icon
+            icon_label = tk.Label(
+                container,
+                text="X",
+                font=('Arial', 120, 'bold'),
+                fg='#e74c3c',
+                bg='#1a1a2e'
+            )
+            icon_label.pack(pady=(80, 20))
+
+            title_label = tk.Label(
+                container,
+                text="Item Not Detected",
+                font=('Arial', 36, 'bold'),
+                fg='#ffffff',
+                bg='#1a1a2e'
+            )
+            title_label.pack(pady=(0, 20))
+
+            instruction_label = tk.Label(
+                container,
+                text="Please scan again",
+                font=('Arial', 24),
+                fg='#b0b0b0',
+                bg='#1a1a2e',
+                justify='center'
+            )
+            instruction_label.pack(pady=(0, 40))
+
+            self.image_overlay.update()
+            self.is_showing_image = True
+
+            # Auto-hide and resume video after duration
+            self.image_display_timer = self.root.after(
+                int(duration * 1000),
+                self._hide_image_overlay
+            )
+
+            print("Recycle failure overlay displayed")
+
+        except Exception as e:
+            logging.error(f"Failed to display recycle failure: {e}")
+            print(f"Error displaying failure overlay: {e}")
+            try:
+                if self.video_files and self.video_was_playing:
+                    self.is_playing = True
+                    self.play_current_video(restart=True)
+            except Exception:
+                pass
 
     def _cleanup_current_media(self):
         """Clean up current media resources, keep player for efficiency"""
