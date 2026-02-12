@@ -37,7 +37,7 @@ class BinLevelMonitorConfig:
     """Configuration for bin level monitoring."""
     check_interval_secs: float = 1800.0   # 30 minutes
     startup_delay_secs: float = 30.0      # Let system stabilize first
-    full_distance_mm: int = 150           # Items within 150mm = full
+    full_distance_mm: int = 205           # Items within 205mm = full (100%)
     empty_distance_mm: int = 800          # Bin depth from sensor to bottom
     max_consecutive_failures: int = 3
 

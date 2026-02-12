@@ -536,7 +536,7 @@ class ProductionConfigManager:
         return {
             "enabled": os.getenv("TSV6_TOF_ENABLED", "false").lower() in ("true", "1", "yes"),
             "empty_distance_mm": int(os.getenv("TSV6_TOF_EMPTY_DISTANCE", "800")),
-            "full_distance_mm": int(os.getenv("TSV6_TOF_FULL_DISTANCE", "150")),
+            "full_distance_mm": int(os.getenv("TSV6_TOF_FULL_DISTANCE", "205")),
             "check_interval_secs": float(os.getenv("TSV6_TOF_CHECK_INTERVAL", "1800")),
             "i2c_address": int(os.getenv("TSV6_TOF_I2C_ADDRESS", "0x29"), 0),
             "sample_count": int(os.getenv("TSV6_TOF_SAMPLE_COUNT", "7")),
