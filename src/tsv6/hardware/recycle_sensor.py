@@ -1,15 +1,17 @@
 """
 ToF-Based Recycling Verification Sensor
 
-M5Stack ToF4M unit (U172, VL53L1X chip) connected via I2C bus 3.
+M5Stack ToF4M unit (U172, VL53L1X chip) connected via I2C bus 2.
 - I2C bus 2: GPIO 4 (SDA), GPIO 5 (SCL)
 - I2C address: 0x29 (default)
 - Detection: distance below configurable threshold = item present
 
-The sensor monitors for item deposit during the door open cycle:
-- Starts AFTER servo reaches fully open position (avoids door motion false positives)
-- Stops BEFORE servo begins closing (same reason)
-- Reports whether item was detected during that window
+Two-detection verification:
+    The sensor runs continuously. When a transaction starts (barcode scanned),
+    it counts distinct detection events (beam-break transitions):
+    - Detection 1: Door swings past the sensor (~0.6s after open command)
+    - Detection 2: Item falls through the chute
+    Both detections required = item was recycled. Only detection 1 = no item.
 """
 
 import logging
@@ -50,7 +52,7 @@ class RecycleSensorConfig:
     distance_mode: int = 1                # 1=short (~136cm), 2=long (~360cm)
     timing_budget_ms: int = 50            # Ranging duration in ms
     simulation_mode: bool = False
-    debounce_count: int = 2               # Consecutive readings for confirmation
+    required_detections: int = 2          # Beam-break events needed (door + item)
     baseline_sample_count: int = 5        # Samples for auto-calibration
 
 
@@ -58,15 +60,20 @@ class RecycleSensor:
     """
     VL53L1X ToF sensor for verifying item deposit into recycling bin.
 
-    Uses M5Stack ToF4M unit (U172) on I2C bus 3.
-    Measures distance and detects items below a configurable threshold.
+    Uses M5Stack ToF4M unit (U172) on I2C bus 2.
+    Runs continuously, counting beam-break events during transactions.
+
+    Two-detection verification:
+        Detection 1: Door swings past sensor (always happens on open)
+        Detection 2: Item falls through chute (only if deposited)
+        Both required for successful verification.
 
     Lifecycle:
-        1. start_monitoring() - Called after servo fully opens door
-        2. Sensor polls distance continuously in background
-        3. detection_event is set when item detected (allows wait with timeout)
-        4. stop_monitoring() - Called before servo begins closing
-        5. Check was_item_detected() for result
+        1. Sensor starts continuous ranging on init
+        2. start_monitoring() - Called when barcode scanned (resets count)
+        3. Door opens → detection #1 (door swing)
+        4. Item deposited → detection #2 → detection_event is set
+        5. stop_monitoring() - Called after door closes, returns result
     """
 
     def __init__(
@@ -81,11 +88,16 @@ class RecycleSensor:
 
         self._state = SensorState.IDLE
         self._lock = threading.Lock()
-        self._stop_monitoring_flag = threading.Event()
+        self._shutdown_flag = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
         self._item_detected = False
         self._detection_time: Optional[float] = None
         self._monitoring_start_time: Optional[float] = None
+
+        # Two-detection tracking
+        self._detection_count = 0
+        self._in_beam = False  # True when object is currently blocking beam
+        self._transaction_active = False
 
         # Public event for callers to wait on detection with timeout
         self.detection_event = threading.Event()
@@ -110,6 +122,9 @@ class RecycleSensor:
         if not self.config.simulation_mode:
             self._connect_sensor()
 
+        # Start continuous ranging and monitoring thread
+        self._start_continuous()
+
         logger.info(
             f"RecycleSensor initialized (i2c_bus={self.config.i2c_bus}, "
             f"threshold={self.config.detection_threshold_mm}mm, "
@@ -129,7 +144,7 @@ class RecycleSensor:
                 'simulation_mode',
                 lambda v: v.lower() in ('true', '1', 'yes')
             ),
-            'TSV6_RECYCLE_SENSOR_DEBOUNCE': ('debounce_count', int),
+            'TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS': ('required_detections', int),
         }
         for env_key, (attr, converter) in env_map.items():
             val = os.environ.get(env_key)
@@ -183,7 +198,7 @@ class RecycleSensor:
                     if dist_cm is not None and dist_cm > 0:
                         samples.append(int(dist_cm * 10))  # cm → mm
                 time.sleep(0.05)
-            self._sensor.stop_ranging()
+            # Don't stop ranging — we keep it on continuously
 
             if samples:
                 self._baseline_distance_mm = int(statistics.median(samples))
@@ -195,6 +210,24 @@ class RecycleSensor:
                 logger.warning("Baseline calibration failed - using threshold only")
         except Exception as e:
             logger.warning(f"Baseline calibration error: {e}")
+
+    def _start_continuous(self):
+        """Start continuous ranging and background monitoring thread."""
+        # Start VL53L1X continuous ranging (stays on forever)
+        if self._connected and self._sensor and not self.config.simulation_mode:
+            try:
+                # Ranging may already be started from calibration
+                pass  # Already ranging from _calibrate_baseline
+            except Exception as e:
+                logger.error(f"Failed to start continuous ranging: {e}")
+
+        self._shutdown_flag.clear()
+        self._monitor_thread = threading.Thread(
+            target=self._continuous_loop,
+            name="RecycleSensor-Continuous",
+            daemon=True
+        )
+        self._monitor_thread.start()
 
     def _read_distance(self) -> Optional[bool]:
         """
@@ -244,139 +277,148 @@ class RecycleSensor:
 
     def start_monitoring(self) -> bool:
         """
-        Start monitoring for object detection.
+        Start a new transaction — reset detection count.
 
-        Called after servo door is fully open.
-        Monitoring continues until stop_monitoring() is called.
+        Called when barcode is scanned, BEFORE door opens.
+        The door swing will be detection #1, item deposit will be #2.
 
         Returns:
             True if monitoring started successfully
         """
-        if self._state == SensorState.MONITORING:
-            logger.warning("Already monitoring - resetting")
-            self.stop_monitoring()
-
-        # Reset detection state
+        # Reset transaction state
+        self._detection_count = 0
+        self._in_beam = False
         self._item_detected = False
         self._detection_time = None
         self._monitoring_start_time = time.monotonic()
         self.detection_event.clear()
 
-        self._stop_monitoring_flag.clear()
+        self._transaction_active = True
         self._set_state(SensorState.MONITORING)
 
-        # Start VL53L1X continuous ranging
-        if self._connected and self._sensor and not self.config.simulation_mode:
-            try:
-                self._sensor.start_ranging()
-            except Exception as e:
-                logger.error(f"Failed to start ranging: {e}")
-
-        self._monitor_thread = threading.Thread(
-            target=self._monitoring_loop,
-            name="RecycleSensor-Monitor",
-            daemon=True
+        logger.info(
+            f"Transaction started — waiting for {self.config.required_detections} "
+            f"detections (door + item)"
         )
-        self._monitor_thread.start()
-
-        logger.info("Started monitoring for item detection")
         return True
 
-    def _monitoring_loop(self):
-        """Background thread for continuous sensor monitoring"""
-        consecutive_detections = 0
+    def _continuous_loop(self):
+        """
+        Background thread — runs continuously, counts beam-break events
+        during active transactions.
 
-        while not self._stop_monitoring_flag.is_set():
+        A beam-break event is a transition from clear (>= threshold) to
+        blocked (< threshold). Each distinct transition increments the count.
+        """
+        while not self._shutdown_flag.is_set():
             result = self._read_distance()
 
-            if result is True:
-                consecutive_detections += 1
+            if self._transaction_active and result is not None:
+                if result is True and not self._in_beam:
+                    # Transition: clear → blocked (new beam-break event)
+                    self._in_beam = True
+                    self._detection_count += 1
+                    elapsed = time.monotonic() - self._monitoring_start_time
+                    logger.info(
+                        f"Detection #{self._detection_count} at {elapsed:.2f}s"
+                    )
 
-                if consecutive_detections >= self.config.debounce_count:
-                    if not self._item_detected:
-                        elapsed = time.monotonic() - self._monitoring_start_time
+                    if self._detection_count >= self.config.required_detections:
                         self._item_detected = True
                         self._detection_time = elapsed
                         self._set_state(SensorState.DETECTED)
                         self.detection_event.set()
-                        logger.info(f"Item detected at {elapsed:.2f}s")
+                        logger.info(
+                            f"Item verified — {self._detection_count} detections "
+                            f"(door + item)"
+                        )
 
                         if self.on_detection:
                             try:
                                 self.on_detection()
                             except Exception as e:
                                 logger.error(f"Detection callback error: {e}")
-            elif result is False:
-                # Actual above-threshold reading — reset counter
-                consecutive_detections = 0
-            # result is None — no data ready, keep counter as-is
+
+                elif result is False and self._in_beam:
+                    # Transition: blocked → clear (object passed)
+                    self._in_beam = False
 
             time.sleep(self.config.poll_interval)
 
-        logger.debug("Monitoring loop exited")
+        logger.debug("Continuous monitoring loop exited")
 
     def stop_monitoring(self) -> bool:
         """
-        Stop monitoring and finalize detection result.
+        End the transaction and finalize result.
 
-        Called before servo begins closing door.
+        Called after door closes.
 
         Returns:
-            True if item was detected during monitoring window
+            True if item was detected (required_detections met)
         """
-        self._stop_monitoring_flag.set()
-
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=1.0)
-
-        # Stop VL53L1X ranging
-        if self._connected and self._sensor and not self.config.simulation_mode:
-            try:
-                self._sensor.stop_ranging()
-            except Exception as e:
-                logger.error(f"Failed to stop ranging: {e}")
+        self._transaction_active = False
 
         if self._item_detected:
             self._set_state(SensorState.DETECTED)
             logger.info(
-                f"Monitoring stopped - item WAS detected "
-                f"(at {self._detection_time:.2f}s)"
+                f"Transaction complete — item WAS detected "
+                f"({self._detection_count} detections, "
+                f"item at {self._detection_time:.2f}s)"
             )
         else:
             self._set_state(SensorState.NOT_DETECTED)
             if self._monitoring_start_time:
                 duration = time.monotonic() - self._monitoring_start_time
                 logger.warning(
-                    f"Monitoring stopped - item NOT detected "
-                    f"(monitored for {duration:.2f}s)"
+                    f"Transaction complete — item NOT detected "
+                    f"({self._detection_count} detection(s), "
+                    f"monitored for {duration:.2f}s)"
                 )
 
         return self._item_detected
 
     def was_item_detected(self) -> bool:
-        """Check if item was detected during the last monitoring session"""
+        """Check if item was detected during the last transaction"""
         return self._item_detected
 
     def get_detection_time(self) -> Optional[float]:
-        """Seconds from monitoring start to detection, or None if not detected"""
+        """Seconds from transaction start to item detection, or None"""
         return self._detection_time
+
+    def get_detection_count(self) -> int:
+        """Number of beam-break events in current/last transaction"""
+        return self._detection_count
 
     def reset(self):
         """Reset sensor to idle state for next transaction"""
-        self.stop_monitoring()
+        self._transaction_active = False
         self._item_detected = False
         self._detection_time = None
+        self._detection_count = 0
+        self._in_beam = False
         self._monitoring_start_time = None
         self.detection_event.clear()
         self._set_state(SensorState.IDLE)
 
     def is_monitoring(self) -> bool:
-        """Check if sensor is currently monitoring"""
-        return self._state == SensorState.MONITORING
+        """Check if a transaction is active"""
+        return self._transaction_active
 
     def cleanup(self):
         """Cleanup resources"""
-        self.stop_monitoring()
+        self._transaction_active = False
+        self._shutdown_flag.set()
+
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=1.0)
+
+        # Stop ranging and release I2C
+        if self._connected and self._sensor and not self.config.simulation_mode:
+            try:
+                self._sensor.stop_ranging()
+            except Exception:
+                pass
+
         self._connected = False
         if self._i2c:
             try:

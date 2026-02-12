@@ -1,5 +1,5 @@
 """
-Unit tests for RecycleSensor (VL53L1X ToF item detection for recycling verification).
+Unit tests for RecycleSensor (VL53L1X ToF two-detection recycling verification).
 """
 
 import sys
@@ -28,7 +28,7 @@ def sim_config():
         i2c_bus=2,
         poll_interval=0.01,  # Fast polling for test speed
         simulation_mode=True,
-        debounce_count=2,
+        required_detections=2,
         detection_threshold_mm=110,
     )
 
@@ -51,7 +51,7 @@ class TestRecycleSensorConfig:
         assert cfg.distance_mode == 1
         assert cfg.timing_budget_ms == 50
         assert cfg.simulation_mode is False
-        assert cfg.debounce_count == 2
+        assert cfg.required_detections == 2
         assert cfg.baseline_sample_count == 5
 
     def test_env_override(self):
@@ -61,7 +61,7 @@ class TestRecycleSensorConfig:
             'TSV6_RECYCLE_SENSOR_THRESHOLD_MM': '60',
             'TSV6_RECYCLE_SENSOR_POLL_INTERVAL': '0.1',
             'TSV6_RECYCLE_SENSOR_SIMULATION': 'true',
-            'TSV6_RECYCLE_SENSOR_DEBOUNCE': '5',
+            'TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS': '3',
             'TSV6_RECYCLE_SENSOR_DISTANCE_MODE': '2',
             'TSV6_RECYCLE_SENSOR_TIMING_BUDGET': '100',
         }
@@ -72,7 +72,7 @@ class TestRecycleSensorConfig:
             assert s.config.detection_threshold_mm == 60
             assert s.config.poll_interval == 0.1
             assert s.config.simulation_mode is True
-            assert s.config.debounce_count == 5
+            assert s.config.required_detections == 3
             assert s.config.distance_mode == 2
             assert s.config.timing_budget_ms == 100
             s.cleanup()
@@ -97,6 +97,9 @@ class TestSensorInitialization:
             assert s.config.simulation_mode is True
             s.cleanup()
 
+    def test_detection_count_starts_at_zero(self, sensor):
+        assert sensor.get_detection_count() == 0
+
 
 class TestMonitoringLifecycle:
     def test_start_monitoring(self, sensor):
@@ -119,6 +122,7 @@ class TestMonitoringLifecycle:
         # Starting again should reset
         sensor.start_monitoring()
         assert sensor.state == SensorState.MONITORING
+        assert sensor.get_detection_count() == 0
         sensor.stop_monitoring()
 
     def test_reset(self, sensor):
@@ -129,13 +133,15 @@ class TestMonitoringLifecycle:
         assert sensor.state == SensorState.IDLE
         assert sensor.was_item_detected() is False
         assert sensor.get_detection_time() is None
+        assert sensor.get_detection_count() == 0
         assert not sensor.detection_event.is_set()
 
 
-class TestDetection:
-    def test_detection_sets_event(self, sim_config):
-        """When distance is below threshold, detection_event should be set"""
+class TestTwoDetectionVerification:
+    def test_single_detection_not_enough(self, sim_config):
+        """One beam-break (door only) should NOT trigger detection event"""
         sim_config.simulation_mode = False
+        sim_config.required_detections = 2
 
         with patch(
             'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
@@ -143,17 +149,123 @@ class TestDetection:
         ):
             sensor = RecycleSensor(config=sim_config)
 
-        # Mock _read_distance to return True (object within threshold)
-        with patch.object(sensor, '_read_distance', return_value=True):
+        # Simulate: one beam-break (True, True, False = one event)
+        readings = iter([True, True, False, False, False, False, False])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
             sensor.start_monitoring()
-            # Wait for detection (debounce_count=2 at 10ms interval ~ 20ms)
+            detected = sensor.detection_event.wait(timeout=0.2)
+            sensor.stop_monitoring()
+
+        assert detected is False
+        assert sensor.get_detection_count() == 1
+        assert sensor.was_item_detected() is False
+        sensor.cleanup()
+
+    def test_two_detections_triggers_success(self, sim_config):
+        """Two beam-breaks (door + item) should trigger detection event"""
+        sim_config.simulation_mode = False
+        sim_config.required_detections = 2
+
+        with patch(
+            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
+            return_value=True
+        ):
+            sensor = RecycleSensor(config=sim_config)
+
+        # Simulate: door passes (True→False), then item passes (True→False)
+        readings = iter([
+            True, False,   # Detection #1 (door)
+            False, False,  # Gap
+            True, False,   # Detection #2 (item)
+        ])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
+            sensor.start_monitoring()
             detected = sensor.detection_event.wait(timeout=1.0)
             sensor.stop_monitoring()
 
         assert detected is True
+        assert sensor.get_detection_count() == 2
         assert sensor.was_item_detected() is True
         assert sensor.get_detection_time() is not None
-        assert sensor.state == SensorState.DETECTED
+        sensor.cleanup()
+
+    def test_detection_callback_on_second_event(self, sim_config):
+        """on_detection callback should fire on the second beam-break"""
+        sim_config.simulation_mode = False
+        sim_config.required_detections = 2
+        callback = MagicMock()
+
+        with patch(
+            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
+            return_value=True
+        ):
+            sensor = RecycleSensor(config=sim_config, on_detection=callback)
+
+        # Door + item
+        readings = iter([True, False, True, False])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
+            sensor.start_monitoring()
+            sensor.detection_event.wait(timeout=1.0)
+            sensor.stop_monitoring()
+
+        callback.assert_called_once()
+        sensor.cleanup()
+
+    def test_none_does_not_affect_beam_state(self, sim_config):
+        """None (data not ready) should not change in_beam state"""
+        sim_config.simulation_mode = False
+        sim_config.required_detections = 2
+
+        with patch(
+            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
+            return_value=True
+        ):
+            sensor = RecycleSensor(config=sim_config)
+
+        # True, None, None, False (one event despite None gaps)
+        # Then True, None, False (second event)
+        readings = iter([
+            True, None, None, False,  # Detection #1
+            True, None, False,        # Detection #2
+        ])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
+            sensor.start_monitoring()
+            detected = sensor.detection_event.wait(timeout=1.0)
+            sensor.stop_monitoring()
+
+        assert detected is True
+        assert sensor.get_detection_count() == 2
+        sensor.cleanup()
+
+    def test_sustained_block_counts_as_one(self, sim_config):
+        """Multiple consecutive below-threshold readings = one detection event"""
+        sim_config.simulation_mode = False
+        sim_config.required_detections = 2
+
+        with patch(
+            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
+            return_value=True
+        ):
+            sensor = RecycleSensor(config=sim_config)
+
+        # Many True readings in a row = still just one event
+        readings = iter([
+            True, True, True, True, False,  # Detection #1 (sustained)
+            False, False,
+            True, False,                     # Detection #2
+        ])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
+            sensor.start_monitoring()
+            detected = sensor.detection_event.wait(timeout=1.0)
+            sensor.stop_monitoring()
+
+        assert detected is True
+        assert sensor.get_detection_count() == 2
         sensor.cleanup()
 
     def test_no_detection_event_timeout(self, sim_config):
@@ -166,33 +278,13 @@ class TestDetection:
 
         assert detected is False
         assert sensor.was_item_detected() is False
+        assert sensor.get_detection_count() == 0
         sensor.cleanup()
 
-    def test_detection_callback_called(self, sim_config):
-        """on_detection callback should fire when item is detected"""
+    def test_three_detections_required(self, sim_config):
+        """Should support configurable required_detections"""
         sim_config.simulation_mode = False
-        callback = MagicMock()
-
-        with patch(
-            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
-            return_value=True
-        ):
-            sensor = RecycleSensor(config=sim_config, on_detection=callback)
-
-        with patch.object(sensor, '_read_distance', return_value=True):
-            sensor.start_monitoring()
-            sensor.detection_event.wait(timeout=1.0)
-            sensor.stop_monitoring()
-
-        callback.assert_called_once()
-        sensor.cleanup()
-
-
-class TestDebounce:
-    def test_debounce_requires_consecutive_readings(self, sim_config):
-        """Detection should require debounce_count consecutive positive readings"""
-        sim_config.simulation_mode = False
-        sim_config.debounce_count = 3
+        sim_config.required_detections = 3
 
         with patch(
             'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
@@ -200,63 +292,16 @@ class TestDebounce:
         ):
             sensor = RecycleSensor(config=sim_config)
 
-        # Alternate True/False — should NOT trigger detection
-        call_count = [0]
-        def alternating_distance():
-            call_count[0] += 1
-            return call_count[0] % 2 == 1  # True, False, True, False...
+        # Two events — not enough for 3
+        readings = iter([True, False, True, False, False, False, False])
 
-        with patch.object(sensor, '_read_distance', side_effect=alternating_distance):
+        with patch.object(sensor, '_read_distance', side_effect=readings):
             sensor.start_monitoring()
             detected = sensor.detection_event.wait(timeout=0.2)
             sensor.stop_monitoring()
 
         assert detected is False
-        assert sensor.was_item_detected() is False
-        sensor.cleanup()
-
-    def test_debounce_passes_with_consecutive(self, sim_config):
-        """Detection should pass with enough consecutive positive readings"""
-        sim_config.simulation_mode = False
-        sim_config.debounce_count = 3
-
-        with patch(
-            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
-            return_value=True
-        ):
-            sensor = RecycleSensor(config=sim_config)
-
-        # Return True consistently
-        with patch.object(sensor, '_read_distance', return_value=True):
-            sensor.start_monitoring()
-            detected = sensor.detection_event.wait(timeout=1.0)
-            sensor.stop_monitoring()
-
-        assert detected is True
-        assert sensor.was_item_detected() is True
-        sensor.cleanup()
-
-    def test_none_does_not_reset_debounce_counter(self, sim_config):
-        """None (data not ready) should NOT reset consecutive detection count"""
-        sim_config.simulation_mode = False
-        sim_config.debounce_count = 2
-
-        with patch(
-            'tsv6.hardware.recycle_sensor.RecycleSensor._connect_sensor',
-            return_value=True
-        ):
-            sensor = RecycleSensor(config=sim_config)
-
-        # True, None, True — should still trigger detection (None doesn't reset)
-        readings = iter([True, None, True, None, True])
-
-        with patch.object(sensor, '_read_distance', side_effect=readings):
-            sensor.start_monitoring()
-            detected = sensor.detection_event.wait(timeout=1.0)
-            sensor.stop_monitoring()
-
-        assert detected is True
-        assert sensor.was_item_detected() is True
+        assert sensor.get_detection_count() == 2
         sensor.cleanup()
 
 
@@ -303,7 +348,7 @@ class TestDistanceReading:
         sensor.cleanup()
 
     def test_data_not_ready_returns_none(self, sim_config):
-        """When no new data is ready, return None (no data, not a detection result)"""
+        """When no new data is ready, return None"""
         sim_config.simulation_mode = False
 
         with patch(
@@ -321,7 +366,7 @@ class TestDistanceReading:
         sensor.cleanup()
 
     def test_null_distance_returns_none(self, sim_config):
-        """When sensor returns None distance, return None (invalid, not a detection result)"""
+        """When sensor returns None distance, return None"""
         sim_config.simulation_mode = False
 
         with patch(
@@ -427,7 +472,10 @@ class TestThreadSafety:
             detected = sensor.detection_event.wait(timeout=2.0)
             results.append(detected)
 
-        with patch.object(sensor, '_read_distance', return_value=True):
+        # Two beam-break events
+        readings = iter([True, False, True, False])
+
+        with patch.object(sensor, '_read_distance', side_effect=readings):
             sensor.start_monitoring()
             wait_thread = threading.Thread(target=waiter)
             wait_thread.start()

@@ -1179,7 +1179,17 @@ class ProductionVideoPlayer:
 
             print(f"Opening door for: {product_name}")
 
-            # 1. Start door opening in background (open_door blocks until movement completes)
+            # 1. Start ToF transaction BEFORE opening door
+            #    Two-detection verification:
+            #    - Detection 1: Door swings past sensor (~0.7s)
+            #    - Detection 2: Item falls through chute
+            #    Both required = item recycled. Only #1 = no item deposited.
+            item_detected = False
+            if self.recycle_sensor:
+                self.recycle_sensor.start_monitoring()
+                print("   ToF sensor transaction started — expecting door + item...")
+
+            # 2. Open door (detection #1 happens as door swings past sensor)
             door_open_thread = None
             if self.servo_controller:
                 print("   Opening door...")
@@ -1190,30 +1200,24 @@ class ProductionVideoPlayer:
                 )
                 door_open_thread.start()
 
-            # 2. Start ToF monitoring immediately — sensor looks across the chute
-            #    so door motion won't cause false positives
-            item_detected = False
+            # 3. Wait for both detections (door + item) or timeout
             if self.recycle_sensor:
-                self.recycle_sensor.start_monitoring()
-                print("   ToF sensor monitoring started — waiting for item deposit...")
-
-                # 3. Wait for door to finish opening (servo physically moves ~1-2s)
                 if door_open_thread:
                     door_open_thread.join(timeout=5.0)
-                    time.sleep(1.5)  # Extra settle time for servo to reach position
 
-                # 4. Wait for detection OR 3-second timeout (after door fully open)
-                item_detected = self.recycle_sensor.detection_event.wait(timeout=3.0)
+                # Wait for detection #2 (item) — #1 (door) happens during open
+                item_detected = self.recycle_sensor.detection_event.wait(timeout=5.0)
 
-                # 5. Stop monitoring before door closes
+                # 4. End transaction
                 self.recycle_sensor.stop_monitoring()
 
+                count = self.recycle_sensor.get_detection_count()
                 if item_detected:
-                    print("   Item detected by ToF sensor!")
+                    print(f"   Item verified! ({count} detections: door + item)")
                     # Safety delay — let user pull hand out before door closes
                     time.sleep(1.0)
                 else:
-                    print("   No item detected within 3 seconds")
+                    print(f"   No item detected ({count} detection(s) — door only)")
             else:
                 # No sensor available — fall back to assuming success (for dev/testing)
                 self.logger.warning("No recycle sensor — skipping verification")
