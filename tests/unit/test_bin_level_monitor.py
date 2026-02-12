@@ -15,7 +15,7 @@ class TestBinLevelMonitorConfig:
         config = BinLevelMonitorConfig()
         assert config.check_interval_secs == 1800.0
         assert config.startup_delay_secs == 30.0
-        assert config.full_distance_mm == 150
+        assert config.full_distance_mm == 205
         assert config.empty_distance_mm == 800
         assert config.max_consecutive_failures == 3
 
@@ -120,9 +120,10 @@ class TestBinLevelMonitor:
         assert data is not None
         assert data['distance_mm'] == 475
         assert data['fill_level'] == 'half'
-        assert 49.0 <= data['fill_percentage'] <= 51.0
+        # (800 - 475) / (800 - 205) * 100 = 325/595 * 100 = 54.6%
+        assert 54.0 <= data['fill_percentage'] <= 55.0
         assert data['empty_distance_mm'] == 800
-        assert data['full_distance_mm'] == 150
+        assert data['full_distance_mm'] == 205
         assert data['timestamp'] > 0
 
     def test_take_reading_fires_callback(self, mock_sensor):

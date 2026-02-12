@@ -39,7 +39,7 @@ class ToFSensorConfig:
     timing_budget_us: int = 200_000     # 200ms for best accuracy
     sample_count: int = 7               # Odd number for clean median
     sample_delay_ms: float = 50.0       # Delay between samples in ms
-    full_distance_mm: int = 150         # Distance when bin is full
+    full_distance_mm: int = 205         # Distance when bin is full (100%)
     empty_distance_mm: int = 800        # Distance when bin is empty
     simulation_mode: bool = False
     simulation_distance_mm: int = 500   # Simulated reading for testing

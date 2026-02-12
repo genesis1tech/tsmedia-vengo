@@ -641,7 +641,7 @@ class ProductionVideoPlayer:
                 timing_budget_us=tof_config.get("timing_budget_us", 200_000),
                 sample_count=tof_config.get("sample_count", 7),
                 empty_distance_mm=tof_config.get("empty_distance_mm", 800),
-                full_distance_mm=tof_config.get("full_distance_mm", 150),
+                full_distance_mm=tof_config.get("full_distance_mm", 205),
                 simulation_mode=tof_config.get("simulation_mode", False),
             )
 
@@ -657,7 +657,7 @@ class ProductionVideoPlayer:
             monitor_config = BinLevelMonitorConfig(
                 check_interval_secs=tof_config.get("check_interval_secs", 1800.0),
                 empty_distance_mm=tof_config.get("empty_distance_mm", 800),
-                full_distance_mm=tof_config.get("full_distance_mm", 150),
+                full_distance_mm=tof_config.get("full_distance_mm", 205),
             )
 
             self.bin_level_monitor = BinLevelMonitor(

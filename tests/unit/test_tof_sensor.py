@@ -16,7 +16,7 @@ class TestToFSensorConfig:
         assert config.i2c_address == 0x29
         assert config.timing_budget_us == 200_000
         assert config.sample_count == 7
-        assert config.full_distance_mm == 150
+        assert config.full_distance_mm == 205
         assert config.empty_distance_mm == 800
         assert config.simulation_mode is False
 
@@ -56,7 +56,7 @@ class TestToFSensorSimulation:
         assert status['simulation_mode'] is True
         assert status['i2c_address'] == '0x29'
         assert status['empty_distance_mm'] == 800
-        assert status['full_distance_mm'] == 150
+        assert status['full_distance_mm'] == 205
         assert status['last_read_time'] > 0
 
     def test_cleanup(self, sim_sensor):
