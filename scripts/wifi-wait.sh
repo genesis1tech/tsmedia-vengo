@@ -19,9 +19,15 @@ POLL_INTERVAL=3
 PROVISIONING_SERVICE="tsv6-wifi-provisioning.service"
 
 is_connected() {
+    # Method 1: NM global connectivity state (requires default route)
     local state
     state=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "none")
-    [ "$state" = "full" ]
+    [ "$state" = "full" ] && return 0
+
+    # Method 2: check wlan0 specifically is connected in NM
+    # (handles case where NM connectivity check is disabled/unavailable
+    #  or NM is slow to update its global connectivity state after DHCP)
+    nmcli -t -f DEVICE,STATE device 2>/dev/null | grep -q "^wlan0:connected$"
 }
 
 has_saved_wifi() {
