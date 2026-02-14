@@ -1,7 +1,12 @@
 #!/bin/bash
 # TSV6 Network Watchdog — Layer 2 safety net
 #
-# Pings two independent DNS servers every 60 seconds.
+# Verifies network connectivity every 60 seconds using a tiered strategy:
+#   1. Ping the default gateway (always works, even on networks that block
+#      outbound ICMP like university/enterprise WiFi)
+#   2. Ping configurable external targets (8.8.8.8, 1.1.1.1) for full
+#      internet reachability
+#
 # Feeds the systemd watchdog on success or during a grace period.
 # After sustained failure (>3 consecutive misses), STOPS feeding
 # the watchdog so systemd's WatchdogSec=120 expires and
@@ -33,17 +38,37 @@ log() {
 }
 
 # ---------------------------------------------------------------------------
-# Ping test — success if EITHER target responds
+# Get the default gateway for our WiFi interface
+# ---------------------------------------------------------------------------
+get_gateway() {
+    ip route show default dev "$WIFI_INTERFACE" 2>/dev/null | awk '/default/{print $3; exit}'
+}
+
+# ---------------------------------------------------------------------------
+# Ping test — tiered: gateway first, then external targets
+#
+# Many enterprise/university networks (e.g. UNCC CoLab) block outbound
+# ICMP to external hosts.  Pinging the gateway proves the local network
+# link is up without depending on external ICMP policy.
 # ---------------------------------------------------------------------------
 ping_test() {
+    # Tier 1: ping the default gateway (proves local link is up)
+    local gw
+    gw="$(get_gateway)"
+    if [[ -n "$gw" ]]; then
+        if /bin/ping -c 2 -W 3 -I "$WIFI_INTERFACE" "$gw" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    # Tier 2: ping external targets (proves full internet reachability)
     if /bin/ping -c 2 -W 3 -I "$WIFI_INTERFACE" "$PING_TARGET_1" >/dev/null 2>&1; then
         return 0
     fi
     if /bin/ping -c 2 -W 3 -I "$WIFI_INTERFACE" "$PING_TARGET_2" >/dev/null 2>&1; then
         return 0
     fi
-    # Neither target reachable — also try without binding to interface
-    # (covers cases where default route is via a different interface)
+    # Fallback: try without binding to interface
     if /bin/ping -c 2 -W 3 "$PING_TARGET_1" >/dev/null 2>&1; then
         return 0
     fi
@@ -57,7 +82,9 @@ ping_test() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
-    log info "Starting network watchdog: targets=${PING_TARGET_1},${PING_TARGET_2} iface=${WIFI_INTERFACE} interval=${CHECK_INTERVAL}s max_failures=${MAX_FAILURES}"
+    local gw_at_start
+    gw_at_start="$(get_gateway)"
+    log info "Starting network watchdog: gateway=${gw_at_start:-none} targets=${PING_TARGET_1},${PING_TARGET_2} iface=${WIFI_INTERFACE} interval=${CHECK_INTERVAL}s max_failures=${MAX_FAILURES}"
 
     # Tell systemd we are ready (Type=notify)
     systemd-notify --ready --status="Monitoring network connectivity"

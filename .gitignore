@@ -63,3 +63,4 @@ assets/certs/device-config.json
 *.md
 !README.md
 !CLAUDE.md
+!docs/enterprise-wifi-fix.md
