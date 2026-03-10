@@ -48,8 +48,6 @@ barcode_env/
 
 # Image cache
 image_cache/
-event_images/*.jpg
-event_images/*.png
 
 # Certificates and private keys - SECURITY CRITICAL
 assets/certs/*.pem
