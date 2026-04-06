@@ -206,7 +206,7 @@ if command -v uv &> /dev/null; then
     success "UV is installed: $(uv --version)"
 else
     warning "UV not found. Installing UV..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl -LsSf --connect-timeout 15 --max-time 120 https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
     success "UV installed"
 fi

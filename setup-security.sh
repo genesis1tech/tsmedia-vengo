@@ -45,11 +45,22 @@ warning "  - Disable SSH root login"
 echo ""
 warning "ENSURE YOU HAVE SSH KEY ACCESS BEFORE PROCEEDING!"
 echo ""
-read -p "Continue with security hardening? (y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    info "Security hardening cancelled"
-    exit 0
+if [ -t 0 ]; then
+    # Interactive — prompt for confirmation
+    read -p "Continue with security hardening? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Security hardening cancelled"
+        exit 0
+    fi
+else
+    # Non-interactive (piped input) — read from stdin
+    read -r REPLY || REPLY=""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Security hardening cancelled (non-interactive, no 'y' received)"
+        exit 0
+    fi
+    info "Non-interactive mode — proceeding with security hardening"
 fi
 
 # ============================================================================

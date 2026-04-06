@@ -28,10 +28,13 @@ Environment="VLC_ALSA_DEFAULT_DEVICE=/dev/null"
 Environment="PULSE_SERVER="
 
 # Switch network adapter (runs as root via sudo, non-fatal)
-ExecStartPre=-/usr/bin/sudo TSV6_NETWORK_ADAPTER=${TSV6_NETWORK_ADAPTER} /bin/bash /home/%i/tsrpi5/scripts/switch-network-adapter.sh
+# Pass all connectivity env vars explicitly — sudo strips inherited env.
+ExecStartPre=-/usr/bin/sudo TSV6_NETWORK_ADAPTER=${TSV6_NETWORK_ADAPTER} TSV6_WIFI_ENABLED=${TSV6_WIFI_ENABLED} TSV6_LTE_ENABLED=${TSV6_LTE_ENABLED} TSV6_CONNECTIVITY_MODE=${TSV6_CONNECTIVITY_MODE} /bin/bash /home/%i/tsrpi5/scripts/switch-network-adapter.sh
 
-# WIFI GATE: Block until WiFi (or wired) connectivity is confirmed.
-# If no WiFi saved, starts provisioning UI and waits for user to configure.
+# WIFI/LTE GATE: Block until network connectivity is confirmed.
+# Sources /run/tsv6-network-adapter.env (written by switch-network-adapter.sh above).
+# If WiFi-primary: waits for wlan0, starts provisioning if no saved WiFi.
+# If LTE-primary: waits for wwan0, skips WiFi provisioning.
 # Main app NEVER starts without network. (runs as root for systemctl access)
 ExecStartPre=/usr/bin/sudo /bin/bash /home/%i/tsrpi5/scripts/wifi-wait.sh
 
@@ -68,17 +71,29 @@ TasksMax=100
 MemoryMax=2G
 CPUQuota=150%
 
-# Network Adapter Selection
-# Only one adapter is active at a time. Options:
-#   rpi-wifi     = Onboard Broadcom WiFi (default)
-#   intel-ax210  = PCIe Intel AX210 WiFi 6E card
-#   4g-lte       = SIM7600NA-H 4G LTE modem
+# ── Connectivity Settings ─────────────────────────────────────────────────────
+# Toggle WiFi and LTE independently. Both can be installed; only enabled ones
+# are used at runtime. Change these to reconfigure, then:
+#   sudo systemctl daemon-reload && sudo systemctl restart tsv6@<user>.service
+#
+# TSV6_WIFI_ENABLED   — Enable onboard WiFi (rpi-wifi)
+# TSV6_LTE_ENABLED    — Enable 4G LTE modem (SIM7600NA-H / Hologram.io)
+# TSV6_NETWORK_ADAPTER — Active adapter: rpi-wifi | intel-ax210 | 4g-lte
+# TSV6_CONNECTIVITY_MODE — Failover strategy:
+#   wifi_only                  WiFi only (LTE ignored even if enabled)
+#   lte_only                   LTE only (WiFi ignored even if enabled)
+#   wifi_primary_lte_backup    WiFi primary, fail over to LTE
+#   lte_primary_wifi_backup    LTE primary, fail over to WiFi
+
+Environment="TSV6_WIFI_ENABLED=true"
+Environment="TSV6_LTE_ENABLED=false"
 Environment="TSV6_NETWORK_ADAPTER=rpi-wifi"
+Environment="TSV6_CONNECTIVITY_MODE=wifi_only"
 
 # Derived network settings (written by switch-network-adapter.sh, dash means optional/missing OK)
 EnvironmentFile=-/run/tsv6-network-adapter.env
 
-# LTE Configuration (Hologram.io) — only used when TSV6_NETWORK_ADAPTER=4g-lte
+# LTE Configuration (Hologram.io) — only used when TSV6_LTE_ENABLED=true
 Environment="TSV6_LTE_APN=hologram"
 
 # Bin level ToF sensor (M5Stack Mini ToF / VL53L0X on I2C bus 1)

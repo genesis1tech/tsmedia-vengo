@@ -308,7 +308,7 @@ EOF
 update_tsv6_service() {
     log_info "Updating tsv6.service with LTE configuration..."
 
-    SERVICE_FILE="/home/g1tech/tsrpi5/tsv6.service"
+    SERVICE_FILE="/home/${SUDO_USER:-$USER}/tsrpi5/tsv6.service"
 
     if [ -f "$SERVICE_FILE" ]; then
         # Check if LTE vars already present

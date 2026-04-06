@@ -496,10 +496,19 @@ class ProductionConfigManager:
             "keepalive_interval_secs": int(os.getenv("TSV6_LTE_KEEPALIVE", "30")),
         }
 
+    def get_wifi_config(self) -> Dict[str, Any]:
+        """Get WiFi configuration from environment variables"""
+        return {
+            "enabled": os.getenv("TSV6_WIFI_ENABLED", "true").lower() in ("true", "1", "yes"),
+            "interface": self.network_config.wifi_interface,
+            "check_interval_secs": self.network_config.wifi_check_interval,
+            "recovery_attempts": self.network_config.wifi_recovery_attempts,
+        }
+
     def get_connectivity_config(self) -> Dict[str, Any]:
         """Get connectivity mode configuration from environment variables"""
         return {
-            "mode": os.getenv("TSV6_CONNECTIVITY_MODE", "lte_primary_wifi_backup"),
+            "mode": os.getenv("TSV6_CONNECTIVITY_MODE", "wifi_only"),
             "failover_timeout_secs": float(os.getenv("TSV6_FAILOVER_TIMEOUT", "60.0")),
             "failback_check_interval_secs": float(os.getenv("TSV6_FAILBACK_INTERVAL", "300.0")),
             "failback_stability_secs": float(os.getenv("TSV6_FAILBACK_STABILITY", "30.0")),
@@ -555,6 +564,7 @@ class ProductionConfigManager:
             "performance": asdict(self.performance_config),
             "sleep": asdict(self.sleep_config),
             "aws": self.get_aws_config(),
+            "wifi": self.get_wifi_config(),
             "lte": self.get_lte_config(),
             "connectivity": self.get_connectivity_config(),
             "tof": self.get_tof_config(),

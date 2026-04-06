@@ -227,7 +227,7 @@ generate_device_certificates() {
     echo "$public_key" > "$CERTS_DIR/aws_cert_public.pem"
     
     # Download Amazon Root CA
-    curl -s https://www.amazontrust.com/repository/AmazonRootCA1.pem > "$CERTS_DIR/aws_cert_ca.pem"
+    curl -s --connect-timeout 15 --max-time 30 https://www.amazontrust.com/repository/AmazonRootCA1.pem > "$CERTS_DIR/aws_cert_ca.pem"
     
     # Attach policy to certificate
     aws iot attach-policy \
