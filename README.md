@@ -61,6 +61,9 @@ journalctl -u tsv6@$USER -f
 
 | Script | Purpose | Required |
 |--------|---------|----------|
+| `deploy.sh` | **Unified deployment** — runs all scripts below in order | Recommended |
+| `fleet-deploy.sh` | Fleet management — deploy/update/monitor multiple devices | Optional |
+| `first-boot.sh` | Golden image first-boot provisioning | Optional |
 | `setup-dependencies.sh` | System packages, Python deps, UV package manager | Yes |
 | `setup-pi-config.sh` | Raspberry Pi config (DSI display, GPU, boot settings) | Yes |
 | `setup-services.sh` | Systemd services, user groups, diagnostic scripts | Yes |
@@ -263,6 +266,113 @@ sudo nmcli connection down hologram-lte
 sudo nmcli connection up hologram-lte
 ```
 
+## Production Deployment
+
+### Single Device — `deploy.sh`
+
+The unified deployment script runs all setup steps in the correct order with a single command.
+
+```bash
+# Full interactive deployment
+./deploy.sh
+
+# Fully automated (no prompts, auto-reboots when done)
+./deploy.sh --non-interactive
+
+# Include 4G LTE modem setup
+./deploy.sh --with-lte
+
+# Skip optional steps
+./deploy.sh --skip-security    # Skip firewall/SSH hardening
+./deploy.sh --skip-aws         # Skip AWS IoT cert provisioning
+./deploy.sh --skip-media       # Skip S3 video/image download
+
+# Preview what would run
+./deploy.sh --dry-run
+```
+
+The script runs these steps automatically:
+1. System dependencies (`setup-dependencies.sh`)
+2. Pi hardware configuration (`setup-pi-config.sh`)
+3. Systemd services (`setup-services.sh`)
+4. Security hardening (`setup-security.sh`) — optional
+5. LTE modem setup (`setup-sim7600.sh`) — opt-in with `--with-lte`
+6. AWS IoT cert provisioning (`aws-iot-cert-provisioner.sh`)
+7. S3 media download (videos + images)
+
+Logs are saved to `logs/deploy-<timestamp>.log`.
+
+### Fleet Deployment — `fleet-deploy.sh`
+
+Deploy or manage multiple Raspberry Pi devices from a workstation over SSH.
+
+**Prerequisites:** SSH key-based auth to all devices (`ssh-copy-id user@device`).
+
+```bash
+# Create a devices file (one SSH target per line)
+cp devices.txt.example devices.txt
+# Edit devices.txt with your device IPs/hostnames
+
+# Deploy update to all devices (git pull + uv sync + restart)
+./fleet-deploy.sh devices.txt
+
+# Update code only
+./fleet-deploy.sh devices.txt --update
+
+# Check status of all devices
+./fleet-deploy.sh devices.txt --status
+
+# View logs from all devices
+./fleet-deploy.sh devices.txt --logs 50
+
+# Check version on all devices
+./fleet-deploy.sh devices.txt --version
+
+# Reboot all devices
+./fleet-deploy.sh devices.txt --reboot
+
+# Run arbitrary command on all devices
+./fleet-deploy.sh devices.txt --run "df -h /"
+
+# Control parallelism (default: 10 concurrent)
+./fleet-deploy.sh devices.txt --status --parallel 20
+```
+
+`devices.txt` format:
+```
+# One SSH target per line (comments and blank lines ignored)
+g1tech@192.168.1.10
+g1tech@ts-a1b2c3d4.local
+pi@10.0.0.50
+```
+
+### Golden Image — `first-boot.sh`
+
+For mass deployment using SD card cloning:
+
+1. Flash Raspberry Pi OS Lite 64-bit to an SD card
+2. Clone the repo and run the base deployment (skip device-specific steps):
+   ```bash
+   git clone https://github.com/genesis1tech/tsrpi5.git
+   cd tsrpi5
+   ./deploy.sh --skip-aws --skip-media
+   ```
+3. Image that SD card as the "golden image"
+4. Flash the golden image to additional SD cards
+5. Each device auto-provisions on first boot via `tsv6-first-boot.service`
+
+The first-boot script automatically:
+- Sets a unique hostname based on the device serial (`ts-<serial>`)
+- Expands the filesystem
+- Syncs Python dependencies
+- Provisions AWS IoT certificates
+- Downloads media from S3
+- Enables systemd services
+- Writes a provisioning report to `assets/certs/provisioning-report.json`
+- Reboots to apply changes
+
+The service is idempotent — it only runs once (marker file `.first-boot-complete`). Use `--force` to re-run.
+
 ## Service Management
 
 ```bash
@@ -317,21 +427,28 @@ uv run pytest -v --cov=src/tsv6 --cov-report=html
 
 ```
 tsrpi5/
-├── setup-dependencies.sh    # System packages + Python deps
-├── setup-pi-config.sh       # Raspberry Pi hardware config
-├── setup-services.sh        # Systemd services + user groups
-├── setup-security.sh        # Security hardening (optional)
-├── aws-iot-cert-provisioner.sh  # AWS IoT certificates
-├── src/tsv6/               # Main application code
-│   ├── core/               # Main video player, AWS manager
-│   ├── hardware/           # Servo, barcode, display drivers
-│   ├── config/             # Configuration management
-│   ├── monitoring/         # Watchdog, health monitoring
-│   ├── ota/                # Over-the-air updates
-│   └── utils/              # Utilities, error recovery
-├── assets/                 # Videos, images, certificates
-├── tests/                  # Unit and integration tests
-└── pyproject.toml          # Python dependencies
+├── deploy.sh                   # Single-command production deployment
+├── fleet-deploy.sh             # Multi-device fleet management
+├── first-boot.sh               # Golden image first-boot provisioning
+├── devices.txt.example         # Example fleet device list
+├── setup-dependencies.sh       # System packages + Python deps
+├── setup-pi-config.sh          # Raspberry Pi hardware config
+├── setup-services.sh           # Systemd services + user groups
+├── setup-security.sh           # Security hardening (optional)
+├── setup-sim7600.sh            # 4G LTE modem setup (optional)
+├── aws-iot-cert-provisioner.sh # AWS IoT certificates
+├── tsv6.service                # Main app systemd template
+├── tsv6-first-boot.service     # First-boot provisioning service
+├── src/tsv6/                   # Main application code
+│   ├── core/                   # Main video player, AWS manager
+│   ├── hardware/               # Servo, barcode, display drivers
+│   ├── config/                 # Configuration management
+│   ├── monitoring/             # Watchdog, health monitoring
+│   ├── ota/                    # Over-the-air updates
+│   └── utils/                  # Utilities, error recovery
+├── assets/                     # Videos, images, certificates
+├── tests/                      # Unit and integration tests
+└── pyproject.toml              # Python dependencies
 ```
 
 ## Documentation
