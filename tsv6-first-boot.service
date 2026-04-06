@@ -1,0 +1,19 @@
+[Unit]
+Description=TSV6 First-Boot Device Provisioning
+After=network-online.target time-sync.target
+Wants=network-online.target
+ConditionPathExists=!/home/%i/tsrpi5/.first-boot-complete
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/tsrpi5
+ExecStart=/bin/bash /home/%i/tsrpi5/first-boot.sh --non-interactive
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsv6-first-boot
+TimeoutStartSec=600
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

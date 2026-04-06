@@ -26,8 +26,11 @@ ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exi
 # Wait for DSI connector to be connected (up to 15 seconds, non-fatal)
 ExecStartPre=-/bin/bash -c 'for i in $(seq 1 15); do grep -q connected /sys/class/drm/card*-DSI*/status 2>/dev/null && exit 0; sleep 1; done; echo "DSI connector not found (continuing anyway)"; exit 0'
 
-# Start X with DPMS disabled to prevent screen blanking
-ExecStart=/usr/bin/xinit /bin/bash -c "xset s off -dpms 2>/dev/null; exec sleep infinity" -- :0 vt7 -keeptty -noreset -nolisten tcp
+# Start X server directly (no xinit wrapper — avoids systemd quoting issues)
+ExecStart=/usr/bin/Xorg :0 vt7 -keeptty -noreset -nolisten tcp
+
+# Disable screen blanking / DPMS after X is up
+ExecStartPost=/bin/bash -c 'sleep 2; DISPLAY=:0 XAUTHORITY=/home/%i/.Xauthority xset s off -dpms 2>/dev/null || true'
 
 Restart=on-failure
 RestartSec=5

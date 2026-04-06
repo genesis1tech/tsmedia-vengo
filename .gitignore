@@ -57,6 +57,21 @@ assets/certs/secrets.json
 !assets/certs/.gitkeep
 assets/certs/device-config.json
 
+# Fleet deployment - real device lists (contain IPs/hostnames)
+devices.txt
+devices*.txt
+!devices.txt.example
+
+# First-boot marker
+.first-boot-complete
+
+# Deployment logs
+logs/deploy-*.log
+logs/first-boot-*.log
+
+# Provisioning reports (contain device-specific data)
+assets/certs/provisioning-report.json
+
 # Documentation (ignore generated docs, keep essential ones)
 *.md
 !README.md

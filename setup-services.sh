@@ -132,15 +132,10 @@ success "tsv6-xorg@$CURRENT_USER.service installed and enabled"
 log "Installing tsv6.service..."
 
 if [ -f "$SCRIPT_DIR/tsv6.service" ]; then
-    # Create a template version that uses %i for user substitution
-    # Read the service file and substitute hardcoded user with template variable
-    sed -e "s|User=g1tech|User=%i|g" \
-        -e "s|Group=g1tech|Group=%i|g" \
-        -e "s|/home/g1tech|/home/%i|g" \
-        -e "s|tsv6-xorg@g1tech|tsv6-xorg@%i|g" \
-        "$SCRIPT_DIR/tsv6.service" | sudo tee /etc/systemd/system/tsv6@.service > /dev/null
+    # tsv6.service already uses %i template variables — install directly as tsv6@.service
+    sudo cp "$SCRIPT_DIR/tsv6.service" /etc/systemd/system/tsv6@.service
     sudo chmod 644 /etc/systemd/system/tsv6@.service
-    info "Created tsv6@.service template from tsv6.service"
+    info "Installed tsv6@.service template"
 else
     error "tsv6.service not found in $SCRIPT_DIR"
     exit 1
@@ -183,6 +178,14 @@ if [ -f "$SCRIPT_DIR/sleep.service" ]; then
     sudo cp "$SCRIPT_DIR/sleep.service" /etc/systemd/system/
     sudo chmod 644 /etc/systemd/system/sleep.service
     info "Installed sleep.service"
+fi
+
+# First-boot provisioning service (for golden image deployment)
+if [ -f "$SCRIPT_DIR/tsv6-first-boot.service" ]; then
+    sudo cp "$SCRIPT_DIR/tsv6-first-boot.service" /etc/systemd/system/tsv6-first-boot@.service
+    sudo chmod 644 /etc/systemd/system/tsv6-first-boot@.service
+    sudo systemctl enable "tsv6-first-boot@$CURRENT_USER.service" 2>/dev/null || true
+    info "Installed tsv6-first-boot@.service (golden image first-boot provisioning)"
 fi
 
 sudo systemctl daemon-reload

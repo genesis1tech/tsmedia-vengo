@@ -122,6 +122,9 @@ max_framebuffers=2
 # Contiguous Memory Allocator for GPU
 cma=256M@256M
 
+# I2C bus 2 for recycling verification sensor (VL53L1X on GPIO 4=SDA, GPIO 5=SCL)
+dtoverlay=i2c2-pi5
+
 EOL
 
 success "config.txt updated with DSI display settings"
@@ -196,6 +199,7 @@ echo "  - Waveshare 7\" DSI display configured"
 echo "  - GPU memory: 256MB"
 echo "  - PCIe Gen 3 enabled"
 echo "  - CMA: 256M"
+echo "  - I2C bus 2 enabled (dtoverlay=i2c2-pi5 for recycling sensor)"
 echo "  - Boot target: multi-user.target"
 echo ""
 warning "REBOOT REQUIRED for changes to take effect!"

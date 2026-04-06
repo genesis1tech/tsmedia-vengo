@@ -86,6 +86,7 @@ log "Installing build tools and Python dependencies..."
 sudo apt-get install -y \
     build-essential \
     python3-dev \
+    python3-venv \
     python3-tk \
     libdbus-1-dev \
     libdbus-glib-1-dev \
@@ -118,7 +119,8 @@ log "Installing image processing libraries..."
 sudo apt-get install -y \
     libjpeg-dev \
     zlib1g-dev \
-    libpng-dev
+    libpng-dev \
+    libopenjp2-7
 
 success "Image processing libraries installed"
 
@@ -132,6 +134,41 @@ sudo apt-get install -y \
 
 success "GPIO and I2C libraries installed"
 
+# Install networking tools (NetworkManager, WiFi provisioning, diagnostics)
+log "Installing networking packages..."
+sudo apt-get install -y \
+    network-manager \
+    hostapd \
+    dnsmasq \
+    iw \
+    wireless-tools \
+    iputils-ping
+
+success "Networking packages installed"
+
+# Ensure hostapd and dnsmasq don't auto-start (only used on-demand by provisioner)
+sudo systemctl disable hostapd 2>/dev/null || true
+sudo systemctl stop hostapd 2>/dev/null || true
+sudo systemctl disable dnsmasq 2>/dev/null || true
+sudo systemctl stop dnsmasq 2>/dev/null || true
+info "hostapd/dnsmasq disabled (started on-demand by WiFi provisioner)"
+
+# Install NFC tools (libnfc for nfc-emulate-forum-tag4)
+log "Installing NFC libraries..."
+sudo apt-get install -y \
+    libnfc-bin \
+    libnfc-dev \
+    || warning "NFC packages not available in repo (NFC emulation will be disabled)"
+
+success "NFC libraries installed"
+
+# Install fonts for tkinter/pygame text rendering
+log "Installing fonts..."
+sudo apt-get install -y \
+    fonts-dejavu-core
+
+success "Fonts installed"
+
 # Install additional system utilities
 log "Installing system utilities..."
 sudo apt-get install -y \
@@ -139,7 +176,9 @@ sudo apt-get install -y \
     curl \
     psmisc \
     htop \
-    jq
+    jq \
+    git \
+    awscli
 
 success "System utilities installed"
 
@@ -208,7 +247,10 @@ echo "  - AWS IoT SDK build dependencies"
 echo "  - SDL libraries (pygame)"
 echo "  - Image processing libraries (Pillow)"
 echo "  - GPIO and I2C libraries (rpi-gpio, adafruit-blinka support)"
-echo "  - System utilities"
+echo "  - Networking (NetworkManager, hostapd, dnsmasq, iw, wireless-tools)"
+echo "  - NFC (libnfc-bin for nfc-emulate-forum-tag4)"
+echo "  - Fonts (fonts-dejavu-core for tkinter/pygame)"
+echo "  - System utilities (git, awscli, jq, htop, curl)"
 echo ""
 info "Configuration applied:"
 echo "  - X server allowed for systemd services"
