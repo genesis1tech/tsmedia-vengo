@@ -182,6 +182,11 @@ sudo apt-get install -y \
 
 success "System utilities installed"
 
+# Configure git credential caching (avoids repeated GitHub token prompts)
+log "Configuring git credential store..."
+git config --global credential.helper store
+success "Git credential store enabled"
+
 # Configure Xwrapper to allow X server from systemd services
 log "Configuring X server permissions..."
 XWRAPPER_CONFIG="/etc/X11/Xwrapper.config"
