@@ -24,10 +24,6 @@ dependencies = [
     "adafruit-circuitpython-vl53l0x>=1.2.0; sys_platform == 'linux'",  # VL53L0X ToF distance sensor (bin level)
     "adafruit-circuitpython-vl53l1x>=1.1.0; sys_platform == 'linux'",  # VL53L1X ToF distance sensor (recycling verification)
     "adafruit-extended-bus>=1.0.0; sys_platform == 'linux'",  # Extended I2C bus selection (non-default buses)
-    # Ad player (tsv6.ads) — inactive when TSV6_AD_ENABLED=0
-    "httpx>=0.27",
-    "tenacity>=8",
-    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +32,6 @@ dev = [
     "pytest-cov==6.0.0",
     "pytest-mock==3.14.0",
     "pytest-asyncio==0.24.0",
-    "respx>=0.21",
 ]
 
 [tool.pytest.ini_options]

@@ -106,19 +106,5 @@ Environment="TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05"
 Environment="TSV6_RECYCLE_SENSOR_SIMULATION=false"
 Environment="TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS=2"
 
-# ── Ad Player Settings ────────────────────────────────────────────────────────
-# TSV6_AD_ENABLED=0   — Off by default; set to 1 to activate ad playback.
-# TSV6_AD_ENDPOINT    — Base URL of the ts-ssp API (https://api.tsssp.com).
-# TSV6_AD_NETWORK_ID  — Network identifier sent in every ad request.
-# TSV6_AD_API_KEY     — X-Device-Key authentication header value.
-#
-# Reload after changes:
-#   sudo systemctl daemon-reload && sudo systemctl restart tsv6@<user>.service
-
-Environment="TSV6_AD_ENABLED=0"
-Environment="TSV6_AD_ENDPOINT="
-Environment="TSV6_AD_NETWORK_ID=topperstopper"
-Environment="TSV6_AD_API_KEY="
-
 [Install]
 WantedBy=multi-user.target
