@@ -77,6 +77,17 @@ except ImportError:
     RECYCLE_SENSOR_AVAILABLE = False
     print("Recycle verification sensor not available")
 
+# Ad player — imported lazily so the device boots normally when ads are off
+_AdPlayer = None
+
+
+def _get_ad_player_class():
+    global _AdPlayer
+    if _AdPlayer is None:
+        from tsv6.ads.player import AdPlayer
+        _AdPlayer = AdPlayer
+    return _AdPlayer
+
 
 class ProductionVideoPlayer:
     """Production-ready video player with enhanced monitoring and recovery"""
@@ -117,6 +128,9 @@ class ProductionVideoPlayer:
 
         # Recycling verification sensor
         self.recycle_sensor = None
+
+        # Ad player (tsv6.ads) — None until start() if ads are enabled
+        self.ad_player = None
 
         # Door sequence transaction guard — prevents concurrent/looping door operations
         self._door_sequence_active = False
@@ -1163,6 +1177,13 @@ class ProductionVideoPlayer:
         3. If item detected: show product image + QR + NFC
         4. If not detected: show "Item Not Detected" error
         """
+        # Notify ad player that recycling is starting (screen is needed)
+        if self.ad_player:
+            try:
+                self.ad_player.on_recycling_state_change(is_recycling=True)
+            except Exception as _e:
+                self.logger.debug("ad_player.on_recycling_state_change(True): %s", _e)
+
         try:
             # Guard: prevent concurrent door sequences (causes open/close loop)
             with self._door_sequence_lock:
@@ -1338,6 +1359,13 @@ class ProductionVideoPlayer:
         elif not nfc_url:
             self.logger.warning("No nfcUrl in AWS response - skipping NFC broadcast")
 
+        # Notify ad player that recycling cycle is complete — resume ads
+        if self.ad_player:
+            try:
+                self.ad_player.on_recycling_state_change(is_recycling=False)
+            except Exception as _e:
+                self.logger.debug("ad_player.on_recycling_state_change(False): %s", _e)
+
     def _handle_recycle_failure(self, product_data, barcode: str, transaction_id: str):
         """
         Handle failed recycling verification (item not detected by sensor).
@@ -1368,6 +1396,13 @@ class ProductionVideoPlayer:
             f"Item not deposited for barcode: {barcode}",
             "low"
         )
+
+        # Notify ad player that recycling cycle is complete — resume ads
+        if self.ad_player:
+            try:
+                self.ad_player.on_recycling_state_change(is_recycling=False)
+            except Exception as _e:
+                self.logger.debug("ad_player.on_recycling_state_change(False): %s", _e)
 
     def _publish_recycle_result(self, barcode: str, transaction_id: str, status: str):
         """
@@ -1651,6 +1686,31 @@ class ProductionVideoPlayer:
                     print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
                 print(f"AWS IoT: {self.aws_config['thing_name']} ready")
                 
+                # Start ad player if enabled (runs in its own daemon thread)
+                _ad_enabled = os.getenv("TSV6_AD_ENABLED", "0").strip() in (
+                    "1", "true", "yes", "on"
+                )
+                if _ad_enabled:
+                    try:
+                        from tsv6.ads.config import AdConfig as _AdsAdConfig
+                        AdPlayerClass = _get_ad_player_class()
+                        ads_cfg = _AdsAdConfig.from_env(
+                            device_id=self.aws_config.get("thing_name", "")
+                        )
+                        self.ad_player = AdPlayerClass(
+                            config=ads_cfg,
+                            root=self.video_player.root,
+                            list_player=getattr(
+                                self.video_player, "list_player", None
+                            ),
+                        )
+                        self.ad_player.start()
+                        self.logger.info("Ad player started (endpoint=%s)", ads_cfg.endpoint)
+                    except Exception as _ad_exc:
+                        self.logger.error(
+                            "Failed to start ad player: %s", _ad_exc
+                        )
+
                 # Run main loop
                 try:
                     self.video_player.root.mainloop()
@@ -1681,10 +1741,17 @@ class ProductionVideoPlayer:
                 except Exception as e:
                     self.logger.warning(f"Error stopping sensor indicator: {e}")
 
+            # Stop ad player
+            if self.ad_player:
+                try:
+                    self.ad_player.stop()
+                except Exception as _e:
+                    self.logger.warning("Ad player stop error: %s", _e)
+
             # Stop barcode scanning
             if self.barcode_scanner:
                 self.barcode_scanner.stop_scanning()
-            
+
             # Stop AWS manager
             if self.aws_manager:
                 self.aws_manager.disconnect()

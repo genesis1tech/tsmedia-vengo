@@ -45,6 +45,7 @@ class UpdateType(Enum):
     CODE_ONLY = "code_only"
     MEDIA_ONLY = "media_only"
     CONFIGURATION = "configuration"
+    AD_PLAYER_UPDATE = "ad_player_update"  # tsv6.ads independent rollout track
 
 class JobStatus(Enum):
     """AWS IoT Jobs status values"""

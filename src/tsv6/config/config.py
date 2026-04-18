@@ -264,7 +264,11 @@ class TaskConfig:
 class MDashConfig:
     """mDash configuration"""
     APP_NAME: str = "TopperStopper_v5_raspberry_pi"
-    DEVICE_PASSWORD: str = "SsSy7eTW0muxW1l7g0R5Fg"  # device7
+    # SECURITY FIX: password moved from source code to environment variable.
+    # Set TSV6_MDASH_PASSWORD in the systemd unit or keychain.
+    DEVICE_PASSWORD: str = field(
+        default_factory=lambda: os.getenv("TSV6_MDASH_PASSWORD", "")
+    )
 
     # mDash endpoints and settings
     MDASH_SERVER: str = "mdash.net"
@@ -494,6 +498,19 @@ class Config:
         self.provisioning = ProvisioningConfig()
         self.lte = LTEConfig()
         self.connectivity = ConnectivityConfig()
+        # Ad player — built lazily via AdConfig.build() so the heavy ads package
+        # is only imported when the feature is accessed.  Guards in
+        # production_main.py check config.ads.enabled before importing tsv6.ads.
+        self._ads: object | None = None
+
+    @property
+    def ads(self) -> object:
+        """Return the full AdConfig from tsv6.ads (lazy import)."""
+        if self._ads is None:
+            from tsv6.ads.config import AdConfig as _AdsAdConfig
+
+            self._ads = _AdsAdConfig.from_env(device_id=self.device.thing_name)
+        return self._ads
 
     def get_aws_topics(self) -> dict:
         """Get formatted AWS IoT topics for this device"""
@@ -570,7 +587,7 @@ __all__ = [
     'ProvisioningConfig',
     'LTEConfig',
     'ConnectivityConfig',
-    'config'
+    'config',
 ]
 
 

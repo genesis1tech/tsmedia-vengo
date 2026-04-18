@@ -166,6 +166,17 @@ else
     warning "S3 media download skipped (no AWS credentials)"
 fi
 
+# ── Step 5b: Create ad player data directory ─────────────────────────────────
+# /var/lib/tsv6/ads stores the creative asset cache and the offline
+# impression queue (impressions.db).  Created here so the tsv6 user owns it;
+# the main tsv6@<user>.service runs as that user.
+
+log "Creating /var/lib/tsv6/ads directory..."
+sudo mkdir -p /var/lib/tsv6/ads
+sudo chown -R "$CURRENT_USER:$CURRENT_USER" /var/lib/tsv6
+sudo chmod 750 /var/lib/tsv6/ads
+success "/var/lib/tsv6/ads created (owner: $CURRENT_USER)"
+
 # ── Step 6: Enable and start services ─────────────────────────────────────────
 
 log "Enabling systemd services..."
