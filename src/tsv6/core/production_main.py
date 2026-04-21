@@ -77,6 +77,16 @@ except ImportError:
     RECYCLE_SENSOR_AVAILABLE = False
     print("Recycle verification sensor not available")
 
+# PiSignage display adapter (remote server on Hostinger)
+try:
+    from tsv6.display.pisignage_adapter import PiSignageAdapter, PiSignageConfig
+    from tsv6.display.pisignage_health import PiSignageHealthMonitor
+    from tsv6.display.playlist_manager import PlaylistManager
+    PISIGNAGE_AVAILABLE = True
+except ImportError:
+    PISIGNAGE_AVAILABLE = False
+    print("PiSignage display adapter not available")
+
 
 class ProductionVideoPlayer:
     """Production-ready video player with enhanced monitoring and recovery"""
@@ -117,6 +127,11 @@ class ProductionVideoPlayer:
 
         # Recycling verification sensor
         self.recycle_sensor = None
+
+        # PiSignage display adapter (remote server on Hostinger VPS)
+        self.pisignage_adapter = None
+        self.pisignage_health_monitor = None
+        self._pisignage_enabled = False
 
         # Door sequence transaction guard — prevents concurrent/looping door operations
         self._door_sequence_active = False
@@ -221,7 +236,10 @@ class ProductionVideoPlayer:
         # Initialize recycle verification sensor (after servo, before video player)
         self._initialize_recycle_sensor()
 
-        # Initialize video player
+        # Initialize PiSignage display adapter (if enabled)
+        self._initialize_pisignage()
+
+        # Initialize video player (skipped when PiSignage is active)
         self._initialize_video_player()
         
         # Initialize barcode scanner
@@ -803,8 +821,100 @@ class ProductionVideoPlayer:
             self.logger.error(f"Failed to initialize recycle sensor: {e}")
             self.error_recovery.report_error("recycle_sensor", "initialization", str(e), "low")
 
+    def _initialize_pisignage(self):
+        """Initialize PiSignage display adapter for remote server on Hostinger."""
+        from tsv6.config.config import config
+
+        if not config.pisignage.enabled:
+            self.logger.info("PiSignage disabled (PISIGNAGE_ENABLED != true)")
+            return
+
+        if not PISIGNAGE_AVAILABLE:
+            self.logger.warning("PiSignage modules not importable — falling back to VLC")
+            return
+
+        try:
+            self.error_recovery.register_component("pisignage")
+
+            # PiSignageConfig reads credentials from env vars directly
+            self.pisignage_adapter = PiSignageAdapter(
+                config=PiSignageConfig(),
+                on_connection_change=self._on_pisignage_connection_change,
+            )
+
+            # Verify server is reachable
+            if not self.pisignage_adapter.health_check():
+                self.logger.error(
+                    "PiSignage server unreachable at %s — falling back to VLC",
+                    self.pisignage_adapter.server_url,
+                )
+                self.pisignage_adapter = None
+                return
+
+            # Discover the player
+            if not self.pisignage_adapter.connect():
+                self.logger.warning(
+                    "No PiSignage player registered — falling back to VLC"
+                )
+                self.pisignage_adapter = None
+                return
+
+            # Ensure playlists exist on the server
+            playlist_mgr = PlaylistManager(self.pisignage_adapter)
+            playlist_mgr.ensure_playlists_exist()
+
+            # Start health monitor
+            self.pisignage_health_monitor = PiSignageHealthMonitor(
+                adapter=self.pisignage_adapter,
+                check_interval=self.pisignage_adapter._config.health_check_interval,
+                on_server_down=self._on_pisignage_down,
+                on_server_recovered=self._on_pisignage_recovered,
+            )
+            self.pisignage_health_monitor.start()
+
+            self._pisignage_enabled = True
+            self.error_recovery.report_success("pisignage")
+            self.logger.info(
+                "PiSignage adapter initialized — server=%s player=%s",
+                self.pisignage_adapter.server_url,
+                self.pisignage_adapter.player_id,
+            )
+
+        except Exception as e:
+            self.logger.error("PiSignage initialization failed: %s", e)
+            self.pisignage_adapter = None
+            self._pisignage_enabled = False
+
+    def _on_pisignage_connection_change(self, connected: bool):
+        """Handle PiSignage connection state changes."""
+        if connected:
+            self.logger.info("PiSignage server connection restored")
+            self.error_recovery.report_success("pisignage")
+        else:
+            self.logger.warning("PiSignage server connection lost")
+            self.error_recovery.report_error(
+                "pisignage", "connection_lost", "Server unreachable", "high"
+            )
+
+    def _on_pisignage_down(self):
+        """PiSignage server has been unreachable for multiple health checks."""
+        self.logger.error("PiSignage server DOWN — display may be stale")
+        # Could trigger VLC fallback here if desired
+
+    def _on_pisignage_recovered(self):
+        """PiSignage server recovered after being down."""
+        self.logger.info("PiSignage server recovered — resuming normal operation")
+        if self.pisignage_adapter:
+            self.pisignage_adapter.set_default_playlist()
+
     def _initialize_video_player(self):
-        """Initialize video player component"""
+        """Initialize video player component (skipped when PiSignage is active)"""
+        if self._pisignage_enabled:
+            self.logger.info(
+                "VLC video player skipped — PiSignage is handling display"
+            )
+            return
+
         try:
             # PHASE 1 FIX: Pass memory optimizer to video player to ensure same instance
             self.video_player = EnhancedVideoPlayer(
@@ -1518,10 +1628,13 @@ class ProductionVideoPlayer:
     def _on_no_match_display(self):
         """Handle no match display requests"""
         try:
-            if self.video_player and hasattr(self.video_player, 'display_no_match_image'):
+            if self._pisignage_enabled and self.pisignage_adapter:
+                self.pisignage_adapter.show_no_match()
+                self.error_recovery.report_success("pisignage")
+            elif self.video_player and hasattr(self.video_player, 'display_no_match_image'):
                 self.video_player.display_no_match_image()
                 self.error_recovery.report_success("video_player")
-                
+
         except Exception as e:
             self.logger.error(f"Failed to handle no match display: {e}")
             self.error_recovery.report_error("video_player", "no_match_display_failed", str(e), "medium")
@@ -1545,9 +1658,10 @@ class ProductionVideoPlayer:
         """Handle QR code detection by displaying barcode_not_qr.jpg image"""
         try:
             self.logger.info(f"QR Code detected: {qr_data}")
-            
-            # Trigger QR not allowed image display if video player is available
-            if (
+
+            if self._pisignage_enabled and self.pisignage_adapter:
+                self.pisignage_adapter.show_barcode_not_qr()
+            elif (
                 self.video_player
                 and hasattr(self.video_player, 'display_qr_not_allowed_image')
                 and getattr(self.video_player, 'root', None)
@@ -1556,9 +1670,9 @@ class ProductionVideoPlayer:
             else:
                 # UI may not be initialized yet; skip/defer to avoid None access
                 self.logger.debug("QR detected before UI init; skipping QR-not-allowed display")
-            
+
             self.error_recovery.report_success("qr_code_detection")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to handle QR code detection: {e}")
             self.error_recovery.report_error("qr_code_detection", "qr_display", str(e), "medium")
@@ -1623,24 +1737,21 @@ class ProductionVideoPlayer:
             # Start barcode scanning
             if self.barcode_scanner:
                 self.barcode_scanner.start_scanning()
-            
-            # Start video player
-            if self.video_player:
-                self.video_player.setup_video_display()
-                self.video_player.load_videos()
-                self.video_player.start_status_publishing()
-                
-                # Connect barcode callback
-                if self.barcode_scanner:
-                    self.barcode_scanner.barcode_callback = self._on_barcode_scanned
-                    self.barcode_scanner.qr_code_callback = self._display_qr_not_allowed_image
-                
-                # Start video playback
-                if self.video_player.video_files:
-                    self.video_player.play_current_video()
-                
-                self.logger.info("Enhanced production system fully started")
-                print("Enhanced Production System Ready")
+
+            # Connect barcode callbacks (regardless of display mode)
+            if self.barcode_scanner:
+                self.barcode_scanner.barcode_callback = self._on_barcode_scanned
+                self.barcode_scanner.qr_code_callback = self._display_qr_not_allowed_image
+
+            # Start display — either PiSignage (headless) or VLC (tkinter)
+            if self._pisignage_enabled and self.pisignage_adapter:
+                # PiSignage mode: set default playlist and run headless event loop
+                self.pisignage_adapter.set_default_playlist()
+
+                self.logger.info("Enhanced production system fully started (PiSignage mode)")
+                print("Enhanced Production System Ready (PiSignage Display)")
+                print(f"PiSignage Server: {self.pisignage_adapter.server_url}")
+                print(f"PiSignage Player: {self.pisignage_adapter.player_id}")
                 print(f"Error Recovery: {len(self.error_recovery.component_health)} components monitored")
                 if self.network_monitor:
                     print(f"Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
@@ -1650,8 +1761,36 @@ class ProductionVideoPlayer:
                 if self.connectivity_manager:
                     print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
                 print(f"AWS IoT: {self.aws_config['thing_name']} ready")
-                
-                # Run main loop
+
+                # Headless main loop — wait for shutdown signal
+                try:
+                    self.shutdown_event.wait()
+                except KeyboardInterrupt:
+                    pass
+
+            elif self.video_player:
+                # Legacy VLC mode with tkinter mainloop
+                self.video_player.setup_video_display()
+                self.video_player.load_videos()
+                self.video_player.start_status_publishing()
+
+                # Start video playback
+                if self.video_player.video_files:
+                    self.video_player.play_current_video()
+
+                self.logger.info("Enhanced production system fully started (VLC mode)")
+                print("Enhanced Production System Ready (VLC Display)")
+                print(f"Error Recovery: {len(self.error_recovery.component_health)} components monitored")
+                if self.network_monitor:
+                    print(f"Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
+                if self.lte_controller:
+                    print(f"LTE Controller: {self.lte_controller.config.apn} APN configured")
+                print(f"Network Adapter: {os.getenv('TSV6_NETWORK_ADAPTER', 'rpi-wifi')}")
+                if self.connectivity_manager:
+                    print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
+                print(f"AWS IoT: {self.aws_config['thing_name']} ready")
+
+                # Run tkinter main loop
                 try:
                     self.video_player.root.mainloop()
                 except KeyboardInterrupt:
@@ -1681,10 +1820,26 @@ class ProductionVideoPlayer:
                 except Exception as e:
                     self.logger.warning(f"Error stopping sensor indicator: {e}")
 
+            # Stop PiSignage health monitor
+            if self.pisignage_health_monitor:
+                try:
+                    self.pisignage_health_monitor.stop()
+                    self.logger.info("PiSignage health monitor stopped")
+                except Exception as e:
+                    self.logger.warning(f"Error stopping PiSignage health monitor: {e}")
+
+            # Disconnect PiSignage adapter
+            if self.pisignage_adapter:
+                try:
+                    self.pisignage_adapter.disconnect()
+                    self.logger.info("PiSignage adapter disconnected")
+                except Exception as e:
+                    self.logger.warning(f"Error disconnecting PiSignage: {e}")
+
             # Stop barcode scanning
             if self.barcode_scanner:
                 self.barcode_scanner.stop_scanning()
-            
+
             # Stop AWS manager
             if self.aws_manager:
                 self.aws_manager.disconnect()

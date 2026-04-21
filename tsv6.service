@@ -106,5 +106,16 @@ Environment="TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05"
 Environment="TSV6_RECYCLE_SENSOR_SIMULATION=false"
 Environment="TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS=2"
 
+# ── PiSignage Display Settings ───────────────────────────────────────────────
+# Set PISIGNAGE_ENABLED=true to use PiSignage (remote Hostinger server) for
+# media playback instead of local VLC+tkinter. The PiSignage player must be
+# installed and registered with the server first.
+#
+# When disabled (default), the legacy VLC-based EnhancedVideoPlayer is used.
+Environment="PISIGNAGE_ENABLED=false"
+Environment="PISIGNAGE_SERVER_URL=http://72.60.120.25:3000"
+Environment="PISIGNAGE_USERNAME=pi"
+Environment="PISIGNAGE_PASSWORD=pi"
+
 [Install]
 WantedBy=multi-user.target
