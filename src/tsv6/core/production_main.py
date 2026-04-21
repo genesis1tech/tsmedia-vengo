@@ -87,6 +87,14 @@ except ImportError:
     PISIGNAGE_AVAILABLE = False
     print("PiSignage display adapter not available")
 
+# TSV6 native in-process player (no separate PiSignage player software required)
+try:
+    from tsv6.display.tsv6_player.backend import TSV6NativeBackend
+    TSV6_NATIVE_AVAILABLE = True
+except ImportError:
+    TSV6_NATIVE_AVAILABLE = False
+    print("TSV6 native backend not available")
+
 
 class ProductionVideoPlayer:
     """Production-ready video player with enhanced monitoring and recovery"""
@@ -132,6 +140,12 @@ class ProductionVideoPlayer:
         self.pisignage_adapter = None
         self.pisignage_health_monitor = None
         self._pisignage_enabled = False
+
+        # Unified display backend (DisplayController).  Set by _initialize_pisignage
+        # to either TSV6NativeBackend ("native") or PiSignageAdapter ("rest").
+        # Remains None when PISIGNAGE_BACKEND=vlc or backend init fails, in which
+        # case the legacy video_player path is used throughout.
+        self.display_backend = None
 
         # Door sequence transaction guard — prevents concurrent/looping door operations
         self._door_sequence_active = False
@@ -822,20 +836,119 @@ class ProductionVideoPlayer:
             self.error_recovery.report_error("recycle_sensor", "initialization", str(e), "low")
 
     def _initialize_pisignage(self):
-        """Initialize PiSignage display adapter for remote server on Hostinger."""
+        """
+        Initialize the display backend based on the PISIGNAGE_BACKEND env var.
+
+        PISIGNAGE_BACKEND values:
+          "rest"   — PiSignageAdapter (REST client to remote player; default)
+          "native" — TSV6NativeBackend (in-process player; no player license needed)
+          "vlc"    — Skip this init; legacy EnhancedVideoPlayer is used
+          (unset)  — Treated as "rest" when PISIGNAGE_ENABLED=true, else "vlc"
+
+        The selected backend is stored as ``self.display_backend`` (a
+        DisplayController) and ``self._pisignage_enabled`` is set True so that
+        all display callsites route through the backend instead of video_player.
+        """
         from tsv6.config.config import config
 
-        if not config.pisignage.enabled:
+        backend_type = os.environ.get("PISIGNAGE_BACKEND", "rest").lower().strip()
+
+        # If the legacy override is explicitly requested, skip all display backends.
+        if backend_type == "vlc":
+            self.logger.info("PISIGNAGE_BACKEND=vlc — using legacy EnhancedVideoPlayer")
+            return
+
+        # Both "rest" and "native" require PISIGNAGE_ENABLED=true OR an explicit
+        # PISIGNAGE_BACKEND value to be meaningful.  If neither signal is present,
+        # stay on VLC.
+        if not config.pisignage.enabled and backend_type == "rest":
             self.logger.info("PiSignage disabled (PISIGNAGE_ENABLED != true)")
             return
 
+        self.error_recovery.register_component("pisignage")
+
+        # ── Native backend ────────────────────────────────────────────────────
+        if backend_type == "native":
+            if not TSV6_NATIVE_AVAILABLE:
+                self.logger.warning(
+                    "TSV6NativeBackend not importable (PISIGNAGE_BACKEND=native) "
+                    "— falling back to VLC"
+                )
+                return
+
+            try:
+                from pathlib import Path
+
+                server_url = os.environ.get(
+                    "PISIGNAGE_SERVER_URL", "http://72.60.120.25:3000"
+                )
+                username = os.environ.get("PISIGNAGE_USERNAME", "pi")
+                password = os.environ.get("PISIGNAGE_PASSWORD", "pi")
+                installation = os.environ.get("PISIGNAGE_INSTALLATION", "g1tech26")
+                group_name = os.environ.get("PISIGNAGE_GROUP", "default")
+                app_version = os.environ.get("TSV6_APP_VERSION", "1.0.0")
+                venue_id = os.environ.get("TSV6_VENUE_ID") or None
+
+                # Resolve layout HTML — defaults to the bundled custom_layout.html.
+                default_layout = (
+                    Path(__file__).parent.parent.parent.parent
+                    / "pisignage"
+                    / "templates"
+                    / "layouts"
+                    / "custom_layout.html"
+                )
+                layout_html = Path(
+                    os.environ.get("TSV6_LAYOUT_HTML", str(default_layout))
+                )
+
+                cache_dir = Path(
+                    os.environ.get(
+                        "TSV6_ASSET_CACHE_DIR",
+                        str(Path.home() / ".local" / "share" / "tsv6" / "assets"),
+                    )
+                )
+
+                backend = TSV6NativeBackend(
+                    server_url=server_url,
+                    username=username,
+                    password=password,
+                    cache_dir=cache_dir,
+                    layout_html=layout_html,
+                    installation=installation,
+                    group_name=group_name,
+                    app_version=app_version,
+                    venue_id=venue_id,
+                )
+
+                if not backend.connect():
+                    self.logger.error(
+                        "TSV6NativeBackend.connect() failed — falling back to VLC"
+                    )
+                    return
+
+                backend.start()
+
+                self.display_backend = backend
+                self._pisignage_enabled = True
+                self.error_recovery.report_success("pisignage")
+                self.logger.info(
+                    "TSV6NativeBackend initialized — server=%s installation=%s",
+                    server_url,
+                    installation,
+                )
+
+            except Exception as exc:
+                self.logger.error("TSV6NativeBackend initialization failed: %s", exc)
+                self.display_backend = None
+                self._pisignage_enabled = False
+            return
+
+        # ── REST backend (default) ─────────────────────────────────────────────
         if not PISIGNAGE_AVAILABLE:
             self.logger.warning("PiSignage modules not importable — falling back to VLC")
             return
 
         try:
-            self.error_recovery.register_component("pisignage")
-
             # PiSignageConfig reads credentials from env vars directly
             self.pisignage_adapter = PiSignageAdapter(
                 config=PiSignageConfig(),
@@ -872,17 +985,20 @@ class ProductionVideoPlayer:
             )
             self.pisignage_health_monitor.start()
 
+            # Wire the adapter as the unified display backend.
+            self.display_backend = self.pisignage_adapter
             self._pisignage_enabled = True
             self.error_recovery.report_success("pisignage")
             self.logger.info(
-                "PiSignage adapter initialized — server=%s player=%s",
+                "PiSignage REST adapter initialized — server=%s player=%s",
                 self.pisignage_adapter.server_url,
                 self.pisignage_adapter.player_id,
             )
 
-        except Exception as e:
-            self.logger.error("PiSignage initialization failed: %s", e)
+        except Exception as exc:
+            self.logger.error("PiSignage initialization failed: %s", exc)
             self.pisignage_adapter = None
+            self.display_backend = None
             self._pisignage_enabled = False
 
     def _on_pisignage_connection_change(self, connected: bool):
@@ -904,7 +1020,9 @@ class ProductionVideoPlayer:
     def _on_pisignage_recovered(self):
         """PiSignage server recovered after being down."""
         self.logger.info("PiSignage server recovered — resuming normal operation")
-        if self.pisignage_adapter:
+        if self.display_backend is not None:
+            self.display_backend.show_idle()
+        elif self.pisignage_adapter:
             self.pisignage_adapter.set_default_playlist()
 
     def _initialize_video_player(self):
@@ -1285,7 +1403,9 @@ class ProductionVideoPlayer:
                 self._door_sequence_active = True
 
             # Show deposit waiting screen (replaces processing image)
-            if self.video_player and hasattr(self.video_player, 'display_deposit_waiting'):
+            if self.display_backend is not None:
+                self.display_backend.show_deposit_item()
+            elif self.video_player and hasattr(self.video_player, 'display_deposit_waiting'):
                 self.video_player.display_deposit_waiting()
 
             # Run verified door sequence in background to avoid blocking MQTT
@@ -1299,10 +1419,20 @@ class ProductionVideoPlayer:
             else:
                 # No servo and no sensor — fallback to immediate display
                 self.logger.warning("No servo or sensor — falling back to immediate product display")
-                if self.video_player and hasattr(self.video_player, 'hide_deposit_waiting'):
-                    self.video_player.hide_deposit_waiting()
-                if self.video_player and hasattr(self.video_player, 'display_product_image'):
-                    self.video_player.display_product_image(product_data)
+                product_image_path = product_data.get('imageUrl', '')
+                qr_url = product_data.get('qrUrl', product_data.get('nfcUrl', ''))
+                nfc_url = product_data.get('nfcUrl', None)
+                if self.display_backend is not None:
+                    self.display_backend.show_product_display(
+                        product_image_path=product_image_path,
+                        qr_url=qr_url,
+                        nfc_url=nfc_url,
+                    )
+                else:
+                    if self.video_player and hasattr(self.video_player, 'hide_deposit_waiting'):
+                        self.video_player.hide_deposit_waiting()
+                    if self.video_player and hasattr(self.video_player, 'display_product_image'):
+                        self.video_player.display_product_image(product_data)
                 with self._door_sequence_lock:
                     self._door_sequence_active = False
 
@@ -1428,8 +1558,17 @@ class ProductionVideoPlayer:
         self.logger.info(f"Recycle SUCCESS for barcode: {barcode}")
         print(f"Recycle verified successfully")
 
-        # Hide deposit waiting screen and show product image + QR
-        if self.video_player:
+        # Show product image + QR code on whichever display backend is active
+        product_image_path = product_data.get('imageUrl', '')
+        qr_url = product_data.get('qrUrl', product_data.get('nfcUrl', ''))
+
+        if self.display_backend is not None:
+            self.display_backend.show_product_display(
+                product_image_path=product_image_path,
+                qr_url=qr_url,
+                nfc_url=nfc_url or None,
+            )
+        elif self.video_player:
             if hasattr(self.video_player, 'hide_deposit_waiting'):
                 self.video_player.hide_deposit_waiting()
             if hasattr(self.video_player, 'display_product_image'):
@@ -1442,7 +1581,8 @@ class ProductionVideoPlayer:
             status="recycle_success"
         )
 
-        # Start NFC broadcasting with URL from AWS
+        # Start NFC broadcasting with URL from AWS (legacy VLC path only;
+        # native/REST backends handle NFC via show_product_display nfc_url arg)
         if nfc_url and self.video_player and hasattr(self.video_player, 'start_nfc_for_transaction'):
             self.video_player.start_nfc_for_transaction(nfc_url, transaction_id)
         elif not nfc_url:
@@ -1458,8 +1598,10 @@ class ProductionVideoPlayer:
         self.logger.warning(f"Recycle FAILURE for barcode: {barcode} - item not detected")
         print("Item was NOT detected by sensor")
 
-        # Hide deposit waiting screen and show failure message
-        if self.video_player:
+        # Show no-item-detected screen on whichever display backend is active
+        if self.display_backend is not None:
+            self.display_backend.show_no_item_detected()
+        elif self.video_player:
             if hasattr(self.video_player, 'hide_deposit_waiting'):
                 self.video_player.hide_deposit_waiting()
             if hasattr(self.video_player, 'display_recycle_failure'):
@@ -1628,8 +1770,8 @@ class ProductionVideoPlayer:
     def _on_no_match_display(self):
         """Handle no match display requests"""
         try:
-            if self._pisignage_enabled and self.pisignage_adapter:
-                self.pisignage_adapter.show_no_match()
+            if self.display_backend is not None:
+                self.display_backend.show_no_match()
                 self.error_recovery.report_success("pisignage")
             elif self.video_player and hasattr(self.video_player, 'display_no_match_image'):
                 self.video_player.display_no_match_image()
@@ -1643,13 +1785,16 @@ class ProductionVideoPlayer:
         """Handle barcode scan events"""
         try:
             self.logger.info(f"Barcode scanned: {barcode_data}")
-            
-            # Trigger video change if video player is available
-            if self.video_player and hasattr(self.video_player, 'next_video'):
+
+            # Show processing screen while awaiting AWS response
+            if self.display_backend is not None:
+                self.display_backend.show_processing()
+            elif self.video_player and hasattr(self.video_player, 'next_video'):
+                # Legacy VLC: advance to the next video as the processing signal
                 self.video_player.root.after(0, self.video_player.next_video)
-            
+
             self.error_recovery.report_success("barcode_scanner")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to handle barcode scan: {e}")
             self.error_recovery.report_error("barcode_scanner", "scan_processing", str(e), "medium")
@@ -1659,8 +1804,8 @@ class ProductionVideoPlayer:
         try:
             self.logger.info(f"QR Code detected: {qr_data}")
 
-            if self._pisignage_enabled and self.pisignage_adapter:
-                self.pisignage_adapter.show_barcode_not_qr()
+            if self.display_backend is not None:
+                self.display_backend.show_barcode_not_qr()
             elif (
                 self.video_player
                 and hasattr(self.video_player, 'display_qr_not_allowed_image')
@@ -1743,15 +1888,20 @@ class ProductionVideoPlayer:
                 self.barcode_scanner.barcode_callback = self._on_barcode_scanned
                 self.barcode_scanner.qr_code_callback = self._display_qr_not_allowed_image
 
-            # Start display — either PiSignage (headless) or VLC (tkinter)
-            if self._pisignage_enabled and self.pisignage_adapter:
-                # PiSignage mode: set default playlist and run headless event loop
-                self.pisignage_adapter.set_default_playlist()
+            # Start display — either PiSignage/Native (headless) or VLC (tkinter)
+            if self._pisignage_enabled and self.display_backend is not None:
+                # Backend mode: show idle attract loop and run headless event loop
+                self.display_backend.show_idle()
 
-                self.logger.info("Enhanced production system fully started (PiSignage mode)")
-                print("Enhanced Production System Ready (PiSignage Display)")
-                print(f"PiSignage Server: {self.pisignage_adapter.server_url}")
-                print(f"PiSignage Player: {self.pisignage_adapter.player_id}")
+                # Backwards-compat: REST adapter also accepts set_default_playlist
+                if self.pisignage_adapter is not None:
+                    self.pisignage_adapter.set_default_playlist()
+
+                self.logger.info("Enhanced production system fully started (display backend mode)")
+                print("Enhanced Production System Ready (Display Backend)")
+                if self.pisignage_adapter is not None:
+                    print(f"PiSignage Server: {self.pisignage_adapter.server_url}")
+                    print(f"PiSignage Player: {self.pisignage_adapter.player_id}")
                 print(f"Error Recovery: {len(self.error_recovery.component_health)} components monitored")
                 if self.network_monitor:
                     print(f"Network Monitor: {self.network_monitor.cfg.interface} monitoring enabled")
@@ -1828,7 +1978,16 @@ class ProductionVideoPlayer:
                 except Exception as e:
                     self.logger.warning(f"Error stopping PiSignage health monitor: {e}")
 
-            # Disconnect PiSignage adapter
+            # Stop the unified display backend (native or REST)
+            if self.display_backend is not None and self.display_backend is not self.pisignage_adapter:
+                try:
+                    self.display_backend.stop()
+                    self.display_backend.disconnect()
+                    self.logger.info("Display backend stopped")
+                except Exception as e:
+                    self.logger.warning(f"Error stopping display backend: {e}")
+
+            # Disconnect PiSignage adapter (REST backend)
             if self.pisignage_adapter:
                 try:
                     self.pisignage_adapter.disconnect()

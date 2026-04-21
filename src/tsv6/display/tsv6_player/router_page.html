@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=800, height=480, initial-scale=1.0">
+<title>TSV6 Layout</title>
+<style>
+  /*
+   * TSV6 router page — loaded by Chromium kiosk at http://localhost:8765/
+   *
+   * Required zones (do not remove or rename):
+   *   #full    — full-screen container
+   *   #main    — primary content area; transparent when VLC renders behind it
+   *   #ticker  — ticker bar / branded footer
+   */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: "Arial Black", Arial, sans-serif;
+  }
+
+  /* Full-screen container */
+  #full {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Main content zone — leaves 60px at bottom for the TSV6 footer */
+  #main {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: calc(100% - 60px);
+    background: #000;
+    overflow: hidden;
+    transition: background-color 0.1s ease;
+  }
+
+  /* Transparent state — used when VLC renders behind this zone */
+  #main.video-zone {
+    background: transparent !important;
+  }
+
+  /* iframe used for HTML assets — fills the entire #main zone */
+  #main-iframe {
+    display: none;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+  }
+
+  /* img used for image assets — centred, object-fit contain */
+  #main-image {
+    display: none;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+  }
+
+  /* Product display: product image + QR overlay */
+  #product-container {
+    display: none;
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  #product-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+  }
+
+  #qr-overlay {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    width: 96px;
+    height: 96px;
+    background: #fff;
+    padding: 4px;
+    border-radius: 4px;
+  }
+
+  /* Idle placeholder shown when no command has arrived yet */
+  #idle-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: #333;
+    font-size: 18px;
+    letter-spacing: 1px;
+  }
+
+  /* ── Red "SCAN BARCODE TO RECYCLE" footer (preserved exactly) ────────────── */
+  #ticker {
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%;
+    height: 60px;
+    background: #d91e18;                /* Red */
+    color: #ffffff;                     /* White */
+    font-family: "Arial Black", "Arial Bold", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 32px;
+    line-height: 60px;
+    text-align: center;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    z-index: 100;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* Suppress any child content injected into the ticker */
+  #ticker > * { display: none !important; }
+  /* Branded footer label */
+  #ticker::after {
+    content: "SCAN BARCODE TO RECYCLE";
+    display: block;
+    width: 100%;
+    height: 60px;
+    line-height: 60px;
+  }
+
+  /* Hide any PiSignage branding */
+  #poweredby,
+  .powered-by,
+  a[href*="pisignage.com"],
+  [class*="pisignage-footer"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+  }
+</style>
+</head>
+<body>
+  <div id="full">
+    <div id="main">
+      <!-- HTML asset iframe -->
+      <iframe id="main-iframe" sandbox="allow-scripts allow-same-origin" title="HTML asset"></iframe>
+
+      <!-- Image asset -->
+      <img id="main-image" src="" alt="Asset" />
+
+      <!-- Product display: product image + QR code overlay -->
+      <div id="product-container">
+        <img id="product-image" src="" alt="Product" />
+        <img id="qr-overlay" src="" alt="QR code" />
+      </div>
+
+      <!-- Idle placeholder -->
+      <div id="idle-placeholder">TSV6 Ready</div>
+    </div>
+    <!-- Red branded footer — do not modify -->
+    <div id="ticker"></div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── DOM element references ────────────────────────────────────────────────
+  var mainZone       = document.getElementById("main");
+  var mainIframe     = document.getElementById("main-iframe");
+  var mainImage      = document.getElementById("main-image");
+  var productCont    = document.getElementById("product-container");
+  var productImage   = document.getElementById("product-image");
+  var qrOverlay      = document.getElementById("qr-overlay");
+  var idlePh         = document.getElementById("idle-placeholder");
+
+  // ── Helper: hide all content slots ───────────────────────────────────────
+  function clearMain() {
+    mainIframe.style.display     = "none";
+    mainIframe.src               = "";
+    mainImage.style.display      = "none";
+    mainImage.src                = "";
+    productCont.style.display    = "none";
+    productImage.src             = "";
+    qrOverlay.src                = "";
+    idlePh.style.display         = "none";
+    mainZone.classList.remove("video-zone");
+  }
+
+  // ── Command handlers ──────────────────────────────────────────────────────
+
+  /**
+   * show_html — load an HTML asset in the iframe.
+   * Expected: { action: "show_html", src: "filename.html" }
+   */
+  function handleShowHtml(cmd) {
+    clearMain();
+    mainIframe.src = "/assets/" + encodeURIComponent(cmd.src);
+    mainIframe.style.display = "block";
+  }
+
+  /**
+   * show_image — display an image asset.
+   * Expected: { action: "show_image", src: "filename.jpg" }
+   */
+  function handleShowImage(cmd) {
+    clearMain();
+    mainImage.src = "/assets/" + encodeURIComponent(cmd.src);
+    mainImage.style.display = "block";
+  }
+
+  /**
+   * show_product — display a product image with a QR-code overlay.
+   * Expected: { action: "show_product", image: "page1.png", qr_url: "https://..." }
+   */
+  function handleShowProduct(cmd) {
+    clearMain();
+    productImage.src = "/assets/" + encodeURIComponent(cmd.image);
+    // QR code: build a data URL via a canvas element using the qr_url value.
+    // For simplicity we use a lightweight approach: load the QR image directly
+    // if qr_url points to a local asset, or compose a Google Charts URL for
+    // external URLs.  Python side can also pre-render the QR and pass a local
+    // filename instead.
+    if (cmd.qr_src) {
+      // Caller provided a pre-rendered QR image filename.
+      qrOverlay.src = "/assets/" + encodeURIComponent(cmd.qr_src);
+    } else if (cmd.qr_url) {
+      // Fall back to a QR API endpoint.
+      qrOverlay.src =
+        "https://api.qrserver.com/v1/create-qr-code/?size=88x88&data=" +
+        encodeURIComponent(cmd.qr_url);
+    }
+    productCont.style.display = "block";
+  }
+
+  /**
+   * show_video_zone — make #main transparent so VLC renders behind Chromium.
+   * Expected: { action: "show_video_zone", zone: "main", rect: [x,y,w,h] }
+   * Reports the actual pixel rect back to Python via POST /video_zone_rect.
+   */
+  function handleShowVideoZone(cmd) {
+    clearMain();
+    mainZone.classList.add("video-zone");
+
+    // Measure the actual bounding rect of #main in screen coordinates.
+    var r = mainZone.getBoundingClientRect();
+    var rect = [
+      Math.round(r.left   + window.screenX),
+      Math.round(r.top    + window.screenY),
+      Math.round(r.width),
+      Math.round(r.height)
+    ];
+
+    // If the caller already supplied a rect, prefer that.
+    if (cmd.rect && cmd.rect.length === 4) {
+      rect = cmd.rect;
+    }
+
+    fetch("/video_zone_rect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rect: rect })
+    }).catch(function (err) {
+      console.warn("video_zone_rect POST failed:", err);
+    });
+  }
+
+  /**
+   * hide_video_zone — restore #main background.
+   */
+  function handleHideVideoZone() {
+    mainZone.classList.remove("video-zone");
+  }
+
+  /**
+   * show_idle — show the idle placeholder; VLC is responsible for looping
+   * idle videos behind the transparent zone if previously set up.
+   */
+  function handleShowIdle() {
+    clearMain();
+    idlePh.style.display = "flex";
+  }
+
+  // ── SSE dispatcher ────────────────────────────────────────────────────────
+  var HANDLERS = {
+    "show_html":        handleShowHtml,
+    "show_image":       handleShowImage,
+    "show_product":     handleShowProduct,
+    "show_video_zone":  handleShowVideoZone,
+    "hide_video_zone":  handleHideVideoZone,
+    "show_idle":        handleShowIdle
+  };
+
+  function dispatch(cmd) {
+    var handler = HANDLERS[cmd.action];
+    if (handler) {
+      handler(cmd);
+    } else {
+      console.warn("TSV6: unknown action:", cmd.action);
+    }
+  }
+
+  // ── Connect to SSE stream ─────────────────────────────────────────────────
+  function connectSSE() {
+    var es = new EventSource("/events");
+
+    es.onmessage = function (event) {
+      try {
+        var cmd = JSON.parse(event.data);
+        dispatch(cmd);
+      } catch (e) {
+        console.error("TSV6: failed to parse SSE data:", event.data, e);
+      }
+    };
+
+    es.onerror = function () {
+      console.warn("TSV6: SSE connection lost; will reconnect automatically.");
+      // EventSource reconnects automatically; no manual retry needed.
+    };
+  }
+
+  // Start SSE after the DOM is ready (it already is at this point, but
+  // defer slightly to let Chromium finish layout so getBoundingClientRect
+  // returns accurate values).
+  window.addEventListener("load", function () {
+    connectSSE();
+    // Show idle placeholder on initial load.
+    handleShowIdle();
+  });
+}());
+</script>
+</body>
+</html>

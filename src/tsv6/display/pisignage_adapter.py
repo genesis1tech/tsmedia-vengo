@@ -25,6 +25,8 @@ from pathlib import Path
 import requests
 from requests.auth import HTTPBasicAuth
 
+from tsv6.display.controller import DisplayController  # noqa: F401 — satisfies Protocol
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,6 +145,25 @@ class PiSignageAdapter:
             self._on_connection_change(False)
         logger.info("PiSignage adapter disconnected")
 
+    def start(self) -> None:
+        """Start background services (no-op at this layer; subclasses may override).
+
+        Health monitor background threads are started by PiSignageHealthMonitor
+        when composed externally. This method exists to satisfy the
+        DisplayController lifecycle protocol.
+        """
+        logger.debug("PiSignageAdapter.start() called (no background threads here)")
+
+    def stop(self) -> None:
+        """Stop background services and disconnect.
+
+        Calls disconnect() to release the server-side session and clear
+        state. Background threads owned by external monitors must be stopped
+        by their owners.
+        """
+        logger.debug("PiSignageAdapter.stop() called")
+        self.disconnect()
+
     @property
     def is_connected(self) -> bool:
         with self._lock:
@@ -225,9 +246,31 @@ class PiSignageAdapter:
         """Show the 'Please Deposit Your Item' screen."""
         return self.switch_playlist(self._config.deposit_playlist)
 
-    def show_product_display(self) -> bool:
-        """Show the product image + QR code screen."""
+    def show_idle(self) -> bool:
+        """Switch to the default looping state. Alias for set_default_playlist()."""
+        return self.set_default_playlist()
+
+    def show_product_display(
+        self,
+        product_image_path: str = "",
+        qr_url: str = "",
+        nfc_url: str | None = None,
+    ) -> bool:
+        """Switch to the product display playlist.
+
+        Args:
+            product_image_path: Path to the product image asset (reserved for
+                Agent D's dynamic image injection; unused by this adapter layer).
+            qr_url: URL for the QR code overlay (reserved for Agent D).
+            nfc_url: Optional NFC broadcast URL (reserved for Agent D).
+
+        Returns True on successful playlist switch.
+        """
         return self.switch_playlist(self._config.product_playlist)
+
+    def show_offline(self) -> bool:
+        """Show the offline / server-unreachable fallback screen."""
+        return self.switch_playlist(self._config.offline_playlist)
 
     def show_no_match(self) -> bool:
         """Show the 'Cannot Accept' screen."""
