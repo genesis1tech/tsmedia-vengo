@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Recent Changes
+
+### minor: PiSignage integration with remote Hostinger server - 2026-04-20
+- Branch: `minor/pisignage-hostinger-integration`
+- PR: https://github.com/genesis1tech/tsrpi5/pull/70
+- Summary: Shifts media playback from local VLC to PiSignage (Chromium kiosk on Pi, management server on Hostinger VPS at 72.60.120.25:3000). New `src/tsv6/display/` module with `PiSignageAdapter` (REST client), `PiSignageHealthMonitor`, and `PlaylistManager`. 8 TSV6 playlists + custom branded layout with red "SCAN BARCODE TO RECYCLE" footer (Arial Black). Feature flag `PISIGNAGE_ENABLED` in tsv6.service (default false) with VLC fallback. 25 unit tests. Barcode/AWS/servo/NFC/sensor logic unchanged.
+
 ## Project Overview
 
 TSV6 (Topper Stopper V6) is a production-ready IoT video player system for Raspberry Pi hardware. The system displays videos on a Waveshare 7" DSI display, scans barcodes, transmits data to AWS IoT Core, receives product information, and controls a servo motor to open/close a door. It features comprehensive monitoring, error recovery, OTA updates, and production deployment automation.
