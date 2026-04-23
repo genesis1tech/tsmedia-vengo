@@ -106,7 +106,7 @@ class AssetSyncer:
     never leaves a corrupt destination file.
 
     Args:
-        base_url: Scheme + host + port, e.g. ``"http://72.60.120.25:3000"``.
+        base_url: Scheme + host + port, e.g. ``"https://tsmedia.g1tech.cloud"``.
         base_path: URL path prefix including trailing slash, e.g.
             ``"/sync_folders/g1tech26/default/"``.
         username: HTTP Basic auth username.

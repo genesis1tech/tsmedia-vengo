@@ -65,7 +65,7 @@ class TSV6NativeBackend:
     Parameters
     ----------
     server_url:
-        Full URL of the PiSignage server, e.g. ``"http://72.60.120.25:3000"``.
+        Full URL of the PiSignage server, e.g. ``"https://tsmedia.g1tech.cloud"``.
     username:
         PiSignage Basic-auth username.
     password:
@@ -461,21 +461,52 @@ class TSV6NativeBackend:
         if self._renderer is None or not isinstance(ticker, dict):
             return
         enabled = bool(ticker.get("enable"))
-        text = str(ticker.get("messages") or ticker.get("style") or "").strip()
+        text = str(ticker.get("messages") or "").strip()
         behavior = str(ticker.get("behavior") or "")
         try:
             speed = int(ticker.get("textSpeed") or 3)
         except (TypeError, ValueError):
             speed = 3
+
+        # Font family: server may send a curated dropdown value (fontFamily)
+        # and/or a custom override (fontFamilyCustom) which wins when set.
+        font_family = str(
+            ticker.get("fontFamilyCustom") or ticker.get("fontFamily") or ""
+        ).strip()
+        try:
+            font_size_pct = float(ticker.get("fontSizePct") or 0)
+        except (TypeError, ValueError):
+            font_size_pct = 0.0
+        color = str(ticker.get("color") or "").strip()
+        background = str(ticker.get("background") or ticker.get("backgroundColor") or "").strip()
+        bold = bool(ticker.get("bold"))
+        italic = bool(ticker.get("italic"))
+        try:
+            font_weight = int(ticker.get("fontWeight")) if ticker.get("fontWeight") is not None else 0
+        except (TypeError, ValueError):
+            font_weight = 0
+        custom_css = str(ticker.get("customCss") or ticker.get("style") or "").strip()
+
         logger.info(
-            "_apply_ticker -> show_ticker(text=%r, enabled=%s, scroll=%s, speed=%s)",
+            "_apply_ticker -> show_ticker(text=%r, enabled=%s, scroll=%s, speed=%s, "
+            "font=%r, size_pct=%s, color=%r, bg=%r, bold=%s, italic=%s, weight=%s, css=%r)",
             text, enabled and bool(text), behavior in ("scroll", "slide"), speed,
+            font_family, font_size_pct, color, background, bold, italic, font_weight,
+            custom_css,
         )
         self._renderer.show_ticker(
             text=text,
             enabled=enabled and bool(text),
             scroll=(behavior in ("scroll", "slide")),
             speed=speed,
+            font_family=font_family,
+            font_size_pct=font_size_pct,
+            color=color,
+            background=background,
+            bold=bold,
+            italic=italic,
+            font_weight=font_weight,
+            custom_css=custom_css,
         )
 
     def _on_sync(

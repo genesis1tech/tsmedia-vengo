@@ -295,8 +295,27 @@ class TSV6Renderer:
         enabled: bool = True,
         scroll: bool = False,
         speed: int = 3,
+        font_family: str = "",
+        font_size_pct: float = 0.0,
+        color: str = "",
+        background: str = "",
+        bold: bool = False,
+        italic: bool = False,
+        font_weight: int = 0,
+        custom_css: str = "",
     ) -> bool:
-        """Update the red footer ticker text. Empty or disabled reverts to default."""
+        """Update the red footer ticker text. Empty or disabled reverts to default.
+
+        Styling (all optional; unset fields keep the default branded look):
+            font_family: any Google-Fonts family name (e.g. "Roboto", "Bebas Neue").
+            font_size_pct: text size as % of ticker height (e.g. 55 → 55% of 60px).
+            color: CSS color for the text (e.g. "#fff", "red").
+            background: CSS color for the ticker bar background.
+            bold: shortcut for weight 900 (overridden by explicit font_weight).
+            italic: apply italic style.
+            font_weight: explicit numeric CSS font-weight (100–900).
+            custom_css: raw CSS declarations appended to the ticker element (escape hatch).
+        """
         self._router.send_command(
             {
                 "action": "show_ticker",
@@ -304,6 +323,14 @@ class TSV6Renderer:
                 "enabled": enabled,
                 "scroll": scroll,
                 "speed": speed,
+                "fontFamily": font_family,
+                "fontSizePct": font_size_pct,
+                "color": color,
+                "background": background,
+                "bold": bold,
+                "italic": italic,
+                "fontWeight": font_weight,
+                "customCss": custom_css,
             }
         )
         return True
