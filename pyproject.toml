@@ -27,6 +27,7 @@ dependencies = [
     "adafruit-circuitpython-vl53l0x>=1.2.0; sys_platform == 'linux'",  # VL53L0X ToF distance sensor (bin level)
     "adafruit-circuitpython-vl53l1x>=1.1.0; sys_platform == 'linux'",  # VL53L1X ToF distance sensor (recycling verification)
     "adafruit-extended-bus>=1.0.0; sys_platform == 'linux'",  # Extended I2C bus selection (non-default buses)
+    "python-xlib>=0.33",
 ]
 
 [project.optional-dependencies]

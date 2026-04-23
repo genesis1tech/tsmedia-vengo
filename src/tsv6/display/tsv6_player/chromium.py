@@ -232,6 +232,10 @@ class ChromiumKiosk:
             "--overscroll-history-navigation=0",
             "--disable-pinch",
             "--autoplay-policy=no-user-gesture-required",
+            # Touch support — Goodix on Waveshare DSI only dispatches JS touch/pointer
+            # events when touch-events is explicitly enabled on Linux/X11.
+            "--touch-events=enabled",
+            "--enable-features=TouchpadAndWheelScrollLatching",
             "--password-store=basic",
             "--disk-cache-dir=/tmp/chromium-cache",
             "--disk-cache-size=52428800",

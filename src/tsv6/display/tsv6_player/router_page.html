@@ -360,6 +360,115 @@
     // Show idle placeholder on initial load.
     handleShowIdle();
   });
+
+  // Long-press-anywhere (5s) to open /settings.
+  //
+  // The player uses #main-iframe and VLC render zones which capture events and
+  // prevent bubbling to document. To receive every press regardless of what's
+  // below, we install a fullscreen transparent overlay DIV at the top of the
+  // z-stack. The overlay listens for pointer/touch/mouse events directly, so
+  // iframes, images, and VLC-backed transparent zones can't steal them.
+  //
+  // Signage mode has no other required touch interactions, so a capturing
+  // overlay is safe here. If interactive content is ever needed inside the
+  // iframe, this overlay can be toggled off while the content is active.
+  (function installLongPress() {
+    var LONG_PRESS_MS = 5000;
+    var DRIFT_PX = 40;
+    var startT = 0, startX = 0, startY = 0;
+    var timerId = null, rafId = null;
+
+    // Fullscreen invisible catcher above all other content
+    var catcher = document.createElement("div");
+    catcher.id = "tsv6-longpress-catcher";
+    catcher.style.cssText = [
+      "position:fixed","inset:0","left:0","top:0","right:0","bottom:0",
+      "width:100vw","height:100vh",
+      "z-index:2147483646",            // just below the ring
+      "background:transparent",
+      "pointer-events:auto",
+      "touch-action:none",             // tell browser not to interpret as scroll/zoom
+      "-webkit-tap-highlight-color:transparent",
+      "cursor:default",
+    ].join(";");
+
+    // Radial progress ring sits above the catcher so it's visible
+    var ring = document.createElement("div");
+    ring.id = "tsv6-longpress-ring";
+    ring.style.cssText = [
+      "position:fixed","pointer-events:none","z-index:2147483647",
+      "left:0","top:0","width:110px","height:110px",
+      "margin-left:-55px","margin-top:-55px",
+      "border-radius:50%",
+      "box-shadow:0 0 18px rgba(0,0,0,0.6)",
+      "transition:opacity .12s","opacity:0",
+      "background:conic-gradient(#3d8bfd 0deg, rgba(61,139,253,0.15) 0deg)",
+    ].join(";");
+
+    function attach() {
+      if (!document.body) return setTimeout(attach, 50);
+      document.body.appendChild(catcher);
+      document.body.appendChild(ring);
+    }
+    attach();
+
+    function setRing(x, y, progress) {
+      ring.style.left = x + "px";
+      ring.style.top = y + "px";
+      ring.style.opacity = progress > 0 ? "1" : "0";
+      var deg = Math.max(0, Math.min(360, progress * 360));
+      ring.style.background =
+        "conic-gradient(#3d8bfd " + deg + "deg, rgba(61,139,253,0.15) " + deg + "deg)";
+    }
+    function tick() {
+      if (!timerId) return;
+      var pct = Math.min(1, (performance.now() - startT) / LONG_PRESS_MS);
+      setRing(startX, startY, pct);
+      rafId = requestAnimationFrame(tick);
+    }
+    function cancel() {
+      if (timerId) { clearTimeout(timerId); timerId = null; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      ring.style.opacity = "0";
+    }
+    function fire() {
+      timerId = null;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      window.location.href = "/settings";
+    }
+    function start(x, y) {
+      cancel();
+      startT = performance.now();
+      startX = x; startY = y;
+      timerId = setTimeout(fire, LONG_PRESS_MS);
+      rafId = requestAnimationFrame(tick);
+    }
+    function move(x, y) {
+      if (timerId && (Math.abs(x - startX) > DRIFT_PX || Math.abs(y - startY) > DRIFT_PX)) cancel();
+    }
+
+    // Attach to the catcher, not document — events would never bubble past
+    // iframe/image content otherwise.
+    if (window.PointerEvent) {
+      catcher.addEventListener("pointerdown", function (e) { start(e.clientX, e.clientY); });
+      catcher.addEventListener("pointermove", function (e) { if (timerId) move(e.clientX, e.clientY); });
+      catcher.addEventListener("pointerup", cancel);
+      catcher.addEventListener("pointercancel", cancel);
+      catcher.addEventListener("pointerleave", cancel);
+    }
+    catcher.addEventListener("touchstart", function (e) {
+      if (e.touches && e.touches.length) start(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    catcher.addEventListener("touchmove", function (e) {
+      if (e.touches && e.touches.length) move(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    catcher.addEventListener("touchend", cancel, { passive: true });
+    catcher.addEventListener("touchcancel", cancel, { passive: true });
+    catcher.addEventListener("mousedown", function (e) { start(e.clientX, e.clientY); });
+    catcher.addEventListener("mousemove", function (e) { if (timerId) move(e.clientX, e.clientY); });
+    catcher.addEventListener("mouseup", cancel);
+    catcher.addEventListener("mouseleave", cancel);
+  }());
 }());
 </script>
 </body>

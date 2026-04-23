@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Optional
 
 from tsv6.display.tsv6_player.backend import TSV6NativeBackend
+from tsv6.display.tsv6_player.touch_gesture import LongPressWatcher
 
 try:
     from tsv6.hardware.sim7600 import SIM7600Config, SIM7600Controller
@@ -197,6 +198,96 @@ def main() -> int:
         backend.start()
         backend.show_idle()
         logger.info("Signage player running. Ctrl-C to stop.")
+
+        # Long-press-anywhere-for-5s gesture → navigate kiosk to /settings.
+        # Reads /dev/input/event1 (Goodix touchscreen) directly; bypasses
+        # Chromium's flaky DOM touch dispatch on this DSI+X11 stack.
+        #
+        # VLC lives in a sibling Tk X11 window that sits ABOVE Chromium in the
+        # stacking order (that is how video shows through the transparent
+        # #main zone on the router page). XConfigureWindow(Above) is ignored
+        # by the compositor on this Pi, so for settings visibility we UNMAP
+        # the Tk window entirely. VLC keeps running underneath, invisible;
+        # when the user exits settings we map the Tk window back and VLC
+        # resumes visible playback.
+        def _toggle_vlc_window(hide: bool) -> None:
+            try:
+                from Xlib import display as xdisplay
+                d = xdisplay.Display()
+                root = d.screen().root
+                found = False
+                def walk(w):
+                    nonlocal found
+                    try:
+                        cls = w.get_wm_class()
+                    except Exception:
+                        cls = None
+                    if cls and cls[0] == "tk":
+                        if hide:
+                            w.unmap()
+                        else:
+                            w.map()
+                        d.sync()
+                        found = True
+                        return True
+                    for c in w.query_tree().children:
+                        if walk(c):
+                            return True
+                    return False
+                walk(root)
+                d.close()
+                if found:
+                    logger.info("VLC Tk window %s", "unmapped" if hide else "mapped")
+                else:
+                    logger.warning("VLC Tk window not found; skip %s",
+                                   "unmap" if hide else "map")
+            except Exception:
+                logger.exception("Toggle VLC window failed")
+
+        def _open_settings() -> None:
+            _toggle_vlc_window(hide=True)
+            try:
+                import json, urllib.request, websocket
+                pages = json.loads(
+                    urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=2).read()
+                )
+                tgt = next(
+                    (p for p in pages if p.get("type") == "page" and "8765" in p.get("url", "")),
+                    None,
+                )
+                if not tgt:
+                    logger.warning("Long-press: no kiosk page found via CDP")
+                    return
+                ws = websocket.create_connection(
+                    tgt["webSocketDebuggerUrl"], timeout=2,
+                    origin="http://localhost:9222",
+                )
+                ws.send(json.dumps({
+                    "id": 1, "method": "Page.navigate",
+                    "params": {"url": "http://127.0.0.1:8765/settings"},
+                }))
+                ws.recv()
+                ws.close()
+                logger.info("Long-press: navigated kiosk to /settings")
+            except Exception:
+                logger.exception("Long-press: CDP navigate failed")
+
+        def _resume_idle() -> None:
+            """Called when the user closes settings; remaps the Tk (VLC) window
+            so video is visible again. VLC was never stopped — it kept rendering
+            to its window while we had it unmapped."""
+            _toggle_vlc_window(hide=False)
+
+        # Wire the wake callback into the router so POST /api/exit-settings
+        # restarts VLC playback when the user leaves the settings page.
+        renderer = getattr(backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_wake_callback"):
+            router.set_wake_callback(_resume_idle)
+
+        long_press_hold = float(os.environ.get("TSV6_LONGPRESS_SECONDS", "5"))
+        long_press = LongPressWatcher(_open_settings, hold_seconds=long_press_hold)
+        long_press.start()
 
         while not shutdown_event.is_set():
             shutdown_event.wait(timeout=5.0)

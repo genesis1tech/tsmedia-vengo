@@ -39,12 +39,13 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 
-from flask import Flask, Response, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,10 @@ class RouterServer:
         # Last known pixel rect of the #main zone, set by POST /video_zone_rect
         self._video_zone_rect: tuple[int, int, int, int] | None = None
         self._rect_lock = threading.Lock()
+
+        # Optional callback invoked by POST /api/exit-settings. Used to restart
+        # the idle player (VLC) when the user leaves the settings page.
+        self._on_wake: "Optional[Callable[[], None]]" = None
 
         self._app = self._build_app()
         self._server_thread: threading.Thread | None = None
@@ -161,6 +166,10 @@ class RouterServer:
     def url(self) -> str:
         """Base URL of this server, e.g. ``http://127.0.0.1:8765/``."""
         return f"http://{self._host}:{self._port}/"
+
+    def set_wake_callback(self, callback: Optional[Callable[[], None]]) -> None:
+        """Install a callback invoked when the user exits the settings page."""
+        self._on_wake = callback
 
     def get_video_zone_rect(self) -> tuple[int, int, int, int] | None:
         """
@@ -239,6 +248,120 @@ class RouterServer:
                     "Connection": "keep-alive",
                 },
             )
+
+        @app.route("/settings")
+        def settings_page() -> Response:
+            """Serve the touch-first settings/WiFi page."""
+            return send_from_directory(
+                str(layout_html.parent),
+                "settings.html",
+                mimetype="text/html",
+            )
+
+        @app.route("/api/wifi/status")
+        def wifi_status() -> Response:
+            """Return the current WiFi connection state via nmcli."""
+            try:
+                active = subprocess.run(
+                    ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY",
+                     "device", "wifi", "list", "--rescan", "no"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                current = None
+                for line in active.stdout.splitlines():
+                    parts = line.split(":")
+                    if len(parts) >= 4 and parts[0] == "yes":
+                        current = {"ssid": parts[1], "signal": parts[2], "security": parts[3]}
+                        break
+                ip = subprocess.run(
+                    ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                ip_addr = ""
+                for line in ip.stdout.splitlines():
+                    if line.startswith("IP4.ADDRESS"):
+                        ip_addr = line.split(":", 1)[1].split("/")[0]
+                        break
+                return jsonify({"connected": current is not None, "current": current, "ip": ip_addr})
+            except Exception as exc:
+                return jsonify({"connected": False, "error": str(exc)}), 500
+
+        @app.route("/api/wifi/scan", methods=["POST"])
+        def wifi_scan() -> Response:
+            """Trigger a rescan and return visible networks."""
+            try:
+                # Force rescan (non-fatal if it fails — will still return cached results)
+                subprocess.run(
+                    ["nmcli", "device", "wifi", "rescan"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                result = subprocess.run(
+                    ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE",
+                     "device", "wifi", "list"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                seen = {}
+                for line in result.stdout.splitlines():
+                    # nmcli -t separates with ':' but escapes colons in SSID as '\:'
+                    parts = [p.replace("\\:", ":") for p in line.replace("\\:", "\x00").split(":")]
+                    parts = [p.replace("\x00", ":") for p in parts]
+                    if len(parts) < 4:
+                        continue
+                    ssid, signal, security, in_use = parts[0], parts[1], parts[2], parts[3]
+                    if not ssid:
+                        continue
+                    # Keep strongest reading per SSID
+                    try:
+                        sig = int(signal) if signal else 0
+                    except ValueError:
+                        sig = 0
+                    if ssid not in seen or sig > seen[ssid]["signal"]:
+                        seen[ssid] = {
+                            "ssid": ssid,
+                            "signal": sig,
+                            "security": security or "--",
+                            "in_use": in_use == "*",
+                        }
+                networks = sorted(seen.values(), key=lambda n: n["signal"], reverse=True)
+                return jsonify({"networks": networks})
+            except Exception as exc:
+                logger.warning("wifi_scan failed: %s", exc)
+                return jsonify({"networks": [], "error": str(exc)}), 500
+
+        @app.route("/api/wifi/connect", methods=["POST"])
+        def wifi_connect() -> Response:
+            """Connect to a WiFi network. Body: {ssid, password}."""
+            body = request.get_json(force=True, silent=True) or {}
+            ssid = (body.get("ssid") or "").strip()
+            password = body.get("password") or ""
+            if not ssid:
+                return jsonify({"ok": False, "error": "ssid required"}), 400
+            try:
+                cmd = ["nmcli", "device", "wifi", "connect", ssid]
+                if password:
+                    cmd += ["password", password]
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=45,
+                )
+                ok = result.returncode == 0
+                msg = (result.stdout + result.stderr).strip()
+                logger.info("wifi_connect ssid=%s ok=%s msg=%s", ssid, ok, msg[:200])
+                return jsonify({"ok": ok, "message": msg})
+            except subprocess.TimeoutExpired:
+                return jsonify({"ok": False, "error": "timeout"}), 504
+            except Exception as exc:
+                logger.warning("wifi_connect error: %s", exc)
+                return jsonify({"ok": False, "error": str(exc)}), 500
+
+        @app.route("/api/exit-settings", methods=["POST"])
+        def exit_settings() -> Response:
+            """Resume the idle player (restarts VLC) and redirect browser to /."""
+            if server_self._on_wake is not None:
+                try:
+                    server_self._on_wake()
+                except Exception:
+                    logger.exception("on_wake callback failed")
+            return jsonify({"redirect": "/"})
 
         @app.route("/video_zone_rect", methods=["POST"])
         def video_zone_rect() -> Response:
