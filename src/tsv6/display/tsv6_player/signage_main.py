@@ -12,7 +12,7 @@ Startup order:
     3. Connect to PiSignage server and start the player
 
 Environment variables (PiSignage):
-    PISIGNAGE_SERVER_URL    http://72.60.120.25:3000
+    PISIGNAGE_SERVER_URL    https://tsmedia.g1tech.cloud
     PISIGNAGE_USERNAME      pi
     PISIGNAGE_PASSWORD      pi
     PISIGNAGE_INSTALLATION  g1tech26

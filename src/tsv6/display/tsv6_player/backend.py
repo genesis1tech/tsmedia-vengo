@@ -65,7 +65,7 @@ class TSV6NativeBackend:
     Parameters
     ----------
     server_url:
-        Full URL of the PiSignage server, e.g. ``"http://72.60.120.25:3000"``.
+        Full URL of the PiSignage server, e.g. ``"https://tsmedia.g1tech.cloud"``.
     username:
         PiSignage Basic-auth username.
     password:
