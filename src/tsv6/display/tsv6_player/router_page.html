@@ -108,11 +108,12 @@
     bottom: 0; left: 0;
     width: 100%;
     height: 60px;
-    background: #d91e18;                /* Red */
-    color: #ffffff;                     /* White */
-    font-family: "Arial Black", "Arial Bold", Arial, sans-serif;
-    font-weight: 900;
-    font-size: 32px;
+    background: var(--tsv6-ticker-bg, #d91e18);
+    color: var(--tsv6-ticker-color, #ffffff);
+    font-family: var(--tsv6-ticker-font, "Arial Black"), "Arial Black", "Arial Bold", Arial, sans-serif;
+    font-weight: var(--tsv6-ticker-weight, 900);
+    font-style: var(--tsv6-ticker-style, normal);
+    font-size: var(--tsv6-ticker-size, 32px);
     line-height: 60px;
     text-align: center;
     letter-spacing: 2px;
@@ -187,6 +188,33 @@
   var tickerEl       = document.getElementById("ticker");
   var tickerContent  = document.getElementById("ticker-content");
   var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
+
+  // Lazy-load a Google Fonts family once per family name. The ticker height is
+  // 60px, so the browser only needs a handful of weights; we request 400/700/900
+  // plus italic variants so bold/italic toggles resolve to real glyphs.
+  var loadedFonts = {};
+  // Fonts matching this pattern are treated as system/local; we do not inject a
+  // <link> for them (browser will fall back to installed fonts).
+  var SYSTEM_FONT_RE = /^(Arial|Arial Black|Arial Bold|Helvetica|Times|Times New Roman|Georgia|Courier|Courier New|Verdana|Tahoma|Trebuchet MS|Impact|sans-serif|serif|monospace)$/i;
+  function ensureGoogleFont(family) {
+    if (!family) return;
+    var key = family.trim();
+    if (!key || loadedFonts[key] || SYSTEM_FONT_RE.test(key)) return;
+    loadedFonts[key] = true;
+    var href = "https://fonts.googleapis.com/css2?family=" +
+      encodeURIComponent(key).replace(/%20/g, "+") +
+      ":ital,wght@0,400;0,700;0,900;1,400;1,700;1,900&display=swap";
+    var link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    link.onerror = function () {
+      // Network unreachable / family invalid — drop from cache so a later
+      // update with a different family still gets a chance to load.
+      delete loadedFonts[key];
+      console.warn("TSV6: failed to load Google Font:", key);
+    };
+    document.head.appendChild(link);
+  }
 
   // ── Helper: hide all content slots ───────────────────────────────────────
   function clearMain() {
@@ -296,21 +324,105 @@
   }
 
   /**
-   * show_ticker — update the red footer text.
-   *   cmd.text    : string shown in the footer (falls back to TICKER_DEFAULT when empty)
-   *   cmd.enabled : if false, revert to the branded default text
-   *   cmd.scroll  : true to animate as a horizontal marquee
-   *   cmd.speed   : 1–10, higher is faster (scroll duration = ~60s/speed)
+   * show_ticker — update the red footer text and style.
+   *   cmd.text        : string shown in the footer (falls back to TICKER_DEFAULT when empty)
+   *   cmd.enabled     : if false, revert to the branded default text
+   *   cmd.scroll      : true to animate as a horizontal marquee
+   *   cmd.speed       : 1–10, higher is faster (scroll duration = ~60s/speed)
+   *   cmd.fontFamily  : Google Fonts family name or a system font ("Roboto", "Arial Black", …)
+   *   cmd.fontSizePct : text size as a % of the 60px ticker height (e.g. 55 → 33px)
+   *   cmd.color       : CSS color for the text
+   *   cmd.background  : CSS color for the ticker bar
+   *   cmd.bold        : shortcut for weight 900 (overridden by explicit fontWeight)
+   *   cmd.italic      : apply italic style
+   *   cmd.fontWeight  : explicit numeric CSS font-weight (100–900)
    */
   function handleShowTicker(cmd) {
-    var text = (cmd && cmd.enabled && cmd.text) ? String(cmd.text) : TICKER_DEFAULT;
+    cmd = cmd || {};
+    var text = (cmd.enabled && cmd.text) ? String(cmd.text) : TICKER_DEFAULT;
     tickerContent.textContent = text;
-    var scroll = !!(cmd && cmd.enabled && cmd.scroll);
+    var scroll = !!(cmd.enabled && cmd.scroll);
     tickerEl.classList.toggle("scroll", scroll);
     if (scroll) {
       var speed = Math.max(1, Math.min(10, Number(cmd.speed) || 3));
       tickerEl.style.setProperty("--tsv6-ticker-duration", (60 / speed).toFixed(1) + "s");
     }
+
+    var style = tickerEl.style;
+
+    // Font family (lazy-load from Google Fonts when not a system font).
+    if (cmd.fontFamily) {
+      var fam = String(cmd.fontFamily).trim();
+      ensureGoogleFont(fam);
+      // Quote family names that contain whitespace so CSS parses them as one token.
+      var famCss = /\s/.test(fam) ? '"' + fam.replace(/"/g, '') + '"' : fam;
+      style.setProperty("--tsv6-ticker-font", famCss);
+    } else {
+      style.removeProperty("--tsv6-ticker-font");
+    }
+
+    // Font size as % of the ticker's 60px height.
+    var sizePct = Number(cmd.fontSizePct);
+    if (sizePct && sizePct > 0) {
+      var clamped = Math.max(10, Math.min(100, sizePct));
+      var tickerH = tickerEl.getBoundingClientRect().height || 60;
+      style.setProperty("--tsv6-ticker-size", Math.round(tickerH * clamped / 100) + "px");
+    } else {
+      style.removeProperty("--tsv6-ticker-size");
+    }
+
+    // Color / background.
+    if (cmd.color) {
+      style.setProperty("--tsv6-ticker-color", String(cmd.color));
+    } else {
+      style.removeProperty("--tsv6-ticker-color");
+    }
+    if (cmd.background) {
+      style.setProperty("--tsv6-ticker-bg", String(cmd.background));
+    } else {
+      style.removeProperty("--tsv6-ticker-bg");
+    }
+
+    // Weight — explicit numeric wins; otherwise use the `bold` shortcut.
+    var explicitWeight = Number(cmd.fontWeight);
+    if (explicitWeight && explicitWeight >= 100 && explicitWeight <= 900) {
+      style.setProperty("--tsv6-ticker-weight", String(explicitWeight));
+    } else if (cmd.bold) {
+      style.setProperty("--tsv6-ticker-weight", "900");
+    } else if (cmd.bold === false && cmd.fontFamily) {
+      // Caller explicitly un-bolded a custom font — drop to 400 so the
+      // loaded Google Font shows its regular weight instead of the default 900.
+      style.setProperty("--tsv6-ticker-weight", "400");
+    } else {
+      style.removeProperty("--tsv6-ticker-weight");
+    }
+
+    // Italic.
+    if (cmd.italic) {
+      style.setProperty("--tsv6-ticker-style", "italic");
+    } else {
+      style.removeProperty("--tsv6-ticker-style");
+    }
+
+    // Raw CSS escape hatch — appended as a single style attribute suffix so
+    // the preceding properties still apply. Stored on a data attribute so a
+    // subsequent call with a different value cleanly replaces it.
+    var prevCssKeys = tickerEl.dataset.tsv6CssKeys ? tickerEl.dataset.tsv6CssKeys.split(",") : [];
+    prevCssKeys.forEach(function (k) { if (k) style.removeProperty(k); });
+    var nextKeys = [];
+    if (cmd.customCss) {
+      String(cmd.customCss).split(";").forEach(function (decl) {
+        var idx = decl.indexOf(":");
+        if (idx < 0) return;
+        var prop = decl.slice(0, idx).trim();
+        var val  = decl.slice(idx + 1).trim();
+        if (prop && val) {
+          style.setProperty(prop, val);
+          nextKeys.push(prop);
+        }
+      });
+    }
+    tickerEl.dataset.tsv6CssKeys = nextKeys.join(",");
   }
 
   // ── SSE dispatcher ────────────────────────────────────────────────────────
