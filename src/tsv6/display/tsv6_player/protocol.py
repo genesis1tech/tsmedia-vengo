@@ -71,7 +71,7 @@ class PlayerProtocolClient:
         cpu_serial: str,
         player_name: str,
         on_config: Callable[[dict], None],
-        on_sync: Callable[[list[str], list[str]], None],
+        on_sync: Callable[..., None],
         on_setplaylist: Callable[[str], str],
         on_playlist_media: Callable[[str], dict] | None = None,
         on_shell: Callable[[str], dict] | None = None,
@@ -121,7 +121,7 @@ class PlayerProtocolClient:
             self._sio.connect(
                 self._server_url,
                 socketio_path="/newsocket.io",
-                transports=["websocket"],
+                transports=["polling"],
             )
             return True
         except Exception as exc:
@@ -235,7 +235,10 @@ class PlayerProtocolClient:
 
     def _emit_status(self, settings: dict, status: dict, priority: int) -> None:
         """Emit the status event and update accounting."""
-        self._sio.emit("status", settings, status, priority)
+        # socketio.Client.emit treats a 3rd positional arg as `namespace`, not
+        # extra data; pack the payload as a single tuple so the server sees
+        # status(settings, status, priority) as three positional args.
+        self._sio.emit("status", (settings, status, priority))
         with self._lock:
             self._last_status_sent_at = time.time()
         logger.debug("Emitted status (priority=%d)", priority)
@@ -294,10 +297,10 @@ class PlayerProtocolClient:
             # Protocol: sync(playlists, assets, ticker, logo, logox, logoy,
             #               combineDefault, omxVolume, loadOnCompletion,
             #               assetsValidity)  — 11 positional args.
-            # We only surface playlists (arg[0]) and assets (arg[1]).
             playlists: list[str] = list(args[0]) if len(args) > 0 else []
             assets: list[str] = list(args[1]) if len(args) > 1 else []
-            self._on_sync(playlists, assets)
+            ticker: dict = args[2] if len(args) > 2 and isinstance(args[2], dict) else {}
+            self._on_sync(playlists, assets, ticker)
 
         @sio.on("setplaylist")
         def on_setplaylist(playlist_name: str) -> None:

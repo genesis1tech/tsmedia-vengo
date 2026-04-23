@@ -55,7 +55,7 @@ def _import_renderer():  # type: ignore[return]
     return _Renderer
 
 # How often the background status thread sends send_status to the server.
-_STATUS_INTERVAL_S: float = 300.0  # 5 minutes
+_STATUS_INTERVAL_S: float = 60.0  # 1 minute
 
 
 class TSV6NativeBackend:
@@ -447,20 +447,56 @@ class TSV6NativeBackend:
                     self._playlist_assets[name] = pl_assets
                     self._write_playlist_cache(name, pl_assets)
 
+            # Apply ticker settings from the config event.
+            ticker = config_obj.get("groupTicker") or config_obj.get("ticker")
+            if ticker:
+                self._apply_ticker(ticker)
+
         except Exception as exc:
             logger.error("_on_config error: %s", exc)
 
-    def _on_sync(self, playlists: list[str], assets: list[str]) -> None:
+    def _apply_ticker(self, ticker: dict) -> None:
+        """Push server ticker settings to the renderer footer."""
+        logger.info("_apply_ticker received: %r", ticker)
+        if self._renderer is None or not isinstance(ticker, dict):
+            return
+        enabled = bool(ticker.get("enable"))
+        text = str(ticker.get("messages") or ticker.get("style") or "").strip()
+        behavior = str(ticker.get("behavior") or "")
+        try:
+            speed = int(ticker.get("textSpeed") or 3)
+        except (TypeError, ValueError):
+            speed = 3
+        logger.info(
+            "_apply_ticker -> show_ticker(text=%r, enabled=%s, scroll=%s, speed=%s)",
+            text, enabled and bool(text), behavior in ("scroll", "slide"), speed,
+        )
+        self._renderer.show_ticker(
+            text=text,
+            enabled=enabled and bool(text),
+            scroll=(behavior in ("scroll", "slide")),
+            speed=speed,
+        )
+
+    def _on_sync(
+        self,
+        playlists: list[str],
+        assets: list[str],
+        ticker: dict | None = None,
+    ) -> None:
         """
         Handle the ``sync`` event from the server.
 
-        Triggers a fresh asset sync for the listed assets.
+        Triggers a fresh asset sync for the listed assets and applies the
+        ticker configuration to the footer.
         """
         logger.info(
             "TSV6NativeBackend: received sync event — %d playlist(s), %d asset(s)",
             len(playlists),
             len(assets),
         )
+        if ticker is not None:
+            self._apply_ticker(ticker)
         if assets and self._syncer is not None:
             try:
                 result = self._syncer.sync(assets)
@@ -470,6 +506,12 @@ class TSV6NativeBackend:
                     result.unchanged,
                     result.failed,
                 )
+                # Restart the idle loop so VLC picks up added/removed MP4s.
+                if result.updated or result.failed == 0:
+                    try:
+                        self.show_idle()
+                    except Exception as exc:
+                        logger.warning("show_idle after sync failed: %s", exc)
             except Exception as exc:
                 logger.error("_on_sync asset sync error: %s", exc)
 

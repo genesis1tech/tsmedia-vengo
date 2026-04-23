@@ -83,7 +83,7 @@ class ChromiumKiosk:
         user_data_dir: Path = Path("/home/pi/.config/tsv6-chromium"),
         cdp_port: int = 9222,
         width: int = 800,
-        height: int = 480,
+        height: int = 1280,
     ) -> None:
         self._url = url
         self._display = display

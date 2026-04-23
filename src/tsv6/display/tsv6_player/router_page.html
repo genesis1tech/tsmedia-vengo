@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=800, height=480, initial-scale=1.0">
+<meta name="viewport" content="width=800, height=1280, initial-scale=1.0">
 <title>TSV6 Layout</title>
 <style>
   /*
@@ -121,15 +121,22 @@
     overflow: hidden;
     white-space: nowrap;
   }
-  /* Suppress any child content injected into the ticker */
-  #ticker > * { display: none !important; }
-  /* Branded footer label */
-  #ticker::after {
-    content: "SCAN BARCODE TO RECYCLE";
+  /* Fallback branded footer label — shown when no dynamic ticker is set. */
+  #ticker-content {
     display: block;
     width: 100%;
     height: 60px;
     line-height: 60px;
+    white-space: nowrap;
+  }
+  /* Scrolling marquee variant — enabled via .scroll class when ticker.behavior=scroll. */
+  #ticker.scroll #ticker-content {
+    padding-left: 100%;
+    animation: tsv6-ticker-scroll var(--tsv6-ticker-duration, 20s) linear infinite;
+  }
+  @keyframes tsv6-ticker-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-100%); }
   }
 
   /* Hide any PiSignage branding */
@@ -161,8 +168,8 @@
       <!-- Idle placeholder -->
       <div id="idle-placeholder">TSV6 Ready</div>
     </div>
-    <!-- Red branded footer — do not modify -->
-    <div id="ticker"></div>
+    <!-- Red branded footer; text is updated dynamically via the show_ticker command. -->
+    <div id="ticker"><span id="ticker-content">SCAN BARCODE TO RECYCLE</span></div>
   </div>
 
 <script>
@@ -177,6 +184,9 @@
   var productImage   = document.getElementById("product-image");
   var qrOverlay      = document.getElementById("qr-overlay");
   var idlePh         = document.getElementById("idle-placeholder");
+  var tickerEl       = document.getElementById("ticker");
+  var tickerContent  = document.getElementById("ticker-content");
+  var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
 
   // ── Helper: hide all content slots ───────────────────────────────────────
   function clearMain() {
@@ -285,6 +295,24 @@
     idlePh.style.display = "flex";
   }
 
+  /**
+   * show_ticker — update the red footer text.
+   *   cmd.text    : string shown in the footer (falls back to TICKER_DEFAULT when empty)
+   *   cmd.enabled : if false, revert to the branded default text
+   *   cmd.scroll  : true to animate as a horizontal marquee
+   *   cmd.speed   : 1–10, higher is faster (scroll duration = ~60s/speed)
+   */
+  function handleShowTicker(cmd) {
+    var text = (cmd && cmd.enabled && cmd.text) ? String(cmd.text) : TICKER_DEFAULT;
+    tickerContent.textContent = text;
+    var scroll = !!(cmd && cmd.enabled && cmd.scroll);
+    tickerEl.classList.toggle("scroll", scroll);
+    if (scroll) {
+      var speed = Math.max(1, Math.min(10, Number(cmd.speed) || 3));
+      tickerEl.style.setProperty("--tsv6-ticker-duration", (60 / speed).toFixed(1) + "s");
+    }
+  }
+
   // ── SSE dispatcher ────────────────────────────────────────────────────────
   var HANDLERS = {
     "show_html":        handleShowHtml,
@@ -292,7 +320,8 @@
     "show_product":     handleShowProduct,
     "show_video_zone":  handleShowVideoZone,
     "hide_video_zone":  handleHideVideoZone,
-    "show_idle":        handleShowIdle
+    "show_idle":        handleShowIdle,
+    "show_ticker":      handleShowTicker
   };
 
   function dispatch(cmd) {

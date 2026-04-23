@@ -146,8 +146,7 @@ def main() -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
     impression_dir.mkdir(parents=True, exist_ok=True)
 
-    project_root = Path(__file__).resolve().parents[4]
-    layout_html = project_root / "pisignage" / "templates" / "layouts" / "custom_layout.html"
+    layout_html = Path(__file__).resolve().parent / "router_page.html"
 
     if not layout_html.exists():
         logger.error("Layout HTML not found at %s", layout_html)

@@ -37,10 +37,7 @@ from tsv6.display.tsv6_player.vlc_zone import VLCZonePlayer
 
 logger = logging.getLogger(__name__)
 
-# Pixel rect of the #main zone when the layout uses calc(100% - 60px) height
-# on a 800x480 display.  Used as a sensible default when CDP measurement is
-# unavailable.
-_DEFAULT_MAIN_RECT: tuple[int, int, int, int] = (0, 0, 800, 420)
+_DEFAULT_MAIN_RECT: tuple[int, int, int, int] = (0, 0, 800, 1220)
 
 # How long to wait (seconds) after Chromium starts before querying the zone
 # rect via CDP.
@@ -88,7 +85,7 @@ class TSV6Renderer:
         chromium_user_data_dir: Path = Path("/home/pi/.config/tsv6-chromium"),
         cdp_port: int = 9222,
         width: int = 800,
-        height: int = 480,
+        height: int = 1280,
         vlc_args: list[str] | None = None,
     ) -> None:
         self._cache_dir = cache_dir
@@ -290,6 +287,25 @@ class TSV6Renderer:
             {"action": "show_html", "src": "tsv6_offline.html"}
         )
         self._state = "offline"
+        return True
+
+    def show_ticker(
+        self,
+        text: str,
+        enabled: bool = True,
+        scroll: bool = False,
+        speed: int = 3,
+    ) -> bool:
+        """Update the red footer ticker text. Empty or disabled reverts to default."""
+        self._router.send_command(
+            {
+                "action": "show_ticker",
+                "text": text,
+                "enabled": enabled,
+                "scroll": scroll,
+                "speed": speed,
+            }
+        )
         return True
 
     # ── Properties ─────────────────────────────────────────────────────────

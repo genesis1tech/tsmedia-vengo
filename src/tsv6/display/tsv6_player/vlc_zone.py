@@ -257,6 +257,9 @@ class VLCZonePlayer:
         wid = root.winfo_id()
         mp.set_xwindow(wid)
 
+        # Stretch the video to fill the zone (override source DAR).
+        mp.video_set_aspect_ratio(f"{w}:{h}".encode("ascii"))
+
         if loop:
             mlp.set_playback_mode(vlc.PlaybackMode.loop)
 
