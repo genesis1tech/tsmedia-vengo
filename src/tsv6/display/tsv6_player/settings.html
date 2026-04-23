@@ -83,6 +83,15 @@
   .bars { font-family: monospace; font-size: 14px; letter-spacing: 1px; color: var(--muted); min-width: 36px; text-align: right; }
   .lock { font-size: 14px; color: var(--muted); }
   .in-use { color: var(--ok); font-size: 12px; font-weight: 700; letter-spacing: 0.05em; }
+  .saved { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.05em; }
+  .group-heading {
+    margin: 14px 4px 8px;
+    font-size: 13px; font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .group-heading:first-child { margin-top: 2px; }
 
   .empty, .loading {
     padding: 40px 14px; text-align: center; color: var(--muted);
@@ -117,6 +126,8 @@
   }
   .pw-display.empty { color: var(--muted); }
   .pw-display.masked { letter-spacing: 3px; }
+  .pw-display.saved-placeholder { color: var(--muted); letter-spacing: 3px; }
+  .pw-hint { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 16px; }
 
   /* Virtual keyboard */
   .kb { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
@@ -182,6 +193,7 @@
     <div id="pwDisplay" class="pw-display empty">Password</div>
     <button class="btn secondary" id="togglePw" title="Show/hide">Show</button>
   </div>
+  <div id="pwHint" class="pw-hint"></div>
   <div class="kb" id="kb"></div>
   <div class="form-actions">
     <button class="btn secondary" id="cancelBtn">Cancel</button>
@@ -197,12 +209,17 @@
   var netsEl = $("networks"), statusEl = $("status"), toastEl = $("toast");
   var connectPanel = $("connect"), selSsidEl = $("selSsid");
   var pwDisplay = $("pwDisplay"), togglePw = $("togglePw"), kbEl = $("kb");
+  var pwHint = $("pwHint");
 
   var selectedSsid = null;
   var selectedSecurity = "";
   var password = "";
   var pwVisible = false;
   var kbMode = "abc"; // abc | ABC | sym
+  // True when the selected network has a saved NetworkManager profile and the
+  // user hasn't typed a replacement password — in that case Connect reuses the
+  // stored credentials via `nmcli connection up`.
+  var useSaved = false;
 
   function exitSettings() {
     // Ping backend so it can resume the idle player (restart VLC) before we navigate away.
@@ -240,23 +257,44 @@
       return;
     }
     netsEl.innerHTML = "";
-    list.forEach(function (n) {
-      var row = document.createElement("div");
-      row.className = "network";
-      if (n.ssid === selectedSsid) row.classList.add("selected");
-      var left = document.createElement("div");
-      left.innerHTML =
-        '<div class="ssid">' + escapeHtml(n.ssid) + (n.in_use ? ' <span class="in-use">CONNECTED</span>' : '') + '</div>' +
-        '<div class="meta">' + escapeHtml(n.security || "open") + '</div>';
-      var right = document.createElement("div");
-      right.className = "right";
-      right.innerHTML =
-        '<span class="lock">' + (n.security && n.security !== "--" ? "🔒" : "") + '</span>' +
-        '<span class="bars">' + bars(n.signal) + '</span>';
-      row.appendChild(left); row.appendChild(right);
-      row.addEventListener("click", function () { selectNetwork(n); });
-      netsEl.appendChild(row);
-    });
+    var known = list.filter(function (n) { return n.known; });
+    var other = list.filter(function (n) { return !n.known; });
+    if (known.length) {
+      appendHeading("Saved Networks");
+      known.forEach(appendNetworkRow);
+    }
+    if (other.length) {
+      appendHeading(known.length ? "Other Networks" : "Available Networks");
+      other.forEach(appendNetworkRow);
+    }
+  }
+
+  function appendHeading(label) {
+    var h = document.createElement("div");
+    h.className = "group-heading";
+    h.textContent = label;
+    netsEl.appendChild(h);
+  }
+
+  function appendNetworkRow(n) {
+    var row = document.createElement("div");
+    row.className = "network";
+    if (n.ssid === selectedSsid) row.classList.add("selected");
+    var badges = "";
+    if (n.in_use) badges += ' <span class="in-use">CONNECTED</span>';
+    else if (n.known) badges += ' <span class="saved">SAVED</span>';
+    var left = document.createElement("div");
+    left.innerHTML =
+      '<div class="ssid">' + escapeHtml(n.ssid) + badges + '</div>' +
+      '<div class="meta">' + escapeHtml(n.security || "open") + '</div>';
+    var right = document.createElement("div");
+    right.className = "right";
+    right.innerHTML =
+      '<span class="lock">' + (n.security && n.security !== "--" ? "🔒" : "") + '</span>' +
+      '<span class="bars">' + bars(n.signal) + '</span>';
+    row.appendChild(left); row.appendChild(right);
+    row.addEventListener("click", function () { selectNetwork(n); });
+    netsEl.appendChild(row);
   }
 
   function escapeHtml(s) {
@@ -278,16 +316,32 @@
     selectedSecurity = n.security || "";
     selSsidEl.textContent = n.ssid;
     password = "";
+    useSaved = !!n.known;
+    pwVisible = false;
+    togglePw.textContent = "Show";
+    togglePw.style.visibility = useSaved ? "hidden" : "visible";
     renderPassword();
     // If open network, skip the password step and connect immediately
     if (!n.security || n.security === "--" || n.security === "") {
       doConnect();
       return;
     }
+    // Saved network: no need to re-enter the password. Tapping Connect will
+    // reuse the stored NetworkManager credentials. Typing overrides.
+    if (useSaved) {
+      pwHint.textContent = "Saved — tap Connect to use, or type to enter a new password.";
+    } else {
+      pwHint.textContent = "";
+    }
     connectPanel.classList.add("open");
   }
 
   function renderPassword() {
+    if (!password && useSaved) {
+      pwDisplay.textContent = "••••••••";
+      pwDisplay.className = "pw-display saved-placeholder";
+      return;
+    }
     if (!password) {
       pwDisplay.textContent = "Password";
       pwDisplay.className = "pw-display empty";
@@ -342,11 +396,20 @@
   }
 
   function handleKey(ch) {
-    if (ch === "⌫") { password = password.slice(0, -1); renderPassword(); return; }
+    if (ch === "⌫") {
+      if (useSaved && !password) { return; } // saved placeholder — nothing to delete
+      password = password.slice(0, -1); renderPassword(); return;
+    }
     if (ch === "⇧") { kbMode = kbMode === "ABC" ? "abc" : "ABC"; buildKeyboard(); return; }
     if (ch === "123") { kbMode = "sym"; buildKeyboard(); return; }
     if (ch === "abc") { kbMode = "abc"; buildKeyboard(); return; }
     if (ch === "↵") { doConnect(); return; }
+    // Any real character input means the user is overriding the saved password.
+    if (useSaved) {
+      useSaved = false;
+      togglePw.style.visibility = "visible";
+      pwHint.textContent = "Entering a new password will replace the saved one.";
+    }
     if (ch === "space") { password += " "; renderPassword(); return; }
     password += ch;
     // Auto-revert to lowercase after one uppercase letter
@@ -356,16 +419,24 @@
 
   function doConnect() {
     if (!selectedSsid) return;
+    var body = { ssid: selectedSsid };
+    if (useSaved && !password) {
+      body.use_saved = true;
+    } else {
+      body.password = password;
+    }
     toast("Connecting to " + selectedSsid + "…", "", 60000);
     fetch("/api/wifi/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ssid: selectedSsid, password: password }),
+      body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.ok) {
         toast("Connected to " + selectedSsid + " ✓", "ok", 3500);
         connectPanel.classList.remove("open");
         password = "";
+        useSaved = false;
+        pwHint.textContent = "";
         setTimeout(function () { refreshStatus(); scan(); }, 1500);
         // Auto-return to player after 4 seconds
         setTimeout(function () { exitSettings(); }, 4000);
@@ -379,7 +450,8 @@
   $("closeBtn").addEventListener("click", function () { exitSettings(); });
   $("cancelBtn").addEventListener("click", function () {
     connectPanel.classList.remove("open");
-    password = ""; renderPassword();
+    password = ""; useSaved = false; pwHint.textContent = "";
+    renderPassword();
   });
   $("connectBtn").addEventListener("click", doConnect);
   togglePw.addEventListener("click", function () {

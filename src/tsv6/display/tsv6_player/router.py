@@ -181,6 +181,60 @@ class RouterServer:
         with self._rect_lock:
             return self._video_zone_rect
 
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _saved_wifi_profiles() -> dict[str, str]:
+        """Return a mapping of SSID → NetworkManager profile NAME.
+
+        Profile NAME often equals SSID (e.g. ``nmcli device wifi connect``
+        creates them that way), but not always — netplan-generated profiles
+        use names like ``netplan-wlan0-<ssid>``. So we list wireless
+        profiles first, then read each one's ``802-11-wireless.ssid`` field.
+        The returned map lets ``nmcli connection up <name>`` target the
+        right profile even when the NAME differs from the SSID.
+        """
+        try:
+            listing = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("saved_wifi_profiles list failed: %s", exc)
+            return {}
+        names: list[str] = []
+        for line in listing.stdout.splitlines():
+            # nmcli -t escapes ':' inside NAME as '\:'. Unescape before splitting.
+            tokens = [t.replace("\x00", ":") for t in
+                      line.replace("\\:", "\x00").split(":")]
+            if len(tokens) < 2:
+                continue
+            name, conn_type = tokens[0], tokens[1]
+            if conn_type == "802-11-wireless" and name:
+                names.append(name)
+        profiles: dict[str, str] = {}
+        for name in names:
+            try:
+                detail = subprocess.run(
+                    ["nmcli", "-t", "-f", "802-11-wireless.ssid",
+                     "connection", "show", name],
+                    capture_output=True, text=True, timeout=3,
+                )
+            except Exception as exc:
+                logger.debug("saved_wifi_profiles detail %s failed: %s", name, exc)
+                profiles.setdefault(name, name)  # best-effort
+                continue
+            ssid = name
+            for line in detail.stdout.splitlines():
+                if line.startswith("802-11-wireless.ssid:"):
+                    value = line.split(":", 1)[1].replace("\\:", ":").strip()
+                    if value and value != "--":
+                        ssid = value
+                    break
+            # First profile wins if multiple match the same SSID.
+            profiles.setdefault(ssid, name)
+        return profiles
+
     # ── Flask application factory ─────────────────────────────────────────────
 
     def _build_app(self) -> Flask:
@@ -290,16 +344,20 @@ class RouterServer:
         def wifi_scan() -> Response:
             """Trigger a rescan and return visible networks."""
             try:
-                # Force rescan (non-fatal if it fails — will still return cached results)
-                subprocess.run(
-                    ["nmcli", "device", "wifi", "rescan"],
-                    capture_output=True, text=True, timeout=10,
-                )
+                # --rescan yes makes nmcli perform a fresh scan synchronously
+                # before returning results, avoiding the race between an async
+                # `nmcli device wifi rescan` and a follow-up list command.
+                # Requires polkit rule 50-wifi-netdev.rules granting the netdev
+                # group org.freedesktop.NetworkManager.wifi.scan.
                 result = subprocess.run(
                     ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE",
-                     "device", "wifi", "list"],
-                    capture_output=True, text=True, timeout=10,
+                     "device", "wifi", "list", "--rescan", "yes"],
+                    capture_output=True, text=True, timeout=15,
                 )
+                if result.returncode != 0:
+                    logger.warning("wifi_scan nmcli rc=%s stderr=%s",
+                                   result.returncode, result.stderr.strip()[:200])
+                saved = self._saved_wifi_profiles()
                 seen = {}
                 for line in result.stdout.splitlines():
                     # nmcli -t separates with ':' but escapes colons in SSID as '\:'
@@ -321,6 +379,7 @@ class RouterServer:
                             "signal": sig,
                             "security": security or "--",
                             "in_use": in_use == "*",
+                            "known": ssid in saved,
                         }
                 networks = sorted(seen.values(), key=lambda n: n["signal"], reverse=True)
                 return jsonify({"networks": networks})
@@ -330,22 +389,34 @@ class RouterServer:
 
         @app.route("/api/wifi/connect", methods=["POST"])
         def wifi_connect() -> Response:
-            """Connect to a WiFi network. Body: {ssid, password}."""
+            """Connect to a WiFi network. Body: {ssid, password, use_saved}.
+
+            If ``use_saved`` is true, reuses the NetworkManager profile's stored
+            credentials via ``nmcli connection up`` — no password is required
+            from the caller. Otherwise runs ``nmcli device wifi connect``, which
+            creates or overwrites the profile with the supplied password.
+            """
             body = request.get_json(force=True, silent=True) or {}
             ssid = (body.get("ssid") or "").strip()
             password = body.get("password") or ""
+            use_saved = bool(body.get("use_saved"))
             if not ssid:
                 return jsonify({"ok": False, "error": "ssid required"}), 400
             try:
-                cmd = ["nmcli", "device", "wifi", "connect", ssid]
-                if password:
-                    cmd += ["password", password]
+                if use_saved:
+                    profile = self._saved_wifi_profiles().get(ssid, ssid)
+                    cmd = ["nmcli", "connection", "up", profile]
+                else:
+                    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+                    if password:
+                        cmd += ["password", password]
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=45,
                 )
                 ok = result.returncode == 0
                 msg = (result.stdout + result.stderr).strip()
-                logger.info("wifi_connect ssid=%s ok=%s msg=%s", ssid, ok, msg[:200])
+                logger.info("wifi_connect ssid=%s saved=%s ok=%s msg=%s",
+                            ssid, use_saved, ok, msg[:200])
                 return jsonify({"ok": ok, "message": msg})
             except subprocess.TimeoutExpired:
                 return jsonify({"ok": False, "error": "timeout"}), 504
