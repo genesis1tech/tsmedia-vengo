@@ -106,5 +106,33 @@ Environment="TSV6_RECYCLE_SENSOR_POLL_INTERVAL=0.05"
 Environment="TSV6_RECYCLE_SENSOR_SIMULATION=false"
 Environment="TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS=2"
 
+# ── PiSignage Display Settings ───────────────────────────────────────────────
+# Set PISIGNAGE_ENABLED=true to use a PiSignage-compatible display backend
+# instead of local VLC+tkinter.
+#
+# PISIGNAGE_BACKEND selects the backend implementation:
+#   rest   — PiSignageAdapter (REST client; requires a licensed PiSignage player
+#             already registered with the Hostinger server)
+#   native — TSV6NativeBackend (in-process Chromium+VLC player; no PiSignage
+#             player license needed; recommended for new deployments)
+#   vlc    — Legacy EnhancedVideoPlayer (tkinter+VLC; PISIGNAGE_ENABLED ignored)
+#
+# When PISIGNAGE_ENABLED=false (default), the legacy VLC player is used
+# regardless of PISIGNAGE_BACKEND.
+Environment="PISIGNAGE_ENABLED=false"
+Environment="PISIGNAGE_BACKEND=rest"
+Environment="PISIGNAGE_SERVER_URL=http://72.60.120.25:3000"
+Environment="PISIGNAGE_USERNAME=pi"
+Environment="PISIGNAGE_PASSWORD=pi"
+Environment="PISIGNAGE_INSTALLATION=g1tech26"
+Environment="PISIGNAGE_GROUP=default"
+
+# ── TSV6 Native Backend Settings ─────────────────────────────────────────────
+# Used when PISIGNAGE_BACKEND=native.
+# TSV6_VENUE_ID: Operator-assigned venue tag for impression reporting (optional)
+# TSV6_APP_VERSION: Application version string injected into impression records
+Environment="TSV6_VENUE_ID="
+Environment="TSV6_APP_VERSION=1.0.0"
+
 [Install]
 WantedBy=multi-user.target

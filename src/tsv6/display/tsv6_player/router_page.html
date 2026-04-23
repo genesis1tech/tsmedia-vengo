@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=800, height=1280, initial-scale=1.0">
+<title>TSV6 Layout</title>
+<style>
+  /*
+   * TSV6 router page — loaded by Chromium kiosk at http://localhost:8765/
+   *
+   * Required zones (do not remove or rename):
+   *   #full    — full-screen container
+   *   #main    — primary content area; transparent when VLC renders behind it
+   *   #ticker  — ticker bar / branded footer
+   */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: "Arial Black", Arial, sans-serif;
+  }
+
+  /* Full-screen container */
+  #full {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Main content zone — leaves 60px at bottom for the TSV6 footer */
+  #main {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: calc(100% - 60px);
+    background: #000;
+    overflow: hidden;
+    transition: background-color 0.1s ease;
+  }
+
+  /* Transparent state — used when VLC renders behind this zone */
+  #main.video-zone {
+    background: transparent !important;
+  }
+
+  /* iframe used for HTML assets — fills the entire #main zone */
+  #main-iframe {
+    display: none;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+  }
+
+  /* img used for image assets — centred, object-fit contain */
+  #main-image {
+    display: none;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+  }
+
+  /* Product display: product image + QR overlay */
+  #product-container {
+    display: none;
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  #product-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+  }
+
+  #qr-overlay {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    width: 96px;
+    height: 96px;
+    background: #fff;
+    padding: 4px;
+    border-radius: 4px;
+  }
+
+  /* Idle placeholder shown when no command has arrived yet */
+  #idle-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: #333;
+    font-size: 18px;
+    letter-spacing: 1px;
+  }
+
+  /* ── Red "SCAN BARCODE TO RECYCLE" footer (preserved exactly) ────────────── */
+  #ticker {
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%;
+    height: 60px;
+    background: #d91e18;                /* Red */
+    color: #ffffff;                     /* White */
+    font-family: "Arial Black", "Arial Bold", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 32px;
+    line-height: 60px;
+    text-align: center;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    z-index: 100;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* Fallback branded footer label — shown when no dynamic ticker is set. */
+  #ticker-content {
+    display: block;
+    width: 100%;
+    height: 60px;
+    line-height: 60px;
+    white-space: nowrap;
+  }
+  /* Scrolling marquee variant — enabled via .scroll class when ticker.behavior=scroll. */
+  #ticker.scroll #ticker-content {
+    padding-left: 100%;
+    animation: tsv6-ticker-scroll var(--tsv6-ticker-duration, 20s) linear infinite;
+  }
+  @keyframes tsv6-ticker-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-100%); }
+  }
+
+  /* Hide any PiSignage branding */
+  #poweredby,
+  .powered-by,
+  a[href*="pisignage.com"],
+  [class*="pisignage-footer"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+  }
+</style>
+</head>
+<body>
+  <div id="full">
+    <div id="main">
+      <!-- HTML asset iframe -->
+      <iframe id="main-iframe" sandbox="allow-scripts allow-same-origin" title="HTML asset"></iframe>
+
+      <!-- Image asset -->
+      <img id="main-image" src="" alt="Asset" />
+
+      <!-- Product display: product image + QR code overlay -->
+      <div id="product-container">
+        <img id="product-image" src="" alt="Product" />
+        <img id="qr-overlay" src="" alt="QR code" />
+      </div>
+
+      <!-- Idle placeholder -->
+      <div id="idle-placeholder">TSV6 Ready</div>
+    </div>
+    <!-- Red branded footer; text is updated dynamically via the show_ticker command. -->
+    <div id="ticker"><span id="ticker-content">SCAN BARCODE TO RECYCLE</span></div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── DOM element references ────────────────────────────────────────────────
+  var mainZone       = document.getElementById("main");
+  var mainIframe     = document.getElementById("main-iframe");
+  var mainImage      = document.getElementById("main-image");
+  var productCont    = document.getElementById("product-container");
+  var productImage   = document.getElementById("product-image");
+  var qrOverlay      = document.getElementById("qr-overlay");
+  var idlePh         = document.getElementById("idle-placeholder");
+  var tickerEl       = document.getElementById("ticker");
+  var tickerContent  = document.getElementById("ticker-content");
+  var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
+
+  // ── Helper: hide all content slots ───────────────────────────────────────
+  function clearMain() {
+    mainIframe.style.display     = "none";
+    mainIframe.src               = "";
+    mainImage.style.display      = "none";
+    mainImage.src                = "";
+    productCont.style.display    = "none";
+    productImage.src             = "";
+    qrOverlay.src                = "";
+    idlePh.style.display         = "none";
+    mainZone.classList.remove("video-zone");
+  }
+
+  // ── Command handlers ──────────────────────────────────────────────────────
+
+  /**
+   * show_html — load an HTML asset in the iframe.
+   * Expected: { action: "show_html", src: "filename.html" }
+   */
+  function handleShowHtml(cmd) {
+    clearMain();
+    mainIframe.src = "/assets/" + encodeURIComponent(cmd.src);
+    mainIframe.style.display = "block";
+  }
+
+  /**
+   * show_image — display an image asset.
+   * Expected: { action: "show_image", src: "filename.jpg" }
+   */
+  function handleShowImage(cmd) {
+    clearMain();
+    mainImage.src = "/assets/" + encodeURIComponent(cmd.src);
+    mainImage.style.display = "block";
+  }
+
+  /**
+   * show_product — display a product image with a QR-code overlay.
+   * Expected: { action: "show_product", image: "page1.png", qr_url: "https://..." }
+   */
+  function handleShowProduct(cmd) {
+    clearMain();
+    productImage.src = "/assets/" + encodeURIComponent(cmd.image);
+    // QR code: build a data URL via a canvas element using the qr_url value.
+    // For simplicity we use a lightweight approach: load the QR image directly
+    // if qr_url points to a local asset, or compose a Google Charts URL for
+    // external URLs.  Python side can also pre-render the QR and pass a local
+    // filename instead.
+    if (cmd.qr_src) {
+      // Caller provided a pre-rendered QR image filename.
+      qrOverlay.src = "/assets/" + encodeURIComponent(cmd.qr_src);
+    } else if (cmd.qr_url) {
+      // Fall back to a QR API endpoint.
+      qrOverlay.src =
+        "https://api.qrserver.com/v1/create-qr-code/?size=88x88&data=" +
+        encodeURIComponent(cmd.qr_url);
+    }
+    productCont.style.display = "block";
+  }
+
+  /**
+   * show_video_zone — make #main transparent so VLC renders behind Chromium.
+   * Expected: { action: "show_video_zone", zone: "main", rect: [x,y,w,h] }
+   * Reports the actual pixel rect back to Python via POST /video_zone_rect.
+   */
+  function handleShowVideoZone(cmd) {
+    clearMain();
+    mainZone.classList.add("video-zone");
+
+    // Measure the actual bounding rect of #main in screen coordinates.
+    var r = mainZone.getBoundingClientRect();
+    var rect = [
+      Math.round(r.left   + window.screenX),
+      Math.round(r.top    + window.screenY),
+      Math.round(r.width),
+      Math.round(r.height)
+    ];
+
+    // If the caller already supplied a rect, prefer that.
+    if (cmd.rect && cmd.rect.length === 4) {
+      rect = cmd.rect;
+    }
+
+    fetch("/video_zone_rect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rect: rect })
+    }).catch(function (err) {
+      console.warn("video_zone_rect POST failed:", err);
+    });
+  }
+
+  /**
+   * hide_video_zone — restore #main background.
+   */
+  function handleHideVideoZone() {
+    mainZone.classList.remove("video-zone");
+  }
+
+  /**
+   * show_idle — show the idle placeholder; VLC is responsible for looping
+   * idle videos behind the transparent zone if previously set up.
+   */
+  function handleShowIdle() {
+    clearMain();
+    idlePh.style.display = "flex";
+  }
+
+  /**
+   * show_ticker — update the red footer text.
+   *   cmd.text    : string shown in the footer (falls back to TICKER_DEFAULT when empty)
+   *   cmd.enabled : if false, revert to the branded default text
+   *   cmd.scroll  : true to animate as a horizontal marquee
+   *   cmd.speed   : 1–10, higher is faster (scroll duration = ~60s/speed)
+   */
+  function handleShowTicker(cmd) {
+    var text = (cmd && cmd.enabled && cmd.text) ? String(cmd.text) : TICKER_DEFAULT;
+    tickerContent.textContent = text;
+    var scroll = !!(cmd && cmd.enabled && cmd.scroll);
+    tickerEl.classList.toggle("scroll", scroll);
+    if (scroll) {
+      var speed = Math.max(1, Math.min(10, Number(cmd.speed) || 3));
+      tickerEl.style.setProperty("--tsv6-ticker-duration", (60 / speed).toFixed(1) + "s");
+    }
+  }
+
+  // ── SSE dispatcher ────────────────────────────────────────────────────────
+  var HANDLERS = {
+    "show_html":        handleShowHtml,
+    "show_image":       handleShowImage,
+    "show_product":     handleShowProduct,
+    "show_video_zone":  handleShowVideoZone,
+    "hide_video_zone":  handleHideVideoZone,
+    "show_idle":        handleShowIdle,
+    "show_ticker":      handleShowTicker
+  };
+
+  function dispatch(cmd) {
+    var handler = HANDLERS[cmd.action];
+    if (handler) {
+      handler(cmd);
+    } else {
+      console.warn("TSV6: unknown action:", cmd.action);
+    }
+  }
+
+  // ── Connect to SSE stream ─────────────────────────────────────────────────
+  function connectSSE() {
+    var es = new EventSource("/events");
+
+    es.onmessage = function (event) {
+      try {
+        var cmd = JSON.parse(event.data);
+        dispatch(cmd);
+      } catch (e) {
+        console.error("TSV6: failed to parse SSE data:", event.data, e);
+      }
+    };
+
+    es.onerror = function () {
+      console.warn("TSV6: SSE connection lost; will reconnect automatically.");
+      // EventSource reconnects automatically; no manual retry needed.
+    };
+  }
+
+  // Start SSE after the DOM is ready (it already is at this point, but
+  // defer slightly to let Chromium finish layout so getBoundingClientRect
+  // returns accurate values).
+  window.addEventListener("load", function () {
+    connectSSE();
+    // Show idle placeholder on initial load.
+    handleShowIdle();
+  });
+
+  // Long-press-anywhere (5s) to open /settings.
+  //
+  // The player uses #main-iframe and VLC render zones which capture events and
+  // prevent bubbling to document. To receive every press regardless of what's
+  // below, we install a fullscreen transparent overlay DIV at the top of the
+  // z-stack. The overlay listens for pointer/touch/mouse events directly, so
+  // iframes, images, and VLC-backed transparent zones can't steal them.
+  //
+  // Signage mode has no other required touch interactions, so a capturing
+  // overlay is safe here. If interactive content is ever needed inside the
+  // iframe, this overlay can be toggled off while the content is active.
+  (function installLongPress() {
+    var LONG_PRESS_MS = 5000;
+    var DRIFT_PX = 40;
+    var startT = 0, startX = 0, startY = 0;
+    var timerId = null, rafId = null;
+
+    // Fullscreen invisible catcher above all other content
+    var catcher = document.createElement("div");
+    catcher.id = "tsv6-longpress-catcher";
+    catcher.style.cssText = [
+      "position:fixed","inset:0","left:0","top:0","right:0","bottom:0",
+      "width:100vw","height:100vh",
+      "z-index:2147483646",            // just below the ring
+      "background:transparent",
+      "pointer-events:auto",
+      "touch-action:none",             // tell browser not to interpret as scroll/zoom
+      "-webkit-tap-highlight-color:transparent",
+      "cursor:default",
+    ].join(";");
+
+    // Radial progress ring sits above the catcher so it's visible
+    var ring = document.createElement("div");
+    ring.id = "tsv6-longpress-ring";
+    ring.style.cssText = [
+      "position:fixed","pointer-events:none","z-index:2147483647",
+      "left:0","top:0","width:110px","height:110px",
+      "margin-left:-55px","margin-top:-55px",
+      "border-radius:50%",
+      "box-shadow:0 0 18px rgba(0,0,0,0.6)",
+      "transition:opacity .12s","opacity:0",
+      "background:conic-gradient(#3d8bfd 0deg, rgba(61,139,253,0.15) 0deg)",
+    ].join(";");
+
+    function attach() {
+      if (!document.body) return setTimeout(attach, 50);
+      document.body.appendChild(catcher);
+      document.body.appendChild(ring);
+    }
+    attach();
+
+    function setRing(x, y, progress) {
+      ring.style.left = x + "px";
+      ring.style.top = y + "px";
+      ring.style.opacity = progress > 0 ? "1" : "0";
+      var deg = Math.max(0, Math.min(360, progress * 360));
+      ring.style.background =
+        "conic-gradient(#3d8bfd " + deg + "deg, rgba(61,139,253,0.15) " + deg + "deg)";
+    }
+    function tick() {
+      if (!timerId) return;
+      var pct = Math.min(1, (performance.now() - startT) / LONG_PRESS_MS);
+      setRing(startX, startY, pct);
+      rafId = requestAnimationFrame(tick);
+    }
+    function cancel() {
+      if (timerId) { clearTimeout(timerId); timerId = null; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      ring.style.opacity = "0";
+    }
+    function fire() {
+      timerId = null;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      window.location.href = "/settings";
+    }
+    function start(x, y) {
+      cancel();
+      startT = performance.now();
+      startX = x; startY = y;
+      timerId = setTimeout(fire, LONG_PRESS_MS);
+      rafId = requestAnimationFrame(tick);
+    }
+    function move(x, y) {
+      if (timerId && (Math.abs(x - startX) > DRIFT_PX || Math.abs(y - startY) > DRIFT_PX)) cancel();
+    }
+
+    // Attach to the catcher, not document — events would never bubble past
+    // iframe/image content otherwise.
+    if (window.PointerEvent) {
+      catcher.addEventListener("pointerdown", function (e) { start(e.clientX, e.clientY); });
+      catcher.addEventListener("pointermove", function (e) { if (timerId) move(e.clientX, e.clientY); });
+      catcher.addEventListener("pointerup", cancel);
+      catcher.addEventListener("pointercancel", cancel);
+      catcher.addEventListener("pointerleave", cancel);
+    }
+    catcher.addEventListener("touchstart", function (e) {
+      if (e.touches && e.touches.length) start(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    catcher.addEventListener("touchmove", function (e) {
+      if (e.touches && e.touches.length) move(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    catcher.addEventListener("touchend", cancel, { passive: true });
+    catcher.addEventListener("touchcancel", cancel, { passive: true });
+    catcher.addEventListener("mousedown", function (e) { start(e.clientX, e.clientY); });
+    catcher.addEventListener("mousemove", function (e) { if (timerId) move(e.clientX, e.clientY); });
+    catcher.addEventListener("mouseup", cancel);
+    catcher.addEventListener("mouseleave", cancel);
+  }());
+}());
+</script>
+</body>
+</html>

@@ -473,6 +473,20 @@ class ConnectivityConfig:
     status_report_interval_secs: float = 60.0  # 60 seconds
 
 
+@dataclass
+class PiSignageLocalConfig:
+    """
+    Local PiSignage feature toggle and settings that don't belong in the
+    adapter's frozen config (which reads directly from env vars).
+
+    The full connection config lives in ``tsv6.display.pisignage_adapter.PiSignageConfig``.
+    """
+    # Feature toggle — set False to fall back to VLC-based EnhancedVideoPlayer
+    enabled: bool = field(
+        default_factory=lambda: os.environ.get("PISIGNAGE_ENABLED", "false").lower() == "true"
+    )
+
+
 class Config:
     """Main configuration class that combines all config sections"""
 
@@ -494,6 +508,7 @@ class Config:
         self.provisioning = ProvisioningConfig()
         self.lte = LTEConfig()
         self.connectivity = ConnectivityConfig()
+        self.pisignage = PiSignageLocalConfig()
 
     def get_aws_topics(self) -> dict:
         """Get formatted AWS IoT topics for this device"""
@@ -570,6 +585,7 @@ __all__ = [
     'ProvisioningConfig',
     'LTEConfig',
     'ConnectivityConfig',
+    'PiSignageLocalConfig',
     'config'
 ]
 

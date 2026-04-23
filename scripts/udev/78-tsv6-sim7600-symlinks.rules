@@ -1,0 +1,15 @@
+# Stable symlinks for Waveshare SIM7600G-H HAT (USB 1e0e:9011).
+#
+# Firmware SIM7600G_V2.0.2 port layout (verified by AT probe):
+#   Interface 02 -> NMEA / GPS
+#   Interface 03 -> silent (diag / audio)
+#   Interface 04 -> AT primary   <-- tsv6-signage.service binds /dev/ttySIM7600
+#   Interface 05 -> AT secondary (modem / PPP) — available for diagnostics
+#   Interface 06 -> silent
+#
+# Interface number is stable per SimCom's USB descriptor even though ttyUSB*
+# numbering can shuffle across reboots when other USB-serial devices enumerate
+# first. Pinning by interface keeps /dev/ttySIM7600 correct in all cases.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_USB_INTERFACE_NUM}=="04", SYMLINK+="ttySIM7600"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_USB_INTERFACE_NUM}=="05", SYMLINK+="ttySIM7600_AT2"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="ttySIM7600_NMEA"

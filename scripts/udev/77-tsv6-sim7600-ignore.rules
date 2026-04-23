@@ -1,0 +1,5 @@
+# Give the tsv6 controller exclusive ownership of the SIM7600 modem.
+# ModemManager must ignore it so /dev/ttySIM7600 is free at service start.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="net", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{ID_MM_DEVICE_IGNORE}="1"

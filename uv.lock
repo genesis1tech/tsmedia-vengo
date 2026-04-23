@@ -763,12 +763,55 @@ wheels = [
 ]
 
 [[package]]
+name = "python-engineio"
+version = "3.14.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7d/a3/9491c16fae684011c51cc94513e17153bacfb5509c71c68dde6c5abd51fc/python-engineio-3.14.2.tar.gz", hash = "sha256:eab4553f2804c1ce97054c8b22cf0d5a9ab23128075248b97e1a5b2f29553085", size = 40741, upload-time = "2020-11-30T00:03:58.239Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/35/b9edf38b6a42077f3c097ab4edb0281adb3cc5434645c0bd301b0b45c767/python_engineio-3.14.2-py2.py3-none-any.whl", hash = "sha256:5a9e6086d192463b04a1428ff1f85b6ba631bbb19d453b144ffc04f530542b84", size = 51942, upload-time = "2020-11-30T00:03:56.741Z" },
+]
+
+[[package]]
+name = "python-socketio"
+version = "4.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-engineio" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/6c/b899d7a34503d5e4b6967ee3fec996acee75d0cd087c22963134c88f8ca1/python-socketio-4.6.1.tar.gz", hash = "sha256:cd1f5aa492c1eb2be77838e837a495f117e17f686029ebc03d62c09e33f4fa10", size = 42374, upload-time = "2020-11-28T11:57:07.048Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/91/d78afbe5861de53cafe9dcc6eb1a802d5495cfbffb79b8385ee7cf15a71c/python_socketio-4.6.1-py2.py3-none-any.whl", hash = "sha256:5a21da53fdbdc6bb6c8071f40e13d100e0b279ad997681c2492478e06f370523", size = 51865, upload-time = "2020-11-28T11:57:05.565Z" },
+]
+
+[package.optional-dependencies]
+client = [
+    { name = "requests" },
+    { name = "websocket-client" },
+]
+
+[[package]]
 name = "python-vlc"
 version = "3.0.21203"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4b/5b/f9ce6f0c9877b6fe5eafbade55e0dcb6b2b30f1c2c95837aef40e390d63b/python_vlc-3.0.21203.tar.gz", hash = "sha256:52d0544b276b11e58b6c0b748c3e0518f94f74b1b4cd328c83a59eacabead1ec", size = 162211, upload-time = "2024-10-07T14:39:54.755Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5b/ee/7d76eb3b50ccb1397621f32ede0fb4d17aa55a9aa2251bc34e6b9929fdce/python_vlc-3.0.21203-py3-none-any.whl", hash = "sha256:1613451a31b692ec276296ceeae0c0ba82bfc2d094dabf9aceb70f58944a6320", size = 87651, upload-time = "2024-10-07T14:39:50.021Z" },
+]
+
+[[package]]
+name = "python-xlib"
+version = "0.33"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/b8/ff33610932e0ee81ae7f1269c890f697d56ff74b9f5b2ee5d9b7fa2c5355/python_xlib-0.33-py2.py3-none-any.whl", hash = "sha256:c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398", size = 182185, upload-time = "2022-12-25T18:52:58.662Z" },
 ]
 
 [[package]]
@@ -812,6 +855,15 @@ name = "rpi-gpio"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c4/0f/10b524a12b3445af1c607c27b2f5ed122ef55756e29942900e5c950735f2/RPi.GPIO-0.7.1.tar.gz", hash = "sha256:cd61c4b03c37b62bba4a5acfea9862749c33c618e0295e7e90aa4713fb373b70", size = 29090, upload-time = "2022-02-06T15:15:06.022Z" }
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
 
 [[package]]
 name = "sysv-ipc"
@@ -888,10 +940,14 @@ dependencies = [
     { name = "pygame" },
     { name = "pyserial" },
     { name = "python-dotenv" },
+    { name = "python-engineio" },
+    { name = "python-socketio", extra = ["client"] },
     { name = "python-vlc" },
+    { name = "python-xlib" },
     { name = "qrcode" },
     { name = "requests" },
     { name = "rpi-gpio", marker = "sys_platform == 'linux'" },
+    { name = "websocket-client" },
 ]
 
 [package.optional-dependencies]
@@ -923,10 +979,14 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==6.0.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = "==3.14.0" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "python-engineio", specifier = ">=3.14.2,<4.0" },
+    { name = "python-socketio", extras = ["client"], specifier = ">=4.6.1,<5.0" },
     { name = "python-vlc", specifier = ">=3.0.21203" },
+    { name = "python-xlib", specifier = ">=0.33" },
     { name = "qrcode", specifier = ">=8.2" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "rpi-gpio", marker = "sys_platform == 'linux'", specifier = ">=0.7.1" },
+    { name = "websocket-client", specifier = ">=0.59,<1.0" },
 ]
 provides-extras = ["dev"]
 
@@ -946,6 +1006,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/15/22/9ee70a2574a4f4599c47dd506532914ce044817c7752a79b6a51286319bc/urllib3-2.5.0.tar.gz", hash = "sha256:3fc47733c7e419d4bc3f6b3dc2b4f890bb743906a30d56ba4a5bfa4bbff92760", size = 393185, upload-time = "2025-06-18T14:07:41.644Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl", hash = "sha256:e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc", size = 129795, upload-time = "2025-06-18T14:07:40.39Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "0.59.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/bf/c706b56243f1641159ff211b51d3341024e1cdf63defc2b74595b6319039/websocket-client-0.59.0.tar.gz", hash = "sha256:d376bd60eace9d437ab6d7ee16f4ab4e821c9dae591e1b783c58ebd8aaf80c5c", size = 57897, upload-time = "2021-05-05T01:43:07.811Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/0c/d52a2a63512a613817846d430d16a8fbe5ea56dd889e89c68facf6b91cb6/websocket_client-0.59.0-py2.py3-none-any.whl", hash = "sha256:2e50d26ca593f70aba7b13a489435ef88b8fc3b5c5643c1ce8808ff9b40f0b32", size = 67216, upload-time = "2021-05-05T01:43:04.863Z" },
 ]
 
 [[package]]

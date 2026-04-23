@@ -1,0 +1,64 @@
+[Unit]
+Description=TSV6 Signage Player (WiFi primary, LTE disabled)
+After=graphical.target ModemManager.service
+Wants=ModemManager.service
+
+[Service]
+Type=simple
+User=g1tech
+Group=g1tech
+WorkingDirectory=/home/g1tech/tsrpi7/tsrpi5
+
+Environment="PATH=/home/g1tech/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/g1tech/.Xauthority"
+Environment="HOME=/home/g1tech"
+Environment="PYTHONPATH=/home/g1tech/tsrpi7/tsrpi5/src"
+
+# PiSignage
+Environment="PISIGNAGE_ENABLED=true"
+Environment="PISIGNAGE_BACKEND=native"
+Environment="PISIGNAGE_SERVER_URL=http://72.60.120.25:3000"
+Environment="PISIGNAGE_USERNAME=pi"
+Environment="PISIGNAGE_PASSWORD=pi"
+Environment="PISIGNAGE_INSTALLATION=g1tech26"
+Environment="PISIGNAGE_GROUP=Test Group"
+Environment="TSV6_APP_VERSION=1.0.0-signage"
+
+# 4G LTE — SIM7600CE (kept for future re-enable; currently disabled)
+Environment="TSV6_LTE_ENABLED=false"
+Environment="TSV6_LTE_REQUIRED=false"
+Environment="TSV6_LTE_PORT=/dev/ttySIM7600"
+Environment="TSV6_LTE_BAUD=115200"
+Environment="TSV6_LTE_APN=hologram"
+Environment="TSV6_LTE_FORCE_LTE=false"
+Environment="TSV6_LTE_ROAMING=true"
+Environment="TSV6_LTE_POWER_GPIO=6"
+Environment="TSV6_LTE_CONNECT_TIMEOUT=90"
+Environment="TSV6_LTE_SIMULATION=false"
+
+# WiFi is the only link; long-press the screen 5s to open settings -> connect WiFi
+Environment="TSV6_CONNECTIVITY_MODE=wifi_only"
+Environment="TSV6_WIFI_ENABLED=true"
+
+# Signage-only (no recycling hardware)
+Environment="TSV6_SIGNAGE_ONLY=true"
+Environment="TSV6_TOF_ENABLED=false"
+Environment="TSV6_RECYCLE_SENSOR_SIMULATION=true"
+
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; echo "X11 not ready"; exit 1'
+ExecStart=/home/g1tech/.local/bin/uv run python -m tsv6.display.tsv6_player.signage_main
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tsv6-signage
+
+MemoryMax=1G
+CPUQuota=100%
+
+[Install]
+WantedBy=graphical.target
