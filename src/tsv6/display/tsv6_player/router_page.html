@@ -130,8 +130,14 @@
     line-height: 60px;
     white-space: nowrap;
   }
-  /* Scrolling marquee variant — enabled via .scroll class when ticker.behavior=scroll. */
+  /* Scrolling marquee variant — enabled via .scroll class when ticker.behavior=scroll.
+     The element must be inline-block with auto width so its own box width equals
+     (container + text). translateX(-100%) then moves the whole thing left by exactly
+     that amount, so the last glyph's right edge lands at the container's left edge. */
+  #ticker.scroll { text-align: left; }
   #ticker.scroll #ticker-content {
+    display: inline-block;
+    width: auto;
     padding-left: 100%;
     animation: tsv6-ticker-scroll var(--tsv6-ticker-duration, 20s) linear infinite;
   }
