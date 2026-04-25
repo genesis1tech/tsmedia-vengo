@@ -81,3 +81,4 @@ assets/certs/provisioning-report.json
 !CLAUDE.md
 !docs/enterprise-wifi-fix.md
 !docs/NFC_QR_REPLICATION_GUIDE.md
+!docs/superpowers/**/*.md
