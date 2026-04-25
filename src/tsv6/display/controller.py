@@ -77,23 +77,32 @@ class DisplayController(Protocol):
         """Switch to the 'Verifying...' screen while awaiting server response."""
         ...
 
-    def show_deposit_item(self) -> bool:
-        """Switch to the 'Please Deposit Your Item' screen."""
+    def show_deposit_item(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Please Deposit Your Item' screen.
+
+        Args:
+            playlist_override: Optional per-campaign playlist name. Backends that
+                don't support per-call playlist switching should ignore this.
+        """
         ...
 
     def show_product_display(
         self,
-        product_image_path: str,
-        qr_url: str,
+        product_image_path: str = "",
+        qr_url: str = "",
         nfc_url: str | None = None,
+        playlist_override: str | None = None,
     ) -> bool:
         """Switch to the product result screen.
 
         Args:
-            product_image_path: Filesystem path to the product image asset.
-            qr_url: URL to encode in the on-screen QR code.
-            nfc_url: Optional URL to broadcast via NFC (None = omit NFC).
-
+            product_image_path: Filesystem path to the product image asset
+                (used by native backend; ignored by REST adapter).
+            qr_url: URL to encode in the on-screen QR code (used by native backend;
+                REST adapter renders QR via the Pi-side ``QrOverlay`` instead).
+            nfc_url: Optional URL to broadcast via NFC (None = omit; ignored on
+                paths that don't broadcast NFC).
+            playlist_override: Optional per-campaign playlist name.
         Returns True on success.
         """
         ...
