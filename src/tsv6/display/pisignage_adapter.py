@@ -276,18 +276,22 @@ class PiSignageAdapter:
         product_image_path: str = "",
         qr_url: str = "",
         nfc_url: str | None = None,
+        playlist_override: str | None = None,
     ) -> bool:
-        """Switch to the product display playlist.
+        """Switch to the product result playlist.
 
         Args:
-            product_image_path: Path to the product image asset (reserved for
-                Agent D's dynamic image injection; unused by this adapter layer).
-            qr_url: URL for the QR code overlay (reserved for Agent D).
-            nfc_url: Optional NFC broadcast URL (reserved for Agent D).
-
-        Returns True on successful playlist switch.
+            product_image_path: Reserved for native-backend renderers; ignored here.
+            qr_url: Reserved for native-backend renderers; ignored here. The QR is
+                rendered Pi-side by ``QrOverlay`` when this adapter is the active
+                display backend.
+            nfc_url: Reserved for native-backend renderers; ignored here.
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                reward content. Falls back to ``self._config.product_playlist`` when
+                absent or invalid.
         """
-        return self.switch_playlist(self._config.product_playlist)
+        name = self._resolve_playlist(playlist_override, self._config.product_playlist)
+        return self.switch_playlist(name)
 
     def show_offline(self) -> bool:
         """Show the offline / server-unreachable fallback screen."""

@@ -347,6 +347,44 @@ class TestPiSignageAdapterDepositOverride:
         assert "setplaylist/player123/tsv6_processing" in called_url
 
 
+class TestPiSignageAdapterProductOverride:
+    """show_product_display respects the optional playlist_override kwarg."""
+
+    @patch("requests.post")
+    def test_default_uses_tsv6_product_display(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display()
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_product_display" in called_url
+
+    @patch("requests.post")
+    def test_override_takes_precedence(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(playlist_override="pepsi_spring26_reward")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/pepsi_spring26_reward" in called_url
+
+    @patch("requests.post")
+    def test_legacy_args_accepted_but_ignored(self, mock_post, connected_adapter):
+        """product_image_path / qr_url / nfc_url remain in signature for native-backend parity."""
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(
+            product_image_path="/tmp/x.jpg",
+            qr_url="https://example.com/r/1",
+            nfc_url="https://example.com/r/1",
+            playlist_override="x_campaign",
+        )
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/x_campaign" in called_url
+
+    @patch("requests.post")
+    def test_invalid_override_falls_back(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(playlist_override="bad name with space")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_product_display" in called_url
+
+
 class TestPiSignageConfigDefaults:
     def test_deposit_default_is_processing_playlist(self):
         from tsv6.display.pisignage_adapter import PiSignageConfig
