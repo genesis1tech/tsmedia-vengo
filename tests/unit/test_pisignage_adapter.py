@@ -320,3 +320,34 @@ class TestPiSignageHealthMonitor:
                 callback()
         callback.assert_called_once()
         assert monitor.is_down is True
+
+
+class TestPiSignageAdapterDepositOverride:
+    """show_deposit_item respects the optional playlist_override kwarg."""
+
+    @patch("requests.post")
+    def test_default_uses_tsv6_processing(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item()
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_processing" in called_url
+
+    @patch("requests.post")
+    def test_override_takes_precedence(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item(playlist_override="pepsi_spring26_deposit")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/pepsi_spring26_deposit" in called_url
+
+    @patch("requests.post")
+    def test_invalid_override_falls_back_to_default(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item(playlist_override="../bad")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_processing" in called_url
+
+
+class TestPiSignageConfigDefaults:
+    def test_deposit_default_is_processing_playlist(self):
+        from tsv6.display.pisignage_adapter import PiSignageConfig
+        assert PiSignageConfig().deposit_playlist == "tsv6_processing"

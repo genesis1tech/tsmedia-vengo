@@ -48,7 +48,7 @@ class PiSignageConfig:
     )
     default_playlist: str = "tsv6_idle_loop"
     processing_playlist: str = "tsv6_processing"
-    deposit_playlist: str = "tsv6_deposit_item"
+    deposit_playlist: str = "tsv6_processing"
     product_playlist: str = "tsv6_product_display"
     no_match_playlist: str = "tsv6_no_match"
     barcode_not_qr_playlist: str = "tsv6_barcode_not_qr"
@@ -256,9 +256,16 @@ class PiSignageAdapter:
         """Show the 'Verifying...' screen."""
         return self.switch_playlist(self._config.processing_playlist)
 
-    def show_deposit_item(self) -> bool:
-        """Show the 'Please Deposit Your Item' screen."""
-        return self.switch_playlist(self._config.deposit_playlist)
+    def show_deposit_item(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Please Deposit Your Item' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                messaging during the deposit stage. Falls back to
+                ``self._config.deposit_playlist`` when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.deposit_playlist)
+        return self.switch_playlist(name)
 
     def show_idle(self) -> bool:
         """Switch to the default looping state. Alias for set_default_playlist()."""
