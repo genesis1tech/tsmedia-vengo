@@ -190,6 +190,41 @@ class TestPiSignageAdapterConvenienceMethods:
         assert "tsv6_no_match" in mock_post.call_args[0][0]
 
 
+class TestPiSignageAdapterResolvePlaylist:
+    """Validation/fallback for AWS-supplied playlist override names."""
+
+    def test_none_returns_default(self, adapter):
+        assert adapter._resolve_playlist(None, "tsv6_processing") == "tsv6_processing"
+
+    def test_empty_string_returns_default(self, adapter):
+        assert adapter._resolve_playlist("", "tsv6_processing") == "tsv6_processing"
+
+    def test_non_string_returns_default(self, adapter):
+        assert adapter._resolve_playlist(123, "tsv6_processing") == "tsv6_processing"
+        assert adapter._resolve_playlist(["x"], "tsv6_processing") == "tsv6_processing"
+
+    def test_valid_name_returns_override(self, adapter):
+        assert adapter._resolve_playlist("pepsi_spring26", "tsv6_default") == "pepsi_spring26"
+
+    def test_name_with_dot_dash_underscore_allowed(self, adapter):
+        assert adapter._resolve_playlist("a.b-c_1", "tsv6_default") == "a.b-c_1"
+
+    def test_name_with_slash_falls_back(self, adapter, caplog):
+        with caplog.at_level("WARNING"):
+            assert adapter._resolve_playlist("../etc/passwd", "tsv6_default") == "tsv6_default"
+        assert "invalid playlist name" in caplog.text
+
+    def test_name_with_space_falls_back(self, adapter):
+        assert adapter._resolve_playlist("bad name", "tsv6_default") == "tsv6_default"
+
+    def test_name_too_long_falls_back(self, adapter):
+        assert adapter._resolve_playlist("x" * 65, "tsv6_default") == "tsv6_default"
+
+    def test_max_length_64_allowed(self, adapter):
+        name = "x" * 64
+        assert adapter._resolve_playlist(name, "tsv6_default") == name
+
+
 class TestPiSignageAdapterAssets:
 
     @patch("requests.post")

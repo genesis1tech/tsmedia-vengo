@@ -16,6 +16,7 @@ Follows the same Manager pattern as ResilientAWSManager:
 
 import logging
 import os
+import re
 import time
 import threading
 from collections.abc import Callable
@@ -233,6 +234,19 @@ class PiSignageAdapter:
             self._config.max_retries,
         )
         return False
+
+    _VALID_PLAYLIST_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
+
+    def _resolve_playlist(self, override: str | None, default: str) -> str:
+        """Validate an AWS-supplied playlist name; fall back to ``default`` if absent or unsafe."""
+        if not override or not isinstance(override, str):
+            return default
+        if not self._VALID_PLAYLIST_NAME.fullmatch(override):
+            logger.warning(
+                "invalid playlist name %r — falling back to %s", override, default
+            )
+            return default
+        return override
 
     def set_default_playlist(self) -> bool:
         """Return to the idle video loop."""
