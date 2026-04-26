@@ -72,6 +72,16 @@ def _row(*, txid, thing, barcode, event_type, return_action, latency_ms,
     }
 
 
+def _resolve_brand_playlists(brand):
+    item = brand_table.get_item(Key={"brand": brand or "*default*"}).get("Item")
+    if not item:
+        item = brand_table.get_item(Key={"brand": "*default*"}).get("Item") or {}
+    return (
+        item.get("depositPlaylist", DEFAULT_DEPOSIT),
+        item.get("productPlaylist", DEFAULT_PRODUCT),
+    )
+
+
 def lambda_handler(event, _ctx):
     started = time.time()
     barcode = event.get("barcode")
@@ -96,6 +106,43 @@ def lambda_handler(event, _ctx):
             txid=txid, thing=thing, barcode=barcode,
             event_type="qr_detected", return_action="QRcode",
             barcode_not_qr_playlist=DEFAULT_BARCODE_NOT_QR,
+            latency_ms=int((time.time() - started) * 1000),
+        ))
+        return payload
+
+    item = master_table.get_item(Key={"barcode": barcode}).get("Item")
+    if item:
+        deposit_pl, product_pl = _resolve_brand_playlists(item.get("productBrand"))
+        wire_image = item.get("productImageWebp") or item.get("productImage")
+        qr_url = f"https://tsrewards--test.expo.app/hook?scanid={txid}&barcode={barcode}"
+        payload = {
+            "statusCode": 200, "returnAction": "openDoor",
+            "thingName": thing, "transactionId": txid, "barcode": barcode,
+            "productName":     item.get("productName"),
+            "productBrand":    item.get("productBrand"),
+            "productCategory": item.get("productCategory"),
+            "productDesc":     item.get("productDesc"),
+            "productImage":    wire_image,
+            "productImageOriginal": item.get("productImageOriginal") or item.get("productImage"),
+            "containerType":   item.get("containerType"),
+            "containerConfidence": float(item.get("containerConfidence", 0) or 0),
+            "qrUrl": qr_url,
+            "depositPlaylist": deposit_pl,
+            "productPlaylist": product_pl,
+            "noItemPlaylist":  DEFAULT_NO_ITEM,
+            "dataSource": "master",
+        }
+        _publish(f"{thing}/openDoor", payload)
+        _firehose_put(_row(
+            txid=txid, thing=thing, barcode=barcode,
+            event_type="master_hit", return_action="openDoor",
+            product_name=payload["productName"], product_brand=payload["productBrand"],
+            product_category=payload["productCategory"], product_desc=payload["productDesc"],
+            product_image=payload["productImage"], product_image_original=payload["productImageOriginal"],
+            container_type=payload["containerType"], container_confidence=payload["containerConfidence"],
+            data_source="master", qr_url=qr_url,
+            deposit_playlist=deposit_pl, product_playlist=product_pl,
+            no_item_playlist=DEFAULT_NO_ITEM,
             latency_ms=int((time.time() - started) * 1000),
         ))
         return payload

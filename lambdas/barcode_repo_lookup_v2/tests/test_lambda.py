@@ -1,6 +1,7 @@
 import os, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -59,3 +60,36 @@ def test_qr_detection_publishes_qrCode_topic(_aws_clients):
     fh_body = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
     assert fh_body["eventtype"] == "qr_detected"
     assert fh_body["returnaction"] == "QRcode"
+
+def test_master_hit_publishes_openDoor_with_webp(_aws_clients):
+    _aws_clients["master"].get_item.return_value = {"Item": {
+        "barcode": "611269163452",
+        "productName": "Red Bull Yellow",
+        "productBrand": "Red Bull",
+        "productCategory": "Beverages",
+        "productDesc": "Tropical energy drink",
+        "productImage":      "https://go-upc.s3.amazonaws.com/images/93437582.png",
+        "productImageWebp":  "https://topper-stopper-bucket.s3.amazonaws.com/product-images-webp/611269163452.webp",
+        "productImageOriginal": "https://go-upc.s3.amazonaws.com/images/93437582.png",
+        "containerType": "can", "containerConfidence": Decimal("0.95"),
+    }}
+    _aws_clients["brand"].get_item.return_value = {"Item": {
+        "brand": "Red Bull",
+        "depositPlaylist": "tsv6_redbull_promo",
+        "productPlaylist": "tsv6_redbull_product",
+    }}
+    lf = _import()
+    resp = lf.lambda_handler({"thingName": "TS_X", "barcode": "611269163452", "transactionId": "tx2"}, None)
+    assert resp["returnAction"] == "openDoor"
+    pub = _aws_clients["iot"].publish.call_args
+    assert pub[1]["topic"] == "TS_X/openDoor"
+    body = __import__("json").loads(pub[1]["payload"])
+    assert body["productImage"].endswith("/611269163452.webp")
+    assert body["productImageOriginal"].endswith(".png")
+    assert body["depositPlaylist"]   == "tsv6_redbull_promo"
+    assert body["productPlaylist"]   == "tsv6_redbull_product"
+    assert body["noItemPlaylist"]    == "tsv6_no_item_detected"
+    assert body["qrUrl"].startswith("https://tsrewards--test.expo.app/hook?scanid=tx2&barcode=611269163452")
+    fh = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
+    assert fh["eventtype"] == "master_hit"
+    assert fh["datasource"] == "master"
