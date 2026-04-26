@@ -121,3 +121,14 @@ def test_full_miss_invokes_upc_lambda(_aws_clients):
     assert payload == {"barcode":"888","thingName":"TS_X","transactionId":"tx4"}
     # No Firehose row from V1-side on the miss path; UPC lambda writes it.
     _aws_clients["firehose"].put_record.assert_not_called()
+
+def test_internal_exception_publishes_error_topic(_aws_clients):
+    _aws_clients["master"].get_item.side_effect = RuntimeError("boom")
+    lf = _import()
+    resp = lf.lambda_handler({"thingName":"TS_X","barcode":"777","transactionId":"tx5"}, None)
+    assert resp["statusCode"] == 500
+    pub = _aws_clients["iot"].publish.call_args
+    assert pub[1]["topic"] == "TS_X/error"
+    fh = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
+    assert fh["eventtype"]    == "lambda_error"
+    assert fh["returnaction"] == "error"

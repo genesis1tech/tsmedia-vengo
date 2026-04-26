@@ -82,19 +82,7 @@ def _resolve_brand_playlists(brand):
     )
 
 
-def lambda_handler(event, _ctx):
-    started = time.time()
-    barcode = event.get("barcode")
-    thing   = event.get("thingName")
-    txid    = event.get("transactionId") or event.get("transactionID") or str(uuid.uuid4())
-
-    try:
-        if not barcode or not thing:
-            raise ValueError("Missing required field: barcode and thingName are required")
-    except Exception as e:
-        err = {"statusCode": 500, "thingName": thing, "transactionId": txid, "error": str(e)}
-        return err
-
+def _process(event, started, barcode, thing, txid):
     if "http://" in barcode or "https://" in barcode:
         payload = {
             "statusCode": 200, "returnAction": "QRcode",
@@ -178,3 +166,30 @@ def lambda_handler(event, _ctx):
     )
     return {"statusCode": 200, "returnAction": "forwardedToUPC",
             "thingName": thing, "transactionId": txid, "barcode": barcode}
+
+
+def lambda_handler(event, _ctx):
+    started = time.time()
+    barcode = event.get("barcode")
+    thing   = event.get("thingName")
+    txid    = event.get("transactionId") or event.get("transactionID") or str(uuid.uuid4())
+
+    if not barcode or not thing:
+        return {"statusCode": 500, "thingName": thing, "transactionId": txid,
+                "error": "Missing required field: barcode and thingName are required"}
+
+    try:
+        return _process(event, started, barcode, thing, txid)
+    except Exception as e:
+        _publish(f"{thing}/error", {"statusCode": 500, "thingName": thing,
+                                    "transactionId": txid, "error": str(e)})
+        try:
+            _firehose_put(_row(
+                txid=txid, thing=thing, barcode=barcode,
+                event_type="lambda_error", return_action="error",
+                reason=str(e),
+                latency_ms=int((time.time() - started) * 1000),
+            ))
+        except Exception:
+            pass
+        return {"statusCode": 500, "thingName": thing, "transactionId": txid, "error": str(e)}
