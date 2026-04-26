@@ -200,6 +200,7 @@ class OptimizedBarcodeScanner:
                     "state": {
                         "reported": {
                             "thingName": thing_name,
+                            "flowVersion": "v2",
                             "transactionID": transaction_id,
                             "barcode": barcode_data,
                             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
