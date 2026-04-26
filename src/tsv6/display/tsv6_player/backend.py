@@ -385,22 +385,34 @@ class TSV6NativeBackend:
             nfc_url=nfc_url,
         )
 
-    def show_no_match(self) -> bool:
-        """Switch to the 'Unrecognized Barcode' screen."""
+    def show_no_match(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Unrecognized Barcode' screen.
+
+        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
+        the native renderer.
+        """
         self._interrupt_current_idle()
         if self._renderer is None:
             return False
         return self._renderer.show_no_match()
 
-    def show_barcode_not_qr(self) -> bool:
-        """Switch to the 'QR Code Detected — Use Barcode' error screen."""
+    def show_barcode_not_qr(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'QR Code Detected — Use Barcode' error screen.
+
+        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
+        the native renderer.
+        """
         self._interrupt_current_idle()
         if self._renderer is None:
             return False
         return self._renderer.show_barcode_not_qr()
 
-    def show_no_item_detected(self) -> bool:
-        """Switch to the 'Item Not Detected' screen."""
+    def show_no_item_detected(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Item Not Detected' screen.
+
+        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
+        the native renderer.
+        """
         self._interrupt_current_idle()
         if self._renderer is None:
             return False

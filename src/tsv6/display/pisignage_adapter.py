@@ -297,17 +297,40 @@ class PiSignageAdapter:
         """Show the offline / server-unreachable fallback screen."""
         return self.switch_playlist(self._config.offline_playlist)
 
-    def show_no_match(self) -> bool:
-        """Show the 'Cannot Accept' screen."""
-        return self.switch_playlist(self._config.no_match_playlist)
+    def show_no_match(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Cannot Accept' screen.
 
-    def show_barcode_not_qr(self) -> bool:
-        """Show the 'Barcode Not QR' screen."""
-        return self.switch_playlist(self._config.barcode_not_qr_playlist)
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                no-match messaging. Falls back to ``self._config.no_match_playlist``
+                when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.no_match_playlist)
+        return self.switch_playlist(name)
 
-    def show_no_item_detected(self) -> bool:
-        """Show the 'Item Not Detected' screen."""
-        return self.switch_playlist(self._config.no_item_playlist)
+    def show_barcode_not_qr(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Barcode Not QR' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                QR-warning messaging. Falls back to
+                ``self._config.barcode_not_qr_playlist`` when absent or invalid.
+        """
+        name = self._resolve_playlist(
+            playlist_override, self._config.barcode_not_qr_playlist
+        )
+        return self.switch_playlist(name)
+
+    def show_no_item_detected(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Item Not Detected' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                no-item messaging. Falls back to ``self._config.no_item_playlist``
+                when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.no_item_playlist)
+        return self.switch_playlist(name)
 
     # ── Asset Management ─────────────────────────────────────────────────
 

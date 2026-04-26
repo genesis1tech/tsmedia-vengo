@@ -189,6 +189,30 @@ class TestPiSignageAdapterConvenienceMethods:
         assert connected_adapter.show_no_match() is True
         assert "tsv6_no_match" in mock_post.call_args[0][0]
 
+    @patch("requests.post")
+    def test_show_no_match_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_match(playlist_override="tsv6_redbull_no_match")
+        assert "tsv6_redbull_no_match" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_no_item_detected_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_item_detected(playlist_override="tsv6_pepsi_no_item")
+        assert "tsv6_pepsi_no_item" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_barcode_not_qr_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_barcode_not_qr(playlist_override="tsv6_alt_qr_warn")
+        assert "tsv6_alt_qr_warn" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_no_match_uses_default_when_override_invalid(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_match(playlist_override="../etc/passwd")
+        assert "tsv6_no_match" in mock_post.call_args[0][0]
+
 
 class TestPiSignageAdapterResolvePlaylist:
     """Validation/fallback for AWS-supplied playlist override names."""

@@ -107,16 +107,31 @@ class DisplayController(Protocol):
         """
         ...
 
-    def show_no_match(self) -> bool:
-        """Switch to the 'Unrecognized Barcode' / cannot-accept screen."""
+    def show_no_match(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Unrecognized Barcode' / cannot-accept screen.
+
+        Args:
+            playlist_override: Optional per-campaign playlist name. Backends that
+                don't support per-call playlist switching should ignore this.
+        """
         ...
 
-    def show_barcode_not_qr(self) -> bool:
-        """Switch to the 'QR Code Detected — Use Barcode' error screen."""
+    def show_barcode_not_qr(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'QR Code Detected — Use Barcode' error screen.
+
+        Args:
+            playlist_override: Optional per-campaign playlist name. Backends that
+                don't support per-call playlist switching should ignore this.
+        """
         ...
 
-    def show_no_item_detected(self) -> bool:
-        """Switch to the 'Item Not Detected' screen (door opened, ToF miss)."""
+    def show_no_item_detected(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Item Not Detected' screen (door opened, ToF miss).
+
+        Args:
+            playlist_override: Optional per-campaign playlist name. Backends that
+                don't support per-call playlist switching should ignore this.
+        """
         ...
 
     def show_offline(self) -> bool:
