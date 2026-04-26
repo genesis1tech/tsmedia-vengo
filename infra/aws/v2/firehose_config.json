@@ -1,0 +1,36 @@
+{
+  "RoleARN": "__FIREHOSE_ROLE_ARN__",
+  "BucketARN": "arn:aws:s3:::topper-stopper-bucket",
+  "Prefix": "scans-v2/yyyy=!{partitionKeyFromQuery:year}/mm=!{partitionKeyFromQuery:month}/dd=!{partitionKeyFromQuery:day}/hh=!{partitionKeyFromQuery:hour}/",
+  "ErrorOutputPrefix": "scans-v2-errors/!{firehose:error-output-type}/yyyy=!{timestamp:yyyy}/mm=!{timestamp:MM}/dd=!{timestamp:dd}/",
+  "BufferingHints": {"SizeInMBs": 128, "IntervalInSeconds": 300},
+  "CompressionFormat": "UNCOMPRESSED",
+  "DataFormatConversionConfiguration": {
+    "Enabled": true,
+    "InputFormatConfiguration":  {"Deserializer": {"OpenXJsonSerDe": {}}},
+    "OutputFormatConfiguration": {"Serializer":   {"ParquetSerDe":   {"Compression": "SNAPPY"}}},
+    "SchemaConfiguration": {
+      "RoleARN":      "__FIREHOSE_ROLE_ARN__",
+      "DatabaseName": "tsv6",
+      "TableName":    "scans_v2",
+      "Region":       "us-east-1",
+      "VersionId":    "LATEST"
+    }
+  },
+  "DynamicPartitioningConfiguration": {
+    "Enabled": true,
+    "RetryOptions": {"DurationInSeconds": 300}
+  },
+  "ProcessingConfiguration": {
+    "Enabled": true,
+    "Processors": [
+      {
+        "Type": "MetadataExtraction",
+        "Parameters": [
+          {"ParameterName": "MetadataExtractionQuery", "ParameterValue": "{year:.scantimestamp[0:4],month:.scantimestamp[5:7],day:.scantimestamp[8:10],hour:.scantimestamp[11:13]}"},
+          {"ParameterName": "JsonParsingEngine", "ParameterValue": "JQ-1.6"}
+        ]
+      }
+    ]
+  }
+}
