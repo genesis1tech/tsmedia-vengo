@@ -895,13 +895,16 @@ class ProductionVideoPlayer:
                 app_version = os.environ.get("TSV6_APP_VERSION", "1.0.0")
                 venue_id = os.environ.get("TSV6_VENUE_ID") or None
 
-                # Resolve layout HTML — defaults to the bundled custom_layout.html.
+                # Resolve layout HTML — defaults to the bundled router_page.html
+                # (the standalone signage_main entry point uses the same file).
+                # The legacy pisignage/templates/layouts/custom_layout.html had a
+                # hard-coded ::after footer that suppresses any dynamic ticker
+                # injection.
                 default_layout = (
-                    Path(__file__).parent.parent.parent.parent
-                    / "pisignage"
-                    / "templates"
-                    / "layouts"
-                    / "custom_layout.html"
+                    Path(__file__).parent.parent
+                    / "display"
+                    / "tsv6_player"
+                    / "router_page.html"
                 )
                 layout_html = Path(
                     os.environ.get("TSV6_LAYOUT_HTML", str(default_layout))
