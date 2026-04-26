@@ -46,3 +46,16 @@ def test_missing_barcode_returns_500(_aws_clients):
     resp = lf.lambda_handler({"thingName": "TS_X"}, None)
     assert resp["statusCode"] == 500
     assert "barcode" in resp.get("error", "").lower()
+
+def test_qr_detection_publishes_qrCode_topic(_aws_clients):
+    lf = _import()
+    resp = lf.lambda_handler({"thingName": "TS_X", "barcode": "https://example.com/foo", "transactionId": "tx1"}, None)
+    assert resp["returnAction"] == "QRcode"
+    args, kwargs = _aws_clients["iot"].publish.call_args
+    assert kwargs["topic"] == "TS_X/qrCode"
+    body = __import__("json").loads(kwargs["payload"])
+    assert body["barcodeNotQrPlaylist"] == "tsv6_barcode_not_qr"
+    _aws_clients["firehose"].put_record.assert_called_once()
+    fh_body = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
+    assert fh_body["eventtype"] == "qr_detected"
+    assert fh_body["returnaction"] == "QRcode"
