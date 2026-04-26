@@ -16,6 +16,7 @@ Follows the same Manager pattern as ResilientAWSManager:
 
 import logging
 import os
+import re
 import time
 import threading
 from collections.abc import Callable
@@ -47,7 +48,7 @@ class PiSignageConfig:
     )
     default_playlist: str = "tsv6_idle_loop"
     processing_playlist: str = "tsv6_processing"
-    deposit_playlist: str = "tsv6_deposit_item"
+    deposit_playlist: str = "tsv6_processing"
     product_playlist: str = "tsv6_product_display"
     no_match_playlist: str = "tsv6_no_match"
     barcode_not_qr_playlist: str = "tsv6_barcode_not_qr"
@@ -234,6 +235,19 @@ class PiSignageAdapter:
         )
         return False
 
+    _VALID_PLAYLIST_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
+
+    def _resolve_playlist(self, override: str | None, default: str) -> str:
+        """Validate an AWS-supplied playlist name; fall back to ``default`` if absent or unsafe."""
+        if not override or not isinstance(override, str):
+            return default
+        if not self._VALID_PLAYLIST_NAME.fullmatch(override):
+            logger.warning(
+                "invalid playlist name %r — falling back to %s", override, default
+            )
+            return default
+        return override
+
     def set_default_playlist(self) -> bool:
         """Return to the idle video loop."""
         return self.switch_playlist(self._config.default_playlist)
@@ -242,9 +256,16 @@ class PiSignageAdapter:
         """Show the 'Verifying...' screen."""
         return self.switch_playlist(self._config.processing_playlist)
 
-    def show_deposit_item(self) -> bool:
-        """Show the 'Please Deposit Your Item' screen."""
-        return self.switch_playlist(self._config.deposit_playlist)
+    def show_deposit_item(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Please Deposit Your Item' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                messaging during the deposit stage. Falls back to
+                ``self._config.deposit_playlist`` when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.deposit_playlist)
+        return self.switch_playlist(name)
 
     def show_idle(self) -> bool:
         """Switch to the default looping state. Alias for set_default_playlist()."""
@@ -255,34 +276,61 @@ class PiSignageAdapter:
         product_image_path: str = "",
         qr_url: str = "",
         nfc_url: str | None = None,
+        playlist_override: str | None = None,
     ) -> bool:
-        """Switch to the product display playlist.
+        """Switch to the product result playlist.
 
         Args:
-            product_image_path: Path to the product image asset (reserved for
-                Agent D's dynamic image injection; unused by this adapter layer).
-            qr_url: URL for the QR code overlay (reserved for Agent D).
-            nfc_url: Optional NFC broadcast URL (reserved for Agent D).
-
-        Returns True on successful playlist switch.
+            product_image_path: Reserved for native-backend renderers; ignored here.
+            qr_url: Reserved for native-backend renderers; ignored here. The QR is
+                rendered Pi-side by ``QrOverlay`` when this adapter is the active
+                display backend.
+            nfc_url: Reserved for native-backend renderers; ignored here.
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                reward content. Falls back to ``self._config.product_playlist`` when
+                absent or invalid.
         """
-        return self.switch_playlist(self._config.product_playlist)
+        name = self._resolve_playlist(playlist_override, self._config.product_playlist)
+        return self.switch_playlist(name)
 
     def show_offline(self) -> bool:
         """Show the offline / server-unreachable fallback screen."""
         return self.switch_playlist(self._config.offline_playlist)
 
-    def show_no_match(self) -> bool:
-        """Show the 'Cannot Accept' screen."""
-        return self.switch_playlist(self._config.no_match_playlist)
+    def show_no_match(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Cannot Accept' screen.
 
-    def show_barcode_not_qr(self) -> bool:
-        """Show the 'Barcode Not QR' screen."""
-        return self.switch_playlist(self._config.barcode_not_qr_playlist)
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                no-match messaging. Falls back to ``self._config.no_match_playlist``
+                when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.no_match_playlist)
+        return self.switch_playlist(name)
 
-    def show_no_item_detected(self) -> bool:
-        """Show the 'Item Not Detected' screen."""
-        return self.switch_playlist(self._config.no_item_playlist)
+    def show_barcode_not_qr(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Barcode Not QR' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                QR-warning messaging. Falls back to
+                ``self._config.barcode_not_qr_playlist`` when absent or invalid.
+        """
+        name = self._resolve_playlist(
+            playlist_override, self._config.barcode_not_qr_playlist
+        )
+        return self.switch_playlist(name)
+
+    def show_no_item_detected(self, playlist_override: str | None = None) -> bool:
+        """Show the 'Item Not Detected' screen.
+
+        Args:
+            playlist_override: Optional AWS-supplied playlist name for per-campaign
+                no-item messaging. Falls back to ``self._config.no_item_playlist``
+                when absent or invalid.
+        """
+        name = self._resolve_playlist(playlist_override, self._config.no_item_playlist)
+        return self.switch_playlist(name)
 
     # ── Asset Management ─────────────────────────────────────────────────
 

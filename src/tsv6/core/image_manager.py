@@ -165,7 +165,10 @@ class ImageManager:
         Load and resize image for tkinter display
 
         Args:
-            image_path: Path to image file
+            image_path: Path to image file. If falsy (None, empty string, empty
+                Path), returns None so callers can render a text-only fallback
+                (V2 cold-path may emit openDoor with productImage=null on the
+                first scan of a brand-new product).
             target_size: Target size (width, height)
             maintain_aspect_ratio: If True, maintain aspect ratio (may have white space).
                                    If False, force exact size (may stretch image)
@@ -174,6 +177,12 @@ class ImageManager:
         Returns:
             ImageTk.PhotoImage object or None
         """
+        # Guard: V2 cold-path Lambda emits productImage=null on the very first
+        # scan of a new product (WebP conversion happens after the openDoor
+        # publish). Return None so the overlay can render text-only.
+        if not image_path:
+            return None
+
         if not PIL_AVAILABLE:
             print("⚠ PIL not available - cannot load image")
             return None

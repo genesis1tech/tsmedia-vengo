@@ -1,0 +1,65 @@
+{
+  "Name": "scans_v2",
+  "Description": "TSV6 V2 barcode scan events (Firehose-delivered Parquet)",
+  "TableType": "EXTERNAL_TABLE",
+  "Parameters": {
+    "classification": "parquet",
+    "projection.enabled": "true",
+    "projection.yyyy.type": "integer",
+    "projection.yyyy.range": "2026,2035",
+    "projection.mm.type":   "integer",
+    "projection.mm.range":  "1,12",
+    "projection.mm.digits": "2",
+    "projection.dd.type":   "integer",
+    "projection.dd.range":  "1,31",
+    "projection.dd.digits": "2",
+    "projection.hh.type":   "integer",
+    "projection.hh.range":  "0,23",
+    "projection.hh.digits": "2",
+    "storage.location.template": "s3://topper-stopper-bucket/scans-v2/yyyy=${yyyy}/mm=${mm}/dd=${dd}/hh=${hh}/"
+  },
+  "PartitionKeys": [
+    {"Name": "yyyy", "Type": "string"},
+    {"Name": "mm",   "Type": "string"},
+    {"Name": "dd",   "Type": "string"},
+    {"Name": "hh",   "Type": "string"}
+  ],
+  "StorageDescriptor": {
+    "Columns": [
+      {"Name": "transactionid",         "Type": "string"},
+      {"Name": "thingname",             "Type": "string"},
+      {"Name": "barcode",               "Type": "string"},
+      {"Name": "scantimestamp",         "Type": "timestamp"},
+      {"Name": "eventtype",             "Type": "string"},
+      {"Name": "returnaction",          "Type": "string"},
+      {"Name": "productname",           "Type": "string"},
+      {"Name": "productbrand",          "Type": "string"},
+      {"Name": "productcategory",       "Type": "string"},
+      {"Name": "productdesc",           "Type": "string"},
+      {"Name": "productimage",          "Type": "string"},
+      {"Name": "productimageoriginal",  "Type": "string"},
+      {"Name": "containertype",         "Type": "string"},
+      {"Name": "containerconfidence",   "Type": "double"},
+      {"Name": "datasource",            "Type": "string"},
+      {"Name": "lookuplatencyms",       "Type": "int"},
+      {"Name": "qrurl",                 "Type": "string"},
+      {"Name": "depositplaylist",       "Type": "string"},
+      {"Name": "productplaylist",       "Type": "string"},
+      {"Name": "noitemplaylist",        "Type": "string"},
+      {"Name": "nomatchplaylist",       "Type": "string"},
+      {"Name": "barcodenotqrplaylist",  "Type": "string"},
+      {"Name": "reason",                "Type": "string"},
+      {"Name": "flowversion",           "Type": "string"},
+      {"Name": "lambdaname",            "Type": "string"},
+      {"Name": "lambdaversion",         "Type": "string"}
+    ],
+    "Location":      "s3://topper-stopper-bucket/scans-v2/",
+    "InputFormat":   "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+    "OutputFormat":  "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+    "SerdeInfo": {
+      "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+      "Parameters": {"serialization.format": "1"}
+    },
+    "Compressed": true
+  }
+}

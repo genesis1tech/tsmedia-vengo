@@ -1,0 +1,30 @@
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {"Sid":"Logs","Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"*"},
+    {"Sid":"Firehose","Effect":"Allow","Action":["firehose:PutRecord","firehose:PutRecordBatch"],
+     "Resource":"arn:aws:firehose:us-east-1:010526276861:deliverystream/tsv6-scans-v2"},
+    {"Sid":"DDBRead","Effect":"Allow","Action":["dynamodb:GetItem"],
+     "Resource":[
+       "arn:aws:dynamodb:us-east-1:010526276861:table/master_products",
+       "arn:aws:dynamodb:us-east-1:010526276861:table/barcode_negative_cache",
+       "arn:aws:dynamodb:us-east-1:010526276861:table/brand_playlists"
+     ]},
+    {"Sid":"DDBWrite","Effect":"Allow","Action":["dynamodb:PutItem","dynamodb:UpdateItem"],
+     "Resource":[
+       "arn:aws:dynamodb:us-east-1:010526276861:table/master_products",
+       "arn:aws:dynamodb:us-east-1:010526276861:table/barcode_negative_cache"
+     ]},
+    {"Sid":"S3WebP","Effect":"Allow","Action":["s3:PutObject","s3:PutObjectAcl"],
+     "Resource":"arn:aws:s3:::topper-stopper-bucket/product-images-webp/*"},
+    {"Sid":"IoTPublish","Effect":"Allow","Action":"iot:Publish",
+     "Resource":[
+       "arn:aws:iot:us-east-1:010526276861:topic/*/openDoor",
+       "arn:aws:iot:us-east-1:010526276861:topic/*/noMatch",
+       "arn:aws:iot:us-east-1:010526276861:topic/*/qrCode",
+       "arn:aws:iot:us-east-1:010526276861:topic/*/error"
+     ]},
+    {"Sid":"InvokeUPC","Effect":"Allow","Action":"lambda:InvokeFunction",
+     "Resource":"arn:aws:lambda:us-east-1:010526276861:function:UpdatedBarcodeToGoUPCV2"}
+  ]
+}

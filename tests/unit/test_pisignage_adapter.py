@@ -189,6 +189,65 @@ class TestPiSignageAdapterConvenienceMethods:
         assert connected_adapter.show_no_match() is True
         assert "tsv6_no_match" in mock_post.call_args[0][0]
 
+    @patch("requests.post")
+    def test_show_no_match_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_match(playlist_override="tsv6_redbull_no_match")
+        assert "tsv6_redbull_no_match" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_no_item_detected_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_item_detected(playlist_override="tsv6_pepsi_no_item")
+        assert "tsv6_pepsi_no_item" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_barcode_not_qr_with_override(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_barcode_not_qr(playlist_override="tsv6_alt_qr_warn")
+        assert "tsv6_alt_qr_warn" in mock_post.call_args[0][0]
+
+    @patch("requests.post")
+    def test_show_no_match_uses_default_when_override_invalid(self, mock_post, connected_adapter):
+        mock_post.return_value.status_code = 200
+        connected_adapter.show_no_match(playlist_override="../etc/passwd")
+        assert "tsv6_no_match" in mock_post.call_args[0][0]
+
+
+class TestPiSignageAdapterResolvePlaylist:
+    """Validation/fallback for AWS-supplied playlist override names."""
+
+    def test_none_returns_default(self, adapter):
+        assert adapter._resolve_playlist(None, "tsv6_processing") == "tsv6_processing"
+
+    def test_empty_string_returns_default(self, adapter):
+        assert adapter._resolve_playlist("", "tsv6_processing") == "tsv6_processing"
+
+    def test_non_string_returns_default(self, adapter):
+        assert adapter._resolve_playlist(123, "tsv6_processing") == "tsv6_processing"
+        assert adapter._resolve_playlist(["x"], "tsv6_processing") == "tsv6_processing"
+
+    def test_valid_name_returns_override(self, adapter):
+        assert adapter._resolve_playlist("pepsi_spring26", "tsv6_default") == "pepsi_spring26"
+
+    def test_name_with_dot_dash_underscore_allowed(self, adapter):
+        assert adapter._resolve_playlist("a.b-c_1", "tsv6_default") == "a.b-c_1"
+
+    def test_name_with_slash_falls_back(self, adapter, caplog):
+        with caplog.at_level("WARNING"):
+            assert adapter._resolve_playlist("../etc/passwd", "tsv6_default") == "tsv6_default"
+        assert "invalid playlist name" in caplog.text
+
+    def test_name_with_space_falls_back(self, adapter):
+        assert adapter._resolve_playlist("bad name", "tsv6_default") == "tsv6_default"
+
+    def test_name_too_long_falls_back(self, adapter):
+        assert adapter._resolve_playlist("x" * 65, "tsv6_default") == "tsv6_default"
+
+    def test_max_length_64_allowed(self, adapter):
+        name = "x" * 64
+        assert adapter._resolve_playlist(name, "tsv6_default") == name
+
 
 class TestPiSignageAdapterAssets:
 
@@ -285,3 +344,72 @@ class TestPiSignageHealthMonitor:
                 callback()
         callback.assert_called_once()
         assert monitor.is_down is True
+
+
+class TestPiSignageAdapterDepositOverride:
+    """show_deposit_item respects the optional playlist_override kwarg."""
+
+    @patch("requests.post")
+    def test_default_uses_tsv6_processing(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item()
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_processing" in called_url
+
+    @patch("requests.post")
+    def test_override_takes_precedence(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item(playlist_override="pepsi_spring26_deposit")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/pepsi_spring26_deposit" in called_url
+
+    @patch("requests.post")
+    def test_invalid_override_falls_back_to_default(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_deposit_item(playlist_override="../bad")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_processing" in called_url
+
+
+class TestPiSignageAdapterProductOverride:
+    """show_product_display respects the optional playlist_override kwarg."""
+
+    @patch("requests.post")
+    def test_default_uses_tsv6_product_display(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display()
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_product_display" in called_url
+
+    @patch("requests.post")
+    def test_override_takes_precedence(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(playlist_override="pepsi_spring26_reward")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/pepsi_spring26_reward" in called_url
+
+    @patch("requests.post")
+    def test_legacy_args_accepted_but_ignored(self, mock_post, connected_adapter):
+        """product_image_path / qr_url / nfc_url remain in signature for native-backend parity."""
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(
+            product_image_path="/tmp/x.jpg",
+            qr_url="https://example.com/r/1",
+            nfc_url="https://example.com/r/1",
+            playlist_override="x_campaign",
+        )
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/x_campaign" in called_url
+
+    @patch("requests.post")
+    def test_invalid_override_falls_back(self, mock_post, connected_adapter):
+        mock_post.return_value = _mock_response({"success": True})
+        connected_adapter.show_product_display(playlist_override="bad name with space")
+        called_url = mock_post.call_args[0][0]
+        assert "setplaylist/player123/tsv6_product_display" in called_url
+
+
+class TestPiSignageConfigDefaults:
+    def test_deposit_default_is_processing_playlist(self):
+        from tsv6.display.pisignage_adapter import PiSignageConfig
+        assert PiSignageConfig().deposit_playlist == "tsv6_processing"

@@ -683,3 +683,14 @@ class TestStop:
         # stop() on each subsystem called at most once.
         assert mock_renderer.stop.call_count <= 1
         assert mock_recorder.stop.call_count <= 1
+
+
+def test_native_backend_show_methods_accept_playlist_override():
+    import inspect
+    from tsv6.display.tsv6_player.backend import TSV6NativeBackend
+
+    deposit_sig = inspect.signature(TSV6NativeBackend.show_deposit_item)
+    assert "playlist_override" in deposit_sig.parameters
+
+    product_sig = inspect.signature(TSV6NativeBackend.show_product_display)
+    assert "playlist_override" in product_sig.parameters

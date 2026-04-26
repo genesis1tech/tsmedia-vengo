@@ -173,13 +173,15 @@ class ResilientAWSManager:
         self.command_topic = f"device/{thing_name}/command"
         self.barcode_response_topic = f"{thing_name}/openDoor"
         self.no_match_topic = f"{thing_name}/noMatch"
+        self.qr_code_topic = f"{thing_name}/qrCode"
         self.lte_status_topic = f"device/{thing_name}/lte/status"  # Compact payload for 4G LTE
-        
+
         # Callbacks
         self.on_connection_success: Optional[Callable] = None
         self.on_connection_lost: Optional[Callable] = None
         self.image_display_callback: Optional[Callable] = None
         self.no_match_display_callback: Optional[Callable] = None
+        self.qr_code_display_callback: Optional[Callable] = None
         self._bin_level_provider: Optional[Callable] = None
         
         # Message queue for offline scenarios
@@ -269,6 +271,16 @@ class ResilientAWSManager:
     def set_no_match_display_callback(self, callback: Callable):
         """Set callback for no match display"""
         self.no_match_display_callback = callback
+
+    def set_qr_code_display_callback(self, callback: Callable):
+        """Set callback for the qrCode topic ("barcode is actually a QR" screen).
+
+        The callback receives the parsed message dict so the caller can pick up
+        the V2-only `barcodeNotQrPlaylist` override field. V1 cloud code does
+        not publish to this topic; the subscription is harmless even when the
+        topic never produces messages.
+        """
+        self.qr_code_display_callback = callback
 
     def set_bin_level_provider(self, provider: Optional[Callable]):
         """Set a callable that returns the latest bin fill level data.
@@ -395,6 +407,22 @@ class ResilientAWSManager:
                 callback=self._on_no_match_received
             )
             subscribe_future.result(timeout=10)
+
+            # qrCode topic (V2-only). Subscribed in its own try/except so a
+            # missing IAM policy on older deployments does not prevent the
+            # connection from coming up — V1 cloud code never publishes here.
+            try:
+                subscribe_future, _ = self.connection.subscribe(
+                    topic=self.qr_code_topic,
+                    qos=mqtt.QoS.AT_LEAST_ONCE,
+                    callback=self._on_qr_code_received
+                )
+                subscribe_future.result(timeout=10)
+            except Exception as qr_sub_err:
+                logger.warning(
+                    "qrCode topic subscription failed (V2-only — safe to ignore on V1): "
+                    f"{type(qr_sub_err).__name__}: {qr_sub_err or repr(qr_sub_err)}"
+                )
 
             logger.info("Subscribed to all topics")
 
@@ -1141,13 +1169,37 @@ class ResilientAWSManager:
             logger.error(f"Error processing barcode response: {e}")
 
 
+    def _on_qr_code_received(self, topic, payload, dup, qos, retain, **kwargs):
+        """Handle qrCode responses (cloud detected a QR, not a barcode).
+
+        V2-only path. Parses the payload and forwards it to the registered
+        qr_code_display_callback so the device can show a "this is a QR, not a
+        barcode" screen — optionally steered by the V2 `barcodeNotQrPlaylist`
+        override field.
+        """
+        try:
+            message = json.loads(payload.decode('utf-8'))
+            logger.info(f"qrCode response: {message}")
+            if self.qr_code_display_callback:
+                self.qr_code_display_callback(message)
+        except Exception as e:
+            logger.error(f"Error processing qrCode: {e}")
+
     def _on_no_match_received(self, topic, payload, dup, qos, retain, **kwargs):
         """Handle no-match responses"""
         try:
             message = json.loads(payload.decode('utf-8'))
             logger.info(f"NoMatch response: {message}")
             if self.no_match_display_callback:
-                self.no_match_display_callback()
+                # Pass the parsed payload so the device can pick up V2-only
+                # fields like noMatchPlaylist. The callback accepts a single
+                # dict argument; older single-arg callbacks (no payload) are
+                # supported via the TypeError fallback below.
+                try:
+                    self.no_match_display_callback(message)
+                except TypeError:
+                    # Legacy zero-arg callback shape — call without payload.
+                    self.no_match_display_callback()
         except Exception as e:
             logger.error(f"Error processing noMatch: {e}")
 
