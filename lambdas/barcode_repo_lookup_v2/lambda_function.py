@@ -146,3 +146,35 @@ def lambda_handler(event, _ctx):
             latency_ms=int((time.time() - started) * 1000),
         ))
         return payload
+
+    neg = negative_table.get_item(Key={"barcode": barcode}).get("Item")
+    if neg:
+        valid = True
+        if "expires_at" in neg:
+            try:
+                exp = datetime.fromisoformat(neg["expires_at"].replace("Z", "+00:00"))
+                valid = datetime.now(timezone.utc) < exp
+            except Exception:
+                valid = True
+        if valid:
+            payload = {
+                "statusCode": 200, "returnAction": "noMatch",
+                "thingName": thing, "transactionId": txid, "barcode": barcode,
+                "reason": "cached_nomatch",
+                "noMatchPlaylist": DEFAULT_NO_MATCH,
+            }
+            _publish(f"{thing}/noMatch", payload)
+            _firehose_put(_row(
+                txid=txid, thing=thing, barcode=barcode,
+                event_type="nomatch_cached", return_action="noMatch",
+                no_match_playlist=DEFAULT_NO_MATCH, reason="cached_nomatch",
+                latency_ms=int((time.time() - started) * 1000),
+            ))
+            return payload
+
+    lambda_c.invoke(
+        FunctionName=UPC_LAMBDA, InvocationType="Event",
+        Payload=json.dumps({"barcode": barcode, "thingName": thing, "transactionId": txid}),
+    )
+    return {"statusCode": 200, "returnAction": "forwardedToUPC",
+            "thingName": thing, "transactionId": txid, "barcode": barcode}

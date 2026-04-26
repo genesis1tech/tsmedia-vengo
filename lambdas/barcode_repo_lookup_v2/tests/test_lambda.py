@@ -93,3 +93,31 @@ def test_master_hit_publishes_openDoor_with_webp(_aws_clients):
     fh = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
     assert fh["eventtype"] == "master_hit"
     assert fh["datasource"] == "master"
+
+def test_negative_cache_hit_publishes_noMatch(_aws_clients):
+    from datetime import datetime, timedelta, timezone
+    _aws_clients["master"].get_item.return_value = {}  # miss
+    future = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+    _aws_clients["negative"].get_item.return_value = {"Item": {"barcode": "999", "expires_at": future}}
+    lf = _import()
+    resp = lf.lambda_handler({"thingName":"TS_X","barcode":"999","transactionId":"tx3"}, None)
+    assert resp["returnAction"] == "noMatch"
+    pub = _aws_clients["iot"].publish.call_args
+    assert pub[1]["topic"] == "TS_X/noMatch"
+    body = __import__("json").loads(pub[1]["payload"])
+    assert body["reason"] == "cached_nomatch"
+    assert body["noMatchPlaylist"] == "tsv6_no_match"
+
+def test_full_miss_invokes_upc_lambda(_aws_clients):
+    _aws_clients["master"].get_item.return_value   = {}
+    _aws_clients["negative"].get_item.return_value = {}
+    lf = _import()
+    resp = lf.lambda_handler({"thingName":"TS_X","barcode":"888","transactionId":"tx4"}, None)
+    assert resp["returnAction"] == "forwardedToUPC"
+    inv = _aws_clients["lambda"].invoke.call_args
+    assert inv[1]["FunctionName"] == "UpdatedBarcodeToGoUPCV2"
+    assert inv[1]["InvocationType"] == "Event"
+    payload = __import__("json").loads(inv[1]["Payload"])
+    assert payload == {"barcode":"888","thingName":"TS_X","transactionId":"tx4"}
+    # No Firehose row from V1-side on the miss path; UPC lambda writes it.
+    _aws_clients["firehose"].put_record.assert_not_called()
