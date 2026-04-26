@@ -151,6 +151,11 @@ class ProductionVideoPlayer:
         self._door_sequence_active = False
         self._door_sequence_lock = threading.Lock()
 
+        # Cloud-supplied playlist override for the recycle-sensor timeout path.
+        # Set from the openDoor payload's noItemPlaylist field at door-sequence
+        # start; consumed by _handle_recycle_failure when the sensor times out.
+        self._pending_no_item_playlist = None
+
         # Splash screen for LTE startup wait
         self.splash_screen = None
         
@@ -745,6 +750,7 @@ class ProductionVideoPlayer:
             
             self.aws_manager.set_image_display_callback(self._on_product_image_display)
             self.aws_manager.set_no_match_display_callback(self._on_no_match_display)
+            self.aws_manager.set_qr_code_display_callback(self._on_cloud_qr_code_display)
             
             self.logger.info("AWS manager initialized")
             self.error_recovery.report_success("aws_connection")
@@ -1402,6 +1408,14 @@ class ProductionVideoPlayer:
                     return
                 self._door_sequence_active = True
 
+            # Cache the cloud-supplied no-item playlist override BEFORE launching
+            # the door thread so the recycle_sensor timeout path can pick it up.
+            # V1 payloads omit this field, so the value falls back to None and
+            # the display backend renders its default tsv6_no_item playlist.
+            self._pending_no_item_playlist = (
+                product_data.get("noItemPlaylist") if isinstance(product_data, dict) else None
+            )
+
             # Show deposit waiting screen (replaces processing image)
             if self.display_backend is not None:
                 self.display_backend.show_deposit_item()
@@ -1598,9 +1612,14 @@ class ProductionVideoPlayer:
         self.logger.warning(f"Recycle FAILURE for barcode: {barcode} - item not detected")
         print("Item was NOT detected by sensor")
 
-        # Show no-item-detected screen on whichever display backend is active
+        # Show no-item-detected screen on whichever display backend is active.
+        # The cloud may have supplied a `noItemPlaylist` override on the openDoor
+        # payload — replay it here so V2 payloads can steer the timeout screen
+        # without device-side branding logic. None falls back to tsv6_no_item.
         if self.display_backend is not None:
-            self.display_backend.show_no_item_detected()
+            self.display_backend.show_no_item_detected(
+                playlist_override=self._pending_no_item_playlist
+            )
         elif self.video_player:
             if hasattr(self.video_player, 'hide_deposit_waiting'):
                 self.video_player.hide_deposit_waiting()
@@ -1767,11 +1786,21 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.error(f"Failed to run obstruction handler directly: {e}")
 
-    def _on_no_match_display(self):
-        """Handle no match display requests"""
+    def _on_no_match_display(self, payload=None):
+        """Handle no match display requests.
+
+        Accepts the optional parsed MQTT payload so V2 noMatch responses can
+        carry a `noMatchPlaylist` override. V1 payloads (or legacy callers
+        passing nothing) end up with playlist_override=None and the display
+        backend uses its default tsv6_no_match playlist.
+        """
         try:
+            playlist_override = (
+                payload.get("noMatchPlaylist") if isinstance(payload, dict) else None
+            )
+
             if self.display_backend is not None:
-                self.display_backend.show_no_match()
+                self.display_backend.show_no_match(playlist_override=playlist_override)
                 self.error_recovery.report_success("pisignage")
             elif self.video_player and hasattr(self.video_player, 'display_no_match_image'):
                 self.video_player.display_no_match_image()
@@ -1780,7 +1809,40 @@ class ProductionVideoPlayer:
         except Exception as e:
             self.logger.error(f"Failed to handle no match display: {e}")
             self.error_recovery.report_error("video_player", "no_match_display_failed", str(e), "medium")
-    
+
+    def _on_cloud_qr_code_display(self, payload=None):
+        """Handle cloud-emitted qrCode messages.
+
+        Distinct from `_display_qr_not_allowed_image`, which is invoked locally
+        by the barcode scanner the moment a QR is decoded. This callback is
+        invoked when the *cloud* classifies a scanned code as a QR via the V2
+        Lambda flow (BarcodeRepoLookupV2 / UpdatedBarcodeToGoUPCV2). The cloud
+        may attach a `barcodeNotQrPlaylist` override; V1 deployments will not
+        publish to this topic at all.
+        """
+        try:
+            playlist_override = (
+                payload.get("barcodeNotQrPlaylist") if isinstance(payload, dict) else None
+            )
+
+            if self.display_backend is not None:
+                self.display_backend.show_barcode_not_qr(playlist_override=playlist_override)
+                self.error_recovery.report_success("pisignage")
+            elif (
+                self.video_player
+                and hasattr(self.video_player, 'display_qr_not_allowed_image')
+                and getattr(self.video_player, 'root', None)
+            ):
+                self.video_player.root.after(0, self.video_player.display_qr_not_allowed_image)
+            else:
+                self.logger.debug(
+                    "Cloud qrCode received before UI init; skipping display"
+                )
+            self.error_recovery.report_success("qr_code_detection")
+        except Exception as e:
+            self.logger.error(f"Failed to handle cloud qrCode display: {e}")
+            self.error_recovery.report_error("qr_code_detection", "qr_display", str(e), "medium")
+
     def _on_barcode_scanned(self, barcode_data, transaction_id):
         """Handle barcode scan events"""
         try:
