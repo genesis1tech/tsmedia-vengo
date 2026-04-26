@@ -43,3 +43,34 @@ def test_goupc_resolved_publishes_openDoor_with_null_image(_aws_clients):
     assert written["barcode"] == "123"
     assert written["productImageWebp"].endswith("/123.webp")
     assert written["productImage"] == "https://x/y.png"   # source URL stays in productImage
+
+
+def test_upc_nomatch_writes_negative_cache(_aws_clients):
+    lf = _import()
+    with patch.object(lf, "_fetch_goupc", return_value=None), \
+         patch.object(lf, "_fetch_upcitemdb", return_value=None), \
+         patch.object(lf, "_fetch_openfoodfacts", return_value=None), \
+         patch.object(lf, "_fetch_usda", return_value=None):
+        resp = lf.lambda_handler({"thingName":"TS_X","barcode":"000","transactionId":"tx2"}, None)
+    assert resp["returnAction"] == "noMatch"
+    assert resp["reason"] == "upc_nomatch"
+    _aws_clients["negative"].put_item.assert_called_once()
+
+
+def test_upc_error_does_not_write_negative_cache(_aws_clients):
+    lf = _import()
+    with patch.object(lf, "_fetch_goupc", side_effect=RuntimeError("boom")):
+        resp = lf.lambda_handler({"thingName":"TS_X","barcode":"222","transactionId":"tx3"}, None)
+    assert resp["returnAction"] == "noMatch"
+    assert resp["reason"] == "upc_error"
+    _aws_clients["negative"].put_item.assert_not_called()
+
+
+def test_image_conversion_failure_skips_webp_field(_aws_clients):
+    lf = _import()
+    with patch.object(lf, "_fetch_goupc", return_value={"name":"X","brand":"Y","category":"Z","imageUrl":"https://broken/"}), \
+         patch.object(lf, "_convert_and_upload_webp", return_value=None):
+        lf.lambda_handler({"thingName":"TS_X","barcode":"333","transactionId":"tx4"}, None)
+    written = _aws_clients["master"].put_item.call_args[1]["Item"]
+    assert "productImageWebp" not in written
+    assert written["productImage"] == "https://broken/"

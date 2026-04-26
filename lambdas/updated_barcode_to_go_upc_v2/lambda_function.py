@@ -1,4 +1,4 @@
-import io, json, os, time, urllib.request, uuid
+import io, json, os, time, urllib.error, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -27,6 +27,11 @@ brand_table    = dynamodb.Table("brand_playlists")
 
 GO_UPC_API_KEY = os.environ.get("GO_UPC_API_KEY", "")
 GO_UPC_API_URL = "https://go-upc.com/api/v1/code"
+USDA_API_KEY   = os.environ.get("USDA_API_KEY", "")
+UPCITEMDB_API_URL    = "https://api.upcitemdb.com/prod/trial/lookup"
+OPENFOODFACTS_API_URL = "https://world.openfoodfacts.org/api/v2/product"
+USDA_API_URL          = "https://api.nal.usda.gov/fdc/v1/foods/search"
+USER_AGENT     = "tsv6-v2"
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -75,20 +80,103 @@ def _resolve_brand_playlists(brand):
 
 
 def _fetch_goupc(barcode):
-    """Return {'name','brand','category','imageUrl'} or None."""
+    """Return {'name','brand','category','imageUrl'} or None.
+
+    Raises on transient/network errors so the caller can route to the
+    upc_error path without polluting the negative cache.
+    """
     if not GO_UPC_API_KEY: return None
-    import urllib.request
     req = urllib.request.Request(f"{GO_UPC_API_URL}/{barcode}?key={GO_UPC_API_KEY}",
-                                 headers={"User-Agent": "tsv6-v2"})
+                                 headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read().decode())
-    except Exception:
-        return None
+    except urllib.error.HTTPError as e:
+        if e.code == 404: return None
+        raise
     p = data.get("product") or {}
     if not (p.get("name") or p.get("brand")): return None
     return {"name": p.get("name"), "brand": p.get("brand"),
             "category": p.get("category"), "imageUrl": p.get("imageUrl")}
+
+
+def _fetch_upcitemdb(barcode):
+    """Return product dict or None. Raises on transient errors."""
+    req = urllib.request.Request(f"{UPCITEMDB_API_URL}?upc={barcode}",
+                                 headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 400): return None
+        raise
+    items = data.get("items") or []
+    if data.get("total", len(items)) == 0 or not items:
+        return None
+    item = items[0]
+    images = item.get("images") or []
+    image_url = images[0] if images else None
+    if not (item.get("title") or item.get("brand")): return None
+    return {"name": item.get("title"), "brand": item.get("brand"),
+            "category": item.get("category"), "imageUrl": image_url}
+
+
+def _fetch_openfoodfacts(barcode):
+    """Return product dict or None. Raises on transient errors."""
+    req = urllib.request.Request(f"{OPENFOODFACTS_API_URL}/{barcode}.json",
+                                 headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 404: return None
+        raise
+    if data.get("status") == 0:
+        return None
+    product = data.get("product") or {}
+    image_url = (product.get("image_front_url")
+                 or product.get("image_url")
+                 or product.get("image_front_small_url"))
+    name = product.get("product_name")
+    brand = product.get("brands")
+    if not (name or brand): return None
+    return {"name": name, "brand": brand,
+            "category": product.get("categories"), "imageUrl": image_url}
+
+
+def _fetch_usda(barcode):
+    """Return product dict or None. Returns None silently if API key unset."""
+    if not USDA_API_KEY:
+        return None
+    url = (f"{USDA_API_URL}?api_key={USDA_API_KEY}"
+           f"&query={barcode}&dataType=Branded&pageSize=5")
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 400): return None
+        raise
+    foods = data.get("foods") or []
+    if not foods:
+        return None
+    best = None
+    for food in foods:
+        gtin = food.get("gtinUpc") or ""
+        if gtin and (gtin == barcode or gtin.lstrip("0") == str(barcode).lstrip("0")):
+            best = food
+            break
+    if not best:
+        first = foods[0]
+        if first.get("gtinUpc"):
+            best = first
+    if not best:
+        return None
+    name = best.get("description")
+    brand = best.get("brandOwner") or best.get("brandName")
+    if not (name or brand): return None
+    return {"name": name, "brand": brand,
+            "category": best.get("foodCategory"), "imageUrl": None}
 
 
 def _convert_and_upload_webp(barcode, source_url):
@@ -131,7 +219,17 @@ def lambda_handler(event, _ctx):
         return {"statusCode":500,"thingName":thing,"transactionId":txid,"error":"Missing barcode/thingName"}
 
     try:
-        result = _fetch_goupc(barcode)  # extend with fallbacks in Task 14
+        result = None
+        data_source = None
+        for src, fn in (("go_upc",        _fetch_goupc),
+                        ("upcitemdb",     _fetch_upcitemdb),
+                        ("openfoodfacts", _fetch_openfoodfacts),
+                        ("usda",          _fetch_usda)):
+            result = fn(barcode)
+            if result:
+                data_source = src
+                break
+
         if not result:
             negative_table.put_item(Item={"barcode": barcode,
                 "expires_at": (datetime.now(timezone.utc)+timedelta(days=NEGATIVE_TTL_DAYS)).isoformat().replace("+00:00","Z"),
@@ -155,7 +253,7 @@ def lambda_handler(event, _ctx):
             "depositPlaylist": deposit_pl,
             "productPlaylist": product_pl,
             "noItemPlaylist":  DEFAULT_NO_ITEM,
-            "dataSource": "go_upc",
+            "dataSource": data_source,
         }
         _publish(f"{thing}/openDoor", payload)
         _firehose_put(_row(txid=txid, thing=thing, barcode=barcode,
@@ -163,7 +261,7 @@ def lambda_handler(event, _ctx):
             product_name=payload["productName"], product_brand=payload["productBrand"],
             product_category=payload["productCategory"],
             product_image=None, product_image_original=payload["productImageOriginal"],
-            data_source="go_upc", qr_url=qr_url,
+            data_source=data_source, qr_url=qr_url,
             deposit_playlist=deposit_pl, product_playlist=product_pl,
             no_item_playlist=DEFAULT_NO_ITEM,
             latency_ms=int((time.time()-started)*1000)))
