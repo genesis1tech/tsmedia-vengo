@@ -345,23 +345,22 @@ class TSV6NativeBackend:
                 )
         return ok
 
-    def show_processing(self) -> bool:
-        """Switch to the 'Verifying...' screen."""
-        self._interrupt_current_idle()
-        if self._renderer is None:
-            return False
-        return self._renderer.show_processing()
+    def show_processing(self, playlist_override: str | None = None) -> bool:
+        """Switch to the 'Verifying...' screen by playing the processing playlist."""
+        return self._play_state_playlist(
+            playlist_override or "tsv6_processing", state="processing"
+        )
 
     def show_deposit_item(self, playlist_override: str | None = None) -> bool:
         """Switch to the 'Please Deposit Your Item' screen.
 
-        ``playlist_override`` accepted for ``DisplayController`` parity; the native
-        renderer has no per-call playlist switch concept, so it is ignored.
+        Plays the MP4(s) from the supplied playlist (or ``tsv6_deposit_item``
+        if no override). Same MP4-based mechanism as the idle loop so no
+        per-state HTML asset is needed.
         """
-        self._interrupt_current_idle()
-        if self._renderer is None:
-            return False
-        return self._renderer.show_deposit_item()
+        return self._play_state_playlist(
+            playlist_override or "tsv6_deposit_item", state="deposit_item"
+        )
 
     def show_product_display(
         self,
@@ -407,37 +406,51 @@ class TSV6NativeBackend:
         )
 
     def show_no_match(self, playlist_override: str | None = None) -> bool:
-        """Switch to the 'Unrecognized Barcode' screen.
-
-        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
-        the native renderer.
-        """
-        self._interrupt_current_idle()
-        if self._renderer is None:
-            return False
-        return self._renderer.show_no_match()
+        """Switch to the 'Unrecognized Barcode' screen via MP4 playlist."""
+        return self._play_state_playlist(
+            playlist_override or "tsv6_no_match", state="no_match"
+        )
 
     def show_barcode_not_qr(self, playlist_override: str | None = None) -> bool:
-        """Switch to the 'QR Code Detected — Use Barcode' error screen.
-
-        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
-        the native renderer.
-        """
-        self._interrupt_current_idle()
-        if self._renderer is None:
-            return False
-        return self._renderer.show_barcode_not_qr()
+        """Switch to the 'QR Code Detected — Use Barcode' screen via MP4 playlist."""
+        return self._play_state_playlist(
+            playlist_override or "tsv6_barcode_not_qr", state="barcode_not_qr"
+        )
 
     def show_no_item_detected(self, playlist_override: str | None = None) -> bool:
-        """Switch to the 'Item Not Detected' screen.
+        """Switch to the 'Item Not Detected' screen via MP4 playlist."""
+        return self._play_state_playlist(
+            playlist_override or "tsv6_no_item_detected", state="no_item_detected"
+        )
 
-        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
-        the native renderer.
+    def _play_state_playlist(self, playlist_name: str, state: str) -> bool:
+        """
+        Resolve a playlist's local MP4(s) and play them via VLC.
+
+        Used by every transient state (deposit_item, processing, no_match,
+        no_item_detected, barcode_not_qr) so the device renders state screens
+        the same way it renders the idle loop. Eliminates the need for
+        per-state HTML asset files.
+
+        If the playlist has no MP4s synced down to the local cache (e.g. the
+        playlist isn't assigned to this device's group on the media server)
+        ``play_video_loop`` will log a warning and the screen will fall back
+        to whatever was last drawn — which is fine for short transient states.
         """
         self._interrupt_current_idle()
         if self._renderer is None:
             return False
-        return self._renderer.show_no_item_detected()
+        mp4_paths = self._resolve_playlist_mp4s(playlist_name)
+        if not mp4_paths:
+            logger.warning(
+                "show %s: no MP4 assets cached for playlist %r — "
+                "ensure the playlist is assigned to this device's group "
+                "on the media server.",
+                state,
+                playlist_name,
+            )
+            return False
+        return self._renderer.play_video_loop(mp4_paths, state=state, loop=True)
 
     def show_offline(self) -> bool:
         """Switch to the offline fallback screen."""
@@ -629,32 +642,38 @@ class TSV6NativeBackend:
                     exc,
                 )
 
-    def _resolve_idle_mp4s(self) -> list[Path]:
+    def _resolve_playlist_mp4s(
+        self, playlist_name: str, fallback_to_any_mp4: bool = False
+    ) -> list[Path]:
         """
-        Return the list of local MP4 paths for the idle loop playlist.
+        Return the list of local MP4 paths for ``playlist_name``.
 
-        Reads ``{cache_dir}/__tsv6_idle_loop.json`` if present, otherwise
-        falls back to scanning the cache_dir for ``*.mp4`` files.
+        Reads ``{cache_dir}/__{playlist_name}.json`` if present. If the cache
+        file is missing or contains no MP4s and ``fallback_to_any_mp4`` is set,
+        scans the cache_dir for any ``*.mp4`` (used by the idle loop so an
+        unconfigured device still has something to show).
         """
-        cached = self._load_playlist_cache(_IDLE_PLAYLIST)
+        cached = self._load_playlist_cache(playlist_name)
         mp4_names: list[str] = (
             [f for f in cached if f.lower().endswith(".mp4")]
             if cached
             else []
         )
 
-        if not mp4_names:
-            # Fallback: scan for any MP4s in cache dir.
-            if self._cache_dir.exists():
-                mp4_names = sorted(
-                    p.name for p in self._cache_dir.glob("*.mp4")
-                )
+        if not mp4_names and fallback_to_any_mp4 and self._cache_dir.exists():
+            mp4_names = sorted(
+                p.name for p in self._cache_dir.glob("*.mp4")
+            )
 
         return [
             self._cache_dir / name
             for name in mp4_names
             if (self._cache_dir / name).exists()
         ]
+
+    def _resolve_idle_mp4s(self) -> list[Path]:
+        """Idle-loop convenience wrapper — falls back to any cached MP4."""
+        return self._resolve_playlist_mp4s(_IDLE_PLAYLIST, fallback_to_any_mp4=True)
 
     def _write_playlist_cache(self, playlist_name: str, assets: list[str]) -> None:
         """

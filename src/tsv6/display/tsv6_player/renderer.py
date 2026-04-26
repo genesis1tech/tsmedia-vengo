@@ -158,22 +158,23 @@ class TSV6Renderer:
 
     # ── Display states ─────────────────────────────────────────────────────
 
-    def show_idle(self, mp4_paths: list[Path]) -> bool:
+    def play_video_loop(
+        self,
+        mp4_paths: list[Path],
+        state: str = "video_loop",
+        loop: bool = True,
+    ) -> bool:
         """
-        Play idle loop videos in the ``#main`` zone.
+        Play a list of MP4s in the ``#main`` zone via VLC.
 
-        Sends ``show_video_zone`` to Chromium (making ``#main`` transparent),
-        then starts VLC with the supplied MP4 files.
-
-        Parameters
-        ----------
-        mp4_paths:
-            List of MP4 files to loop.  Must be non-empty.
-
-        Returns ``True`` on success.
+        Sends ``show_video_zone`` (transparent #main), then starts VLC with the
+        supplied paths. Used for the idle loop AND for transient state screens
+        (``deposit_item``, ``processing``, ``no_match``, etc.) so every state
+        is rendered through the same MP4 + VLC mechanism — no per-state HTML
+        files required.
         """
         if not mp4_paths:
-            logger.warning("show_idle: no mp4_paths provided.")
+            logger.warning("play_video_loop: no mp4_paths provided (state=%s).", state)
             return False
         self._stop_vlc_if_active()
         self._router.send_command(
@@ -182,10 +183,14 @@ class TSV6Renderer:
         # Short delay for the browser to act on the command.
         time.sleep(0.1)
         self._refresh_main_rect()
-        ok = self._vlc.show(self._main_rect, mp4_paths, loop=True)
+        ok = self._vlc.show(self._main_rect, mp4_paths, loop=loop)
         if ok:
-            self._state = "idle"
+            self._state = state
         return ok
+
+    def show_idle(self, mp4_paths: list[Path]) -> bool:
+        """Play the idle attract loop. Thin wrapper over ``play_video_loop``."""
+        return self.play_video_loop(mp4_paths, state="idle", loop=True)
 
     def show_processing(self) -> bool:
         """
