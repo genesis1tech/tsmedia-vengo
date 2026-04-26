@@ -1,7 +1,7 @@
 # BarcodeRepoLookupV2 + UpdatedBarcodeToGoUPCV2 — Design
 
 **Date:** 2026-04-25
-**Status:** Draft, pending review
+**Status:** Implemented at commit `035b533` on branch `feat/barcode-repo-lookup-v2` (canary on TS_EFFC94AA verified 2026-04-26: master_hit / upc_nomatch / nomatch_cached / qr_detected all land in `tsv6.v_scans_v2`; fleet-wide migration deferred — V1 rule still routes any device that does not publish `flowVersion="v2"`).
 **Author:** g1tech + Claude
 **Scope:** AWS-side rebuild of the barcode lookup pipeline plus minimal device-side wiring to consume the new payload fields. V1 fleet remains untouched.
 
