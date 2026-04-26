@@ -217,31 +217,40 @@ class TSV6Renderer:
 
     def show_product_display(
         self,
-        image_path: Path,
+        image_path: "Path | str | None",
         qr_url: str,
         nfc_url: str | None = None,
+        product_name: str = "",
+        product_brand: str = "",
+        product_desc: str = "",
     ) -> bool:
         """
-        Display a product image with a QR-code overlay.
+        Display a product image with a QR-code overlay, or a text-only card.
 
-        Parameters
-        ----------
-        image_path:
-            Local path to the product image (must be inside ``cache_dir``).
-        qr_url:
-            URL to encode in the QR code.
-        nfc_url:
-            Ignored by the renderer; provided for API symmetry with the
-            DisplayController interface.
+        ``image_path`` may be a ``Path`` or ``str``:
+        * full ``http(s)://`` URL — sent through to the page; loaded by Chromium
+        * bare filename — resolved by the page against ``/assets/`` (cache_dir)
+        * empty / ``None`` — page renders the text-only fallback card from
+          ``product_name`` / ``product_brand`` / ``product_desc``.
 
-        Returns ``True`` always.
+        ``nfc_url`` is accepted for API symmetry with DisplayController; the
+        renderer doesn't render NFC visuals.
         """
         self._stop_vlc_if_active()
+        if image_path is None:
+            image = ""
+        elif isinstance(image_path, Path):
+            image = image_path.name
+        else:
+            image = str(image_path)
         self._router.send_command(
             {
                 "action": "show_product",
-                "image": image_path.name,
+                "image": image,
                 "qr_url": qr_url,
+                "product_name": product_name,
+                "product_brand": product_brand,
+                "product_desc": product_desc,
             }
         )
         self._state = "product"
