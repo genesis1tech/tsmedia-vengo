@@ -593,25 +593,33 @@ class TSV6NativeBackend:
         """
         Handle the ``setplaylist`` event from the server.
 
-        Maps the playlist name to a renderer call.  Only ``tsv6_idle_loop``
-        starts impression tracking; all other playlists are system states.
+        TSV6 only allows the PiSignage server to drive the **idle loop** (and
+        the ``tsv6_offline`` fallback). Every other ``tsv6_*`` playlist is a
+        per-scan transient state and is fired exclusively by the V2 device-side
+        flow in production_main when an openDoor / noMatch / qrCode response
+        arrives. Honoring server-driven rotation through state playlists would
+        cause the screen to cycle through every state regardless of scanner
+        activity (which it did before this guard — see commit message).
         """
         logger.info("TSV6NativeBackend: setplaylist -> %s", playlist_name)
         try:
             if playlist_name == _IDLE_PLAYLIST:
                 self.show_idle()
-            elif playlist_name == "tsv6_processing":
-                self.show_processing()
-            elif playlist_name == "tsv6_deposit_item":
-                self.show_deposit_item()
-            elif playlist_name == "tsv6_no_match":
-                self.show_no_match()
-            elif playlist_name == "tsv6_barcode_not_qr":
-                self.show_barcode_not_qr()
-            elif playlist_name == "tsv6_no_item_detected":
-                self.show_no_item_detected()
             elif playlist_name == "tsv6_offline":
                 self.show_offline()
+            elif playlist_name in (
+                "tsv6_processing",
+                "tsv6_deposit_item",
+                "tsv6_no_match",
+                "tsv6_barcode_not_qr",
+                "tsv6_no_item_detected",
+                "tsv6_product_display",
+            ):
+                logger.info(
+                    "Ignoring server-driven setplaylist for transient state %r — "
+                    "this state is fired only by the device's V2 scan flow.",
+                    playlist_name,
+                )
             else:
                 logger.warning("Unknown playlist name: %s", playlist_name)
         except Exception as exc:
