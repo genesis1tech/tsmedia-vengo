@@ -481,12 +481,20 @@ class TSV6NativeBackend:
                     result.failed,
                 )
 
-            # Cache playlist -> asset mappings from the config.
+            # Cache playlist -> asset mappings from the config IF AND ONLY IF
+            # the config event's per-playlist dicts include them. PiSignage's
+            # config event does NOT carry per-playlist asset lists — each
+            # playlist dict is just {name, settings, plType, ...}. The actual
+            # per-playlist file (`__{name}.json`) is pushed separately by the
+            # asset sync above. Calling _write_playlist_cache(name, []) here
+            # would clobber that legitimate file with an empty array, which is
+            # exactly the bug that left every state playlist unable to resolve
+            # its MP4s on this device.
             playlists: list[dict] = config_obj.get("playlists", [])
             for playlist in playlists:
                 name = playlist.get("name", "")
-                pl_assets: list[str] = playlist.get("assets", [])
-                if name:
+                pl_assets: list[str] = playlist.get("assets", []) or []
+                if name and pl_assets:
                     self._playlist_assets[name] = pl_assets
                     self._write_playlist_cache(name, pl_assets)
 
@@ -702,17 +710,56 @@ class TSV6NativeBackend:
         """
         Load a playlist's asset list from ``{cache_dir}/__{playlist_name}.json``.
 
-        Returns None if the file does not exist or is unreadable.
+        Accepts both shapes seen in the wild:
+        * a bare list of filenames (the legacy shape this module wrote itself)
+        * the PiSignage-native dict shape pushed by ``tsmedia.g1tech.cloud``,
+          which has keys like ``files`` / ``assets`` / ``items`` containing
+          either bare filename strings or dicts with a ``filename`` key.
+
+        Returns ``None`` if the file does not exist, is unreadable, or contains
+        no recognisable filename list.
         """
         target = self._cache_dir / f"__{playlist_name}.json"
         if not target.exists():
             return None
         try:
             data = json.loads(target.read_text(encoding="utf-8"))
-            return list(data) if isinstance(data, list) else None
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not read playlist cache %s: %s", target, exc)
             return None
+
+        candidate_list: list | None = None
+        if isinstance(data, list):
+            candidate_list = data
+        elif isinstance(data, dict):
+            for key in ("files", "assets", "items", "playlist", "filenames"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    candidate_list = value
+                    break
+
+        if candidate_list is None:
+            logger.warning(
+                "Playlist cache %s has unrecognised shape (top-level keys=%s); "
+                "treating as empty.",
+                target.name,
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
+            return None
+
+        out: list[str] = []
+        for item in candidate_list:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict):
+                # PiSignage entries typically look like {"filename": "x.mp4", ...}
+                # but defensively also accept "name" / "asset" / "url".
+                for key in ("filename", "name", "asset", "url", "file"):
+                    val = item.get(key)
+                    if isinstance(val, str) and val:
+                        out.append(val)
+                        break
+        return out or None
 
     def _build_status_payload(self) -> dict:
         """Build the runtime status dict for send_status."""
