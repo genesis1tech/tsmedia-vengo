@@ -1688,148 +1688,147 @@ class EnhancedVideoPlayer:
             )
 
             # Render the overlay regardless of whether we have an image.
-            if True:
-                # Create FULL-SCREEN overlay frame
-                self.image_overlay = tk.Toplevel(self.root)
-                self.image_overlay.configure(background=config.display.product_image_background_color)
-                self.image_overlay.attributes('-topmost', True)
-                self.image_overlay.overrideredirect(True)
-                self.image_overlay.configure(cursor="none")
+            # Create FULL-SCREEN overlay frame
+            self.image_overlay = tk.Toplevel(self.root)
+            self.image_overlay.configure(background=config.display.product_image_background_color)
+            self.image_overlay.attributes('-topmost', True)
+            self.image_overlay.overrideredirect(True)
+            self.image_overlay.configure(cursor="none")
 
-                # Position to cover ENTIRE screen (including button area)
-                self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
+            # Position to cover ENTIRE screen (including button area)
+            self.image_overlay.geometry(f"{screen_width}x{screen_height}+0+0")
 
-                # Create main container frame
-                main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
-                main_frame.pack(expand=True, fill='both')
+            # Create main container frame
+            main_frame = tk.Frame(self.image_overlay, background=config.display.product_image_background_color)
+            main_frame.pack(expand=True, fill='both')
 
-                # Create horizontal layout frame for product info and QR code
-                horizontal_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
-                horizontal_frame.place(relx=0.5, rely=0.5, anchor='center')
+            # Create horizontal layout frame for product info and QR code
+            horizontal_frame = tk.Frame(main_frame, background=config.display.product_image_background_color)
+            horizontal_frame.place(relx=0.5, rely=0.5, anchor='center')
 
-                # Left side: Product info
-                content_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
-                content_frame.pack(side='left', padx=20)
+            # Left side: Product info
+            content_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
+            content_frame.pack(side='left', padx=20)
 
-                # Add product image (only when we have one)
-                if photo:
-                    image_label = tk.Label(
-                        content_frame,
-                        image=photo,
-                        background=config.display.product_image_background_color
-                    )
-                    # CRITICAL: Keep reference on label to prevent garbage collection
-                    image_label.image = photo
-                    image_label.pack(pady=10)
-
-                    # Keep reference to photo to prevent garbage collection
-                    self.image_overlay.photo = photo
-                else:
-                    print("ℹ Rendering text-only product card (no image available)")
-
-                # Add product name
-                name_label = tk.Label(
+            # Add product image (only when we have one)
+            if photo:
+                image_label = tk.Label(
                     content_frame,
-                    text=product_name,
+                    image=photo,
+                    background=config.display.product_image_background_color
+                )
+                # CRITICAL: Keep reference on label to prevent garbage collection
+                image_label.image = photo
+                image_label.pack(pady=10)
+
+                # Keep reference to photo to prevent garbage collection
+                self.image_overlay.photo = photo
+            else:
+                print("ℹ Rendering text-only product card (no image available)")
+
+            # Add product name
+            name_label = tk.Label(
+                content_frame,
+                text=product_name,
+                fg='black',
+                background=config.display.product_image_background_color,
+                font=('Arial', 18, 'bold'),
+                wraplength=int(screen_width * 0.4),
+                justify='center'
+            )
+            name_label.pack(pady=10)
+
+            # Add product brand (text-only fallback path; helps the user
+            # when there is no image to anchor the card visually).
+            if product_brand:
+                brand_label = tk.Label(
+                    content_frame,
+                    text=product_brand,
                     fg='black',
                     background=config.display.product_image_background_color,
-                    font=('Arial', 18, 'bold'),
+                    font=('Arial', 14),
                     wraplength=int(screen_width * 0.4),
                     justify='center'
                 )
-                name_label.pack(pady=10)
+                brand_label.pack(pady=4)
 
-                # Add product brand (text-only fallback path; helps the user
-                # when there is no image to anchor the card visually).
-                if product_brand:
-                    brand_label = tk.Label(
-                        content_frame,
-                        text=product_brand,
-                        fg='black',
-                        background=config.display.product_image_background_color,
-                        font=('Arial', 14),
-                        wraplength=int(screen_width * 0.4),
-                        justify='center'
-                    )
-                    brand_label.pack(pady=4)
-
-                # Add product category
-                if product_category:
-                    category_label = tk.Label(
-                        content_frame,
-                        text=product_category,
-                        fg='black',
-                        background=config.display.product_image_background_color,
-                        font=('Arial', 12, 'italic'),
-                        wraplength=int(screen_width * 0.4),
-                        justify='center'
-                    )
-                    category_label.pack(pady=4)
-
-                # Right side: QR code for NFC URL (if available)
-                if nfc_url and QR_GENERATOR_AVAILABLE:
-                    try:
-                        # Generate large black QR code image
-                        qr_size = 350  # Extra large for easy scanning
-                        qr_image = generate_qr_code(nfc_url, size=qr_size)
-
-                        if qr_image:
-                            # Convert PIL image to PhotoImage
-                            qr_photo = ImageTk.PhotoImage(qr_image, master=self.root)
-
-                            # Create QR code frame on the right
-                            qr_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
-                            qr_frame.pack(side='right', padx=30)
-
-                            # Add QR code image
-                            qr_label = tk.Label(
-                                qr_frame,
-                                image=qr_photo,
-                                background=config.display.product_image_background_color
-                            )
-                            qr_label.image = qr_photo  # Keep reference
-                            qr_label.pack(pady=10)
-
-                            # Add "Scan For Rewards" text with large black font
-                            scan_label = tk.Label(
-                                qr_frame,
-                                text="Scan For Rewards",
-                                fg='black',
-                                background=config.display.product_image_background_color,
-                                font=('Arial', 24, 'bold'),
-                                justify='center'
-                            )
-                            scan_label.pack(pady=10)
-
-                            # Keep reference to QR photo
-                            self.image_overlay.qr_photo = qr_photo
-                            print("✅ QR code generated for NFC URL")
-                    except Exception as qr_error:
-                        print(f"⚠ Failed to generate QR code: {qr_error}")
-
-                # Add countdown timer at bottom center
-                self.countdown_seconds = 10
-                self.countdown_label = tk.Label(
-                    main_frame,
-                    text=str(self.countdown_seconds),
+            # Add product category
+            if product_category:
+                category_label = tk.Label(
+                    content_frame,
+                    text=product_category,
                     fg='black',
                     background=config.display.product_image_background_color,
-                    font=('Arial', 32, 'bold'),
+                    font=('Arial', 12, 'italic'),
+                    wraplength=int(screen_width * 0.4),
                     justify='center'
                 )
-                self.countdown_label.place(relx=0.95, rely=0.95, anchor='se')
+                category_label.pack(pady=4)
 
-                # Start countdown updates
-                self.countdown_timer_ids = []
-                self._update_countdown()
+            # Right side: QR code for NFC URL (if available)
+            if nfc_url and QR_GENERATOR_AVAILABLE:
+                try:
+                    # Generate large black QR code image
+                    qr_size = 350  # Extra large for easy scanning
+                    qr_image = generate_qr_code(nfc_url, size=qr_size)
 
-                # Schedule hide after 10 seconds
-                self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
+                    if qr_image:
+                        # Convert PIL image to PhotoImage
+                        qr_photo = ImageTk.PhotoImage(qr_image, master=self.root)
 
-                if photo:
-                    print(f"✅ Displaying full-screen image: {product_name}")
-                else:
-                    print(f"✅ Displaying text-only product card: {product_name}")
+                        # Create QR code frame on the right
+                        qr_frame = tk.Frame(horizontal_frame, background=config.display.product_image_background_color)
+                        qr_frame.pack(side='right', padx=30)
+
+                        # Add QR code image
+                        qr_label = tk.Label(
+                            qr_frame,
+                            image=qr_photo,
+                            background=config.display.product_image_background_color
+                        )
+                        qr_label.image = qr_photo  # Keep reference
+                        qr_label.pack(pady=10)
+
+                        # Add "Scan For Rewards" text with large black font
+                        scan_label = tk.Label(
+                            qr_frame,
+                            text="Scan For Rewards",
+                            fg='black',
+                            background=config.display.product_image_background_color,
+                            font=('Arial', 24, 'bold'),
+                            justify='center'
+                        )
+                        scan_label.pack(pady=10)
+
+                        # Keep reference to QR photo
+                        self.image_overlay.qr_photo = qr_photo
+                        print("✅ QR code generated for NFC URL")
+                except Exception as qr_error:
+                    print(f"⚠ Failed to generate QR code: {qr_error}")
+
+            # Add countdown timer at bottom center
+            self.countdown_seconds = 10
+            self.countdown_label = tk.Label(
+                main_frame,
+                text=str(self.countdown_seconds),
+                fg='black',
+                background=config.display.product_image_background_color,
+                font=('Arial', 32, 'bold'),
+                justify='center'
+            )
+            self.countdown_label.place(relx=0.95, rely=0.95, anchor='se')
+
+            # Start countdown updates
+            self.countdown_timer_ids = []
+            self._update_countdown()
+
+            # Schedule hide after 10 seconds
+            self.image_display_timer = self.root.after(10000, self._hide_image_overlay)
+
+            if photo:
+                print(f"✅ Displaying full-screen image: {product_name}")
+            else:
+                print(f"✅ Displaying text-only product card: {product_name}")
 
         except Exception as e:
             print(f"❌ Error showing image overlay: {e}")
