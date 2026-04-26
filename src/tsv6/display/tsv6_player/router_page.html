@@ -79,6 +79,50 @@
     object-position: center center;
   }
 
+  /* Text-only product card — shown for first-scan cold UPC where the
+     master_products row has not yet been populated with a WebP URL.
+     Kept centered, white-on-black, large readable type. */
+  #product-text {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #ffffff;
+    background: #000000;
+    padding: 40px 24px;
+    box-sizing: border-box;
+  }
+  #product-text-name {
+    font-family: "Arial Black", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 48px;
+    line-height: 1.15;
+    margin-bottom: 16px;
+    word-wrap: break-word;
+  }
+  #product-text-brand {
+    font-family: "Arial Black", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 30px;
+    color: #d91e18;
+    margin-bottom: 24px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  #product-text-desc {
+    font-family: Arial, sans-serif;
+    font-weight: 400;
+    font-size: 22px;
+    line-height: 1.4;
+    max-width: 90%;
+    color: #cccccc;
+  }
+
   #qr-overlay {
     position: absolute;
     bottom: 8px;
@@ -166,9 +210,15 @@
       <!-- Image asset -->
       <img id="main-image" src="" alt="Asset" />
 
-      <!-- Product display: product image + QR code overlay -->
+      <!-- Product display: product image + QR code overlay, plus a text-only
+           card shown when no image URL is available (cold UPC first scan). -->
       <div id="product-container">
         <img id="product-image" src="" alt="Product" />
+        <div id="product-text" style="display:none;">
+          <div id="product-text-name"></div>
+          <div id="product-text-brand"></div>
+          <div id="product-text-desc"></div>
+        </div>
         <img id="qr-overlay" src="" alt="QR code" />
       </div>
 
@@ -258,22 +308,51 @@
   }
 
   /**
-   * show_product — display a product image with a QR-code overlay.
-   * Expected: { action: "show_product", image: "page1.png", qr_url: "https://..." }
+   * show_product — display a product image with a QR-code overlay,
+   * or a text-only card when no image URL is available.
+   *
+   * Expected (image present):
+   *   { action: "show_product", image: "https://.../foo.webp" | "foo.webp",
+   *     qr_url: "https://...",
+   *     product_name?, product_brand?, product_desc? }
+   * Expected (text-only fallback — first cold UPC scan):
+   *   { action: "show_product", image: "" | null,
+   *     product_name: "…", product_brand: "…", product_desc: "…",
+   *     qr_url: "https://..." }
    */
   function handleShowProduct(cmd) {
+    cmd = cmd || {};
     clearMain();
-    productImage.src = "/assets/" + encodeURIComponent(cmd.image);
-    // QR code: build a data URL via a canvas element using the qr_url value.
-    // For simplicity we use a lightweight approach: load the QR image directly
-    // if qr_url points to a local asset, or compose a Google Charts URL for
-    // external URLs.  Python side can also pre-render the QR and pass a local
-    // filename instead.
+    var productText = document.getElementById("product-text");
+    var nameEl  = document.getElementById("product-text-name");
+    var brandEl = document.getElementById("product-text-brand");
+    var descEl  = document.getElementById("product-text-desc");
+
+    var img = cmd.image ? String(cmd.image).trim() : "";
+    var hasImage = img && img !== "null";
+
+    if (hasImage) {
+      // Accept either a full URL (http/https) or a bare filename in cache_dir.
+      var src = /^https?:\/\//i.test(img)
+        ? img
+        : ("/assets/" + encodeURIComponent(img));
+      productImage.src = src;
+      productImage.style.display = "";
+      if (productText) productText.style.display = "none";
+    } else {
+      // Cold UPC first scan — render the text-only card from the V2 payload.
+      productImage.removeAttribute("src");
+      productImage.style.display = "none";
+      if (nameEl)  nameEl.textContent  = cmd.product_name  || "";
+      if (brandEl) brandEl.textContent = cmd.product_brand || "";
+      if (descEl)  descEl.textContent  = cmd.product_desc  || "";
+      if (productText) productText.style.display = "flex";
+    }
+
+    // QR code overlay.
     if (cmd.qr_src) {
-      // Caller provided a pre-rendered QR image filename.
       qrOverlay.src = "/assets/" + encodeURIComponent(cmd.qr_src);
     } else if (cmd.qr_url) {
-      // Fall back to a QR API endpoint.
       qrOverlay.src =
         "https://api.qrserver.com/v1/create-qr-code/?size=88x88&data=" +
         encodeURIComponent(cmd.qr_url);

@@ -135,6 +135,13 @@ class ProductionVideoPlayer:
 
         # Recycling verification sensor
         self.recycle_sensor = None
+        # When False, the door sequence skips the ToF item-detection wait and
+        # always treats the deposit as successful. Use for testing or for
+        # deployments where verification happens elsewhere (e.g. paired with
+        # the TS Rewards app). Toggle via TSV6_RECYCLE_VERIFICATION_REQUIRED.
+        self._recycle_verification_required = os.environ.get(
+            "TSV6_RECYCLE_VERIFICATION_REQUIRED", "true"
+        ).lower() in ("true", "1", "yes")
 
         # PiSignage display adapter (remote server on Hostinger VPS)
         self.pisignage_adapter = None
@@ -1502,7 +1509,7 @@ class ProductionVideoPlayer:
                 door_open_thread.start()
 
             # 3. Wait for both detections (door + item) or timeout
-            if self.recycle_sensor:
+            if self.recycle_sensor and self._recycle_verification_required:
                 if door_open_thread:
                     door_open_thread.join(timeout=5.0)
 
@@ -1520,8 +1527,17 @@ class ProductionVideoPlayer:
                 else:
                     print(f"   No item detected ({count} detection(s) — door only)")
             else:
-                # No sensor available — fall back to assuming success (for dev/testing)
-                self.logger.warning("No recycle sensor — skipping verification")
+                # Verification disabled (TSV6_RECYCLE_VERIFICATION_REQUIRED=false)
+                # or no sensor available — treat the deposit as successful and
+                # hold the door open for the standard 3s window.
+                if self.recycle_sensor and not self._recycle_verification_required:
+                    self.logger.info(
+                        "Recycle verification disabled by config — "
+                        "auto-success after door hold"
+                    )
+                    self.recycle_sensor.stop_monitoring()
+                else:
+                    self.logger.warning("No recycle sensor — skipping verification")
                 item_detected = True
                 if door_open_thread:
                     door_open_thread.join(timeout=5.0)
@@ -1575,15 +1591,33 @@ class ProductionVideoPlayer:
         self.logger.info(f"Recycle SUCCESS for barcode: {barcode}")
         print(f"Recycle verified successfully")
 
-        # Show product image + QR code on whichever display backend is active
-        product_image_path = product_data.get('imageUrl', '')
+        # Show product image + QR code on whichever display backend is active.
+        # V2 cloud returns the displayable URL in `productImage` (WebP if the
+        # cold-UPC path completed conversion, source-URL fallback otherwise,
+        # or null on the very first scan before WebP is built). V1 used
+        # `imageUrl`. Prefer the V2 field, fall back to the V1 field, then to
+        # the original-source URL.
+        product_image_path = (
+            product_data.get('productImage')
+            or product_data.get('imageUrl')
+            or product_data.get('productImageOriginal')
+            or ''
+        )
         qr_url = product_data.get('qrUrl', product_data.get('nfcUrl', ''))
+        product_name = product_data.get('productName', '') or ''
+        product_brand = product_data.get('productBrand', '') or ''
+        product_desc = product_data.get('productDesc', '') or ''
+        product_playlist_override = product_data.get('productPlaylist') if isinstance(product_data, dict) else None
 
         if self.display_backend is not None:
             self.display_backend.show_product_display(
                 product_image_path=product_image_path,
                 qr_url=qr_url,
                 nfc_url=nfc_url or None,
+                playlist_override=product_playlist_override,
+                product_name=product_name,
+                product_brand=product_brand,
+                product_desc=product_desc,
             )
         elif self.video_player:
             if hasattr(self.video_player, 'hide_deposit_waiting'):

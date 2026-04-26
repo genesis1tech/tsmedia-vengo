@@ -369,20 +369,41 @@ class TSV6NativeBackend:
         qr_url: str,
         nfc_url: str | None = None,
         playlist_override: str | None = None,
+        product_name: str = "",
+        product_brand: str = "",
+        product_desc: str = "",
     ) -> bool:
         """
         Switch to the product result screen.
 
-        ``playlist_override`` accepted for ``DisplayController`` parity; ignored by
-        the native renderer.
+        ``product_image_path`` may be a local filename, a remote ``http(s)://``
+        URL, or empty — when empty the renderer falls back to a text-only card
+        built from ``product_name`` / ``product_brand`` / ``product_desc`` (V2
+        cold-UPC first-scan path).
+
+        ``playlist_override`` accepted for ``DisplayController`` parity; ignored
+        by the native renderer.
         """
         self._interrupt_current_idle()
         if self._renderer is None:
             return False
+        # Pass the path/URL through verbatim so the renderer can decide whether
+        # to treat it as a filename or a remote URL. Wrapping every input in
+        # Path() (the previous behavior) silently dropped the URL scheme and
+        # left only the basename.
+        if not product_image_path or product_image_path in ("None", "null"):
+            image_arg: "Path | str | None" = None
+        elif "://" in product_image_path:
+            image_arg = product_image_path
+        else:
+            image_arg = Path(product_image_path)
         return self._renderer.show_product_display(
-            image_path=Path(product_image_path),
+            image_path=image_arg,
             qr_url=qr_url,
             nfc_url=nfc_url,
+            product_name=product_name,
+            product_brand=product_brand,
+            product_desc=product_desc,
         )
 
     def show_no_match(self, playlist_override: str | None = None) -> bool:
