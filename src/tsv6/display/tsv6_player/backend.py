@@ -425,12 +425,15 @@ class TSV6NativeBackend:
 
     def _play_state_playlist(self, playlist_name: str, state: str) -> bool:
         """
-        Resolve a playlist's local MP4(s) and play them via VLC.
+        Resolve a playlist's local MP4(s) and play them once via VLC.
 
         Used by every transient state (deposit_item, processing, no_match,
         no_item_detected, barcode_not_qr) so the device renders state screens
         the same way it renders the idle loop. Eliminates the need for
         per-state HTML asset files.
+
+        The playlist plays **once** (no loop).  When the last item finishes,
+        the display automatically returns to the idle attract loop.
 
         If the playlist has no MP4s synced down to the local cache (e.g. the
         playlist isn't assigned to this device's group on the media server)
@@ -450,7 +453,18 @@ class TSV6NativeBackend:
                 playlist_name,
             )
             return False
-        return self._renderer.play_video_loop(mp4_paths, state=state, loop=True)
+
+        def _return_to_idle() -> None:
+            """Auto-return to idle after the state playlist finishes."""
+            logger.info("State playlist %r finished — returning to idle.", state)
+            try:
+                self.show_idle()
+            except Exception as exc:
+                logger.warning("Auto-return to idle failed: %s", exc)
+
+        return self._renderer.play_video_loop(
+            mp4_paths, state=state, loop=False, on_end=_return_to_idle
+        )
 
     def show_offline(self) -> bool:
         """Switch to the offline fallback screen."""

@@ -163,6 +163,7 @@ class TSV6Renderer:
         mp4_paths: list[Path],
         state: str = "video_loop",
         loop: bool = True,
+        on_end: "callable | None" = None,
     ) -> bool:
         """
         Play a list of MP4s in the ``#main`` zone via VLC.
@@ -172,6 +173,9 @@ class TSV6Renderer:
         (``deposit_item``, ``processing``, ``no_match``, etc.) so every state
         is rendered through the same MP4 + VLC mechanism — no per-state HTML
         files required.
+
+        When ``loop=False`` and ``on_end`` is provided, the callback is invoked
+        after the last item finishes playing.
         """
         if not mp4_paths:
             logger.warning("play_video_loop: no mp4_paths provided (state=%s).", state)
@@ -183,7 +187,7 @@ class TSV6Renderer:
         # Short delay for the browser to act on the command.
         time.sleep(0.1)
         self._refresh_main_rect()
-        ok = self._vlc.show(self._main_rect, mp4_paths, loop=loop)
+        ok = self._vlc.show(self._main_rect, mp4_paths, loop=loop, on_playlist_end=on_end)
         if ok:
             self._state = state
         return ok

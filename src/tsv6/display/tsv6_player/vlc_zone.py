@@ -83,6 +83,7 @@ class VLCZonePlayer:
 
         self._running = False
         self._ready_event = threading.Event()
+        self._on_playlist_end: Any = None  # callable invoked when non-loop playlist finishes
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -91,6 +92,7 @@ class VLCZonePlayer:
         rect: tuple[int, int, int, int],
         media_paths: list[Path],
         loop: bool = True,
+        on_playlist_end: Any = None,
     ) -> bool:
         """
         Create a borderless Tk window at *rect* and start playing *media_paths*.
@@ -103,6 +105,9 @@ class VLCZonePlayer:
             Ordered list of media files to play.  Must be non-empty.
         loop:
             If ``True`` the playlist repeats indefinitely.
+        on_playlist_end:
+            Optional callback invoked when a non-loop playlist finishes
+            playing all items.  Ignored when ``loop=True``.
 
         Returns
         -------
@@ -116,6 +121,7 @@ class VLCZonePlayer:
         if self._running:
             self.hide()
 
+        self._on_playlist_end = on_playlist_end if not loop else None
         self._ready_event.clear()
         self._running = True
         self._tk_thread = threading.Thread(
@@ -262,6 +268,20 @@ class VLCZonePlayer:
 
         if loop:
             mlp.set_playback_mode(vlc.PlaybackMode.loop)
+        elif self._on_playlist_end is not None:
+            # When not looping, fire the callback once the last item finishes.
+            def _on_vlc_end(event: Any) -> None:
+                try:
+                    cb = self._on_playlist_end
+                    if cb is not None:
+                        self._on_playlist_end = None  # one-shot
+                        cb()
+                except Exception as exc:
+                    logger.warning("on_playlist_end callback error: %s", exc)
+
+            mp.event_manager().event_attach(
+                vlc.EventType.MediaPlayerEndReached, _on_vlc_end
+            )
 
         mlp.play()
         logger.info(

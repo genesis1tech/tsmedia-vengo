@@ -1,9 +1,8 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
-Documentation=file:///home/%i/tsrpi5/README.md
-After=NetworkManager.service time-sync.target tsv6-xorg@%i.service
+Documentation=file:///home/%i/tsmedia-with-player/README.md
+After=NetworkManager.service time-sync.target
 Wants=NetworkManager.service
-Requires=tsv6-xorg@%i.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -11,7 +10,7 @@ StartLimitBurst=5
 Type=simple
 User=%i
 Group=%i
-WorkingDirectory=/home/%i/tsrpi5
+WorkingDirectory=/home/%i/tsmedia-with-player
 
 # Environment
 Environment="PATH=/home/%i/.local/bin:/home/%i/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
@@ -29,14 +28,14 @@ Environment="PULSE_SERVER="
 
 # Switch network adapter (runs as root via sudo, non-fatal)
 # Pass all connectivity env vars explicitly — sudo strips inherited env.
-ExecStartPre=-/usr/bin/sudo TSV6_NETWORK_ADAPTER=${TSV6_NETWORK_ADAPTER} TSV6_WIFI_ENABLED=${TSV6_WIFI_ENABLED} TSV6_LTE_ENABLED=${TSV6_LTE_ENABLED} TSV6_CONNECTIVITY_MODE=${TSV6_CONNECTIVITY_MODE} /bin/bash /home/%i/tsrpi5/scripts/switch-network-adapter.sh
+ExecStartPre=-/usr/bin/sudo TSV6_NETWORK_ADAPTER=${TSV6_NETWORK_ADAPTER} TSV6_WIFI_ENABLED=${TSV6_WIFI_ENABLED} TSV6_LTE_ENABLED=${TSV6_LTE_ENABLED} TSV6_CONNECTIVITY_MODE=${TSV6_CONNECTIVITY_MODE} /bin/bash /home/%i/tsmedia-with-player/scripts/switch-network-adapter.sh
 
 # WIFI/LTE GATE: Block until network connectivity is confirmed.
 # Sources /run/tsv6-network-adapter.env (written by switch-network-adapter.sh above).
 # If WiFi-primary: waits for wlan0, starts provisioning if no saved WiFi.
 # If LTE-primary: waits for wwan0, skips WiFi provisioning.
 # Main app NEVER starts without network. (runs as root for systemctl access)
-ExecStartPre=/usr/bin/sudo /bin/bash /home/%i/tsrpi5/scripts/wifi-wait.sh
+ExecStartPre=/usr/bin/sudo /bin/bash /home/%i/tsmedia-with-player/scripts/wifi-wait.sh
 
 # CRITICAL: Wait for X11 socket to exist (up to 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; echo "X11 socket not found after 60s"; exit 1'
@@ -67,7 +66,7 @@ StandardError=journal
 SyslogIdentifier=tsv6
 
 # Resource limits
-TasksMax=100
+TasksMax=300
 MemoryMax=2G
 CPUQuota=150%
 
@@ -119,13 +118,13 @@ Environment="TSV6_RECYCLE_SENSOR_REQUIRED_DETECTIONS=2"
 #
 # When PISIGNAGE_ENABLED=false (default), the legacy VLC player is used
 # regardless of PISIGNAGE_BACKEND.
-Environment="PISIGNAGE_ENABLED=false"
-Environment="PISIGNAGE_BACKEND=rest"
-Environment="PISIGNAGE_SERVER_URL=http://72.60.120.25:3000"
+Environment="PISIGNAGE_ENABLED=true"
+Environment="PISIGNAGE_BACKEND=native"
+Environment="PISIGNAGE_SERVER_URL=https://tsmedia.g1tech.cloud"
 Environment="PISIGNAGE_USERNAME=pi"
 Environment="PISIGNAGE_PASSWORD=pi"
 Environment="PISIGNAGE_INSTALLATION=g1tech26"
-Environment="PISIGNAGE_GROUP=default"
+Environment="PISIGNAGE_GROUP=First Group"
 
 # ── TSV6 Native Backend Settings ─────────────────────────────────────────────
 # Used when PISIGNAGE_BACKEND=native.
