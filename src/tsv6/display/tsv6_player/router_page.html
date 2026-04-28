@@ -30,12 +30,14 @@
     height: 100%;
   }
 
-  /* Main content zone — leaves 60px at bottom for the TSV6 footer */
+  /* Main content zone — leaves space at bottom for the TSV6 footer.
+     Height is adjusted dynamically via --tsv6-ticker-h when the server
+     sends a tickerHeight value. */
   #main {
     position: absolute;
     top: 0; left: 0;
     width: 100%;
-    height: calc(100% - 60px);
+    height: calc(100% - var(--tsv6-ticker-h, 60px));
     background: #000;
     overflow: hidden;
     transition: background-color 0.1s ease;
@@ -137,13 +139,46 @@
   /* Idle placeholder shown when no command has arrived yet */
   #idle-placeholder {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     width: 100%;
     height: 100%;
-    color: #333;
+    color: #666;
     font-size: 18px;
     letter-spacing: 1px;
+    gap: 24px;
+  }
+
+  /* WiFi settings button on the idle/ready screen */
+  #wifi-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 28px;
+    margin-top: 16px;
+    background: #1a1d28;
+    color: #8a93a8;
+    border: 1px solid #2a3142;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background .15s, color .15s, border-color .15s;
+    z-index: 10;
+  }
+  #wifi-settings-btn:hover,
+  #wifi-settings-btn:active {
+    background: #3d8bfd;
+    color: #fff;
+    border-color: #3d8bfd;
+  }
+  #wifi-settings-btn svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
   }
 
   /* ── Red "SCAN BARCODE TO RECYCLE" footer (preserved exactly) ────────────── */
@@ -151,14 +186,14 @@
     position: absolute;
     bottom: 0; left: 0;
     width: 100%;
-    height: 60px;
+    height: var(--tsv6-ticker-h, 60px);
     background: var(--tsv6-ticker-bg, #d91e18);
     color: var(--tsv6-ticker-color, #ffffff);
     font-family: var(--tsv6-ticker-font, "Arial Black"), "Arial Black", "Arial Bold", Arial, sans-serif;
     font-weight: var(--tsv6-ticker-weight, 900);
     font-style: var(--tsv6-ticker-style, normal);
     font-size: var(--tsv6-ticker-size, 32px);
-    line-height: 60px;
+    line-height: var(--tsv6-ticker-h, 60px);
     text-align: center;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -170,8 +205,8 @@
   #ticker-content {
     display: block;
     width: 100%;
-    height: 60px;
-    line-height: 60px;
+    height: var(--tsv6-ticker-h, 60px);
+    line-height: var(--tsv6-ticker-h, 60px);
     white-space: nowrap;
   }
   /* Scrolling marquee variant — enabled via .scroll class when ticker.behavior=scroll.
@@ -222,8 +257,14 @@
         <img id="qr-overlay" src="" alt="QR code" />
       </div>
 
-      <!-- Idle placeholder -->
-      <div id="idle-placeholder">TSV6 Ready</div>
+      <!-- Idle placeholder with WiFi settings link -->
+      <div id="idle-placeholder">
+        TSV6 Ready
+        <a id="wifi-settings-btn" href="/settings">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4l2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
+          Wi-Fi Settings
+        </a>
+      </div>
     </div>
     <!-- Red branded footer; text is updated dynamically via the show_ticker command. -->
     <div id="ticker"><span id="ticker-content">SCAN BARCODE TO RECYCLE</span></div>
@@ -283,6 +324,9 @@
     qrOverlay.src                = "";
     idlePh.style.display         = "none";
     mainZone.classList.remove("video-zone");
+    // Re-enable the long-press catcher when leaving idle.
+    var catcher = document.getElementById("tsv6-longpress-catcher");
+    if (catcher) catcher.style.pointerEvents = "auto";
   }
 
   // ── Command handlers ──────────────────────────────────────────────────────
@@ -369,7 +413,8 @@
     clearMain();
     mainZone.classList.add("video-zone");
 
-    // Measure the actual bounding rect of #main in screen coordinates.
+    // Always measure the actual bounding rect of #main in screen coordinates.
+    // This accounts for dynamic ticker height via --tsv6-ticker-h.
     var r = mainZone.getBoundingClientRect();
     var rect = [
       Math.round(r.left   + window.screenX),
@@ -377,11 +422,6 @@
       Math.round(r.width),
       Math.round(r.height)
     ];
-
-    // If the caller already supplied a rect, prefer that.
-    if (cmd.rect && cmd.rect.length === 4) {
-      rect = cmd.rect;
-    }
 
     fetch("/video_zone_rect", {
       method: "POST",
@@ -406,6 +446,9 @@
   function handleShowIdle() {
     clearMain();
     idlePh.style.display = "flex";
+    // Hide the long-press catcher so the WiFi settings button is tappable.
+    var catcher = document.getElementById("tsv6-longpress-catcher");
+    if (catcher) catcher.style.pointerEvents = "none";
   }
 
   /**
@@ -430,10 +473,26 @@
     tickerEl.classList.toggle("scroll", scroll);
     if (scroll) {
       var speed = Math.max(1, Math.min(10, Number(cmd.speed) || 3));
-      tickerEl.style.setProperty("--tsv6-ticker-duration", (60 / speed).toFixed(1) + "s");
+      // PiSignage textSpeed 1=slow, 10=fast. Map to scroll duration:
+      // speed 1 → 40s, speed 5 → 16s, speed 10 → 8s
+      var dur = Math.max(4, 40 / speed);
+      tickerEl.style.setProperty("--tsv6-ticker-duration", dur.toFixed(1) + "s");
     }
 
     var style = tickerEl.style;
+
+    // Ticker height from server (e.g. 300) — resizes the bar and adjusts
+    // #main to leave room. Falls back to 60px when zero/absent.
+    var tickerH = Number(cmd.tickerHeight);
+    if (tickerH && tickerH > 0) {
+      tickerH = Math.max(20, Math.min(400, tickerH));
+      style.setProperty("--tsv6-ticker-h", tickerH + "px");
+      // Also set on document root so #main picks it up.
+      document.documentElement.style.setProperty("--tsv6-ticker-h", tickerH + "px");
+    } else {
+      style.removeProperty("--tsv6-ticker-h");
+      document.documentElement.style.removeProperty("--tsv6-ticker-h");
+    }
 
     // Font family (lazy-load from Google Fonts when not a system font).
     if (cmd.fontFamily) {
@@ -492,6 +551,8 @@
     // Raw CSS escape hatch — appended as a single style attribute suffix so
     // the preceding properties still apply. Stored on a data attribute so a
     // subsequent call with a different value cleanly replaces it.
+    // Skip font-size/height/line-height from customCss — those are handled
+    // by the ticker height and font size variables above.
     var prevCssKeys = tickerEl.dataset.tsv6CssKeys ? tickerEl.dataset.tsv6CssKeys.split(",") : [];
     prevCssKeys.forEach(function (k) { if (k) style.removeProperty(k); });
     var nextKeys = [];
@@ -499,9 +560,9 @@
       String(cmd.customCss).split(";").forEach(function (decl) {
         var idx = decl.indexOf(":");
         if (idx < 0) return;
-        var prop = decl.slice(0, idx).trim();
+        var prop = decl.slice(0, idx).trim().toLowerCase();
         var val  = decl.slice(idx + 1).trim();
-        if (prop && val) {
+        if (prop && val && prop !== "font-size" && prop !== "height" && prop !== "line-height") {
           style.setProperty(prop, val);
           nextKeys.push(prop);
         }

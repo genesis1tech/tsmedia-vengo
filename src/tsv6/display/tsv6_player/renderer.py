@@ -321,6 +321,7 @@ class TSV6Renderer:
         italic: bool = False,
         font_weight: int = 0,
         custom_css: str = "",
+        ticker_height: int = 0,
     ) -> bool:
         """Update the red footer ticker text. Empty or disabled reverts to default.
 
@@ -349,6 +350,7 @@ class TSV6Renderer:
                 "italic": italic,
                 "fontWeight": font_weight,
                 "customCss": custom_css,
+                "tickerHeight": ticker_height,
             }
         )
         return True

@@ -354,12 +354,18 @@ class TSV6NativeBackend:
     def show_deposit_item(self, playlist_override: str | None = None) -> bool:
         """Switch to the 'Please Deposit Your Item' screen.
 
-        Plays the MP4(s) from the supplied playlist (or ``tsv6_deposit_item``
-        if no override). Same MP4-based mechanism as the idle loop so no
-        per-state HTML asset is needed.
+        Loops the playlist for the duration of the recycle transaction.
+        Unlike the terminal state playlists (no_match, no_item_detected,
+        barcode_not_qr) which auto-return to idle, deposit_item is a
+        transitional state — it's swapped out by the success path
+        (show_product_display) or by a failure handler.  Looping prevents
+        the screen from briefly returning to idle if the playlist's MP4(s)
+        are shorter than the door-open hold time.
         """
         return self._play_state_playlist(
-            playlist_override or "tsv6_deposit_item", state="deposit_item"
+            playlist_override or "tsv6_deposit_item",
+            state="deposit_item",
+            loop=True,
         )
 
     def show_product_display(
@@ -396,7 +402,13 @@ class TSV6NativeBackend:
             image_arg = product_image_path
         else:
             image_arg = Path(product_image_path)
-        return self._renderer.show_product_display(
+        logger.info(
+            "show_product_display: image=%r qr_url=%r product_name=%r",
+            image_arg,
+            qr_url,
+            product_name,
+        )
+        ok = self._renderer.show_product_display(
             image_path=image_arg,
             qr_url=qr_url,
             nfc_url=nfc_url,
@@ -404,6 +416,55 @@ class TSV6NativeBackend:
             product_brand=product_brand,
             product_desc=product_desc,
         )
+        if ok:
+            self._schedule_product_return_to_idle()
+        return ok
+
+    def _schedule_product_return_to_idle(self) -> None:
+        """Return to the idle attract loop after the product-display window.
+
+        The product screen is HTML (no MP4 EndReached event), so unlike state
+        playlists it has no built-in auto-return.  Without this scheduler the
+        product card would stick on screen forever.
+
+        Duration is tunable via ``TSV6_PRODUCT_DISPLAY_DURATION_SECS``
+        (default 15s).  The state-guard in ``_async_return_to_idle`` makes
+        this safe against a follow-up scan: if the renderer has already
+        moved on to a newer state when the timer fires, the return-to-idle
+        is skipped.
+        """
+        try:
+            duration = float(os.environ.get("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "5"))
+        except ValueError:
+            duration = 5.0
+        threading.Thread(
+            target=self._delayed_return_to_idle,
+            args=("product", duration),
+            name="tsv6-product-return-to-idle",
+            daemon=True,
+        ).start()
+
+    def _delayed_return_to_idle(self, expected_state: str, delay: float) -> None:
+        """Sleep ``delay`` seconds, then return to idle if state hasn't changed."""
+        try:
+            time.sleep(delay)
+            if self._renderer is None:
+                return
+            current = self._renderer.get_metrics().get("state", "")
+            if current == expected_state:
+                logger.info(
+                    "Product display window elapsed (%.1fs) — returning to idle.",
+                    delay,
+                )
+                self.show_idle()
+            else:
+                logger.info(
+                    "Product return-to-idle skipped: renderer now in %r (was %r).",
+                    current,
+                    expected_state,
+                )
+        except Exception as exc:
+            logger.warning("Delayed return to idle failed: %s", exc)
 
     def show_no_match(self, playlist_override: str | None = None) -> bool:
         """Switch to the 'Unrecognized Barcode' screen via MP4 playlist."""
@@ -423,7 +484,9 @@ class TSV6NativeBackend:
             playlist_override or "tsv6_no_item_detected", state="no_item_detected"
         )
 
-    def _play_state_playlist(self, playlist_name: str, state: str) -> bool:
+    def _play_state_playlist(
+        self, playlist_name: str, state: str, loop: bool = False
+    ) -> bool:
         """
         Resolve a playlist's local MP4(s) and play them once via VLC.
 
@@ -455,15 +518,33 @@ class TSV6NativeBackend:
             return False
 
         def _return_to_idle() -> None:
-            """Auto-return to idle after the state playlist finishes."""
-            logger.info("State playlist %r finished — returning to idle.", state)
-            try:
-                self.show_idle()
-            except Exception as exc:
-                logger.warning("Auto-return to idle failed: %s", exc)
+            """Auto-return to idle after the state playlist finishes.
 
+            Scheduled on a background thread to avoid calling show_idle()
+            from within the VLC EndReached callback (which fires on the Tk
+            thread).  Stopping/destroying a Tk window from its own thread
+            causes deadlocks and leaves the renderer state stuck.
+
+            Only returns to idle if the renderer is still in the expected
+            state — avoids clobbering a newer state (e.g. openDoor arrives
+            while processing is still playing).
+            """
+            logger.info("State playlist %r finished — checking for return to idle.", state)
+            threading.Thread(
+                target=self._async_return_to_idle,
+                args=(state,),
+                name="tsv6-return-to-idle",
+                daemon=True,
+            ).start()
+
+        # Looping playlists don't auto-return to idle — the caller is
+        # expected to swap to a different screen explicitly (e.g. the
+        # deposit_item loop is ended by show_product_display on success).
         return self._renderer.play_video_loop(
-            mp4_paths, state=state, loop=False, on_end=_return_to_idle
+            mp4_paths,
+            state=state,
+            loop=loop,
+            on_end=None if loop else _return_to_idle,
         )
 
     def show_offline(self) -> bool:
@@ -472,6 +553,31 @@ class TSV6NativeBackend:
         if self._renderer is None:
             return False
         return self._renderer.show_offline()
+
+    def _async_return_to_idle(self, expected_state: str) -> None:
+        """Thread-safe wrapper to return to idle from a VLC callback.
+
+        Only transitions to idle if the renderer is still in
+        *expected_state*, so a newer state (e.g. openDoor → deposit_item)
+        is not clobbered.
+        """
+        try:
+            time.sleep(0.3)  # Brief delay to let VLC's EndReached cleanup finish
+            if self._renderer is not None:
+                current = self._renderer.get_metrics().get("state", "")
+                if current == expected_state:
+                    logger.info(
+                        "Renderer still in %r — returning to idle.", expected_state
+                    )
+                    self.show_idle()
+                else:
+                    logger.info(
+                        "Renderer moved to %r (was %r) — skipping return to idle.",
+                        current,
+                        expected_state,
+                    )
+        except Exception as exc:
+            logger.warning("Async return to idle failed: %s", exc)
 
     # ── Protocol callbacks ────────────────────────────────────────────────────
 
@@ -533,15 +639,34 @@ class TSV6NativeBackend:
         except (TypeError, ValueError):
             speed = 3
 
-        # Font family: server may send a curated dropdown value (fontFamily)
-        # and/or a custom override (fontFamilyCustom) which wins when set.
+        # Ticker height — must be parsed early so font-size pct calc can use it.
+        ticker_height = 0
+        try:
+            ticker_height = int(ticker.get("tickerHeight") or 0)
+        except (TypeError, ValueError):
+            ticker_height = 0
+
+        # Font family: server may send as "fontFamily", "tickerFont", or
+        # a custom override "fontFamilyCustom" which wins when set.
         font_family = str(
-            ticker.get("fontFamilyCustom") or ticker.get("fontFamily") or ""
+            ticker.get("fontFamilyCustom")
+            or ticker.get("fontFamily")
+            or ticker.get("tickerFont")
+            or ""
         ).strip()
         try:
             font_size_pct = float(ticker.get("fontSizePct") or 0)
         except (TypeError, ValueError):
             font_size_pct = 0.0
+        # Server may also send an absolute font-size in px via "tickerFontSizeCss".
+        # Convert to a percentage of the ticker height for the renderer.
+        if not font_size_pct:
+            try:
+                abs_px = float(ticker.get("tickerFontSizeCss") or 0)
+                if abs_px > 0 and ticker_height > 0:
+                    font_size_pct = (abs_px / ticker_height) * 100
+            except (TypeError, ValueError):
+                pass
         color = str(ticker.get("color") or "").strip()
         background = str(ticker.get("background") or ticker.get("backgroundColor") or "").strip()
         bold = bool(ticker.get("bold"))
@@ -554,10 +679,10 @@ class TSV6NativeBackend:
 
         logger.info(
             "_apply_ticker -> show_ticker(text=%r, enabled=%s, scroll=%s, speed=%s, "
-            "font=%r, size_pct=%s, color=%r, bg=%r, bold=%s, italic=%s, weight=%s, css=%r)",
+            "font=%r, size_pct=%s, color=%r, bg=%r, bold=%s, italic=%s, weight=%s, css=%r, ticker_h=%s)",
             text, enabled and bool(text), behavior in ("scroll", "slide"), speed,
             font_family, font_size_pct, color, background, bold, italic, font_weight,
-            custom_css,
+            custom_css, ticker_height,
         )
         self._renderer.show_ticker(
             text=text,
@@ -572,6 +697,7 @@ class TSV6NativeBackend:
             italic=italic,
             font_weight=font_weight,
             custom_css=custom_css,
+            ticker_height=ticker_height,
         )
 
     def _on_sync(
