@@ -434,7 +434,7 @@ class TSV6NativeBackend:
         is skipped.
         """
         try:
-            duration = float(os.environ.get("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "5"))
+            duration = float(os.environ.get("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "3.5"))
         except ValueError:
             duration = 5.0
         threading.Thread(

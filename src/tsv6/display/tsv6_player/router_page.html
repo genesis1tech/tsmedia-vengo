@@ -66,19 +66,62 @@
     object-position: center center;
   }
 
-  /* Product display: product image + QR overlay */
+  /* Product display: product image above, brand/title beneath */
   #product-container {
     display: none;
     position: relative;
     width: 100%;
     height: 100%;
+    flex-direction: column;
+    background: #000;
+  }
+
+  /* Image area — fills upper 70% of the container */
+  #product-image-wrap {
+    width: 100%;
+    height: 70%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
   }
 
   #product-image {
-    width: 100%;
-    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: contain;
     object-position: center center;
+  }
+
+  /* Brand + title beneath the image — lower 30% */
+  #product-info {
+    width: 100%;
+    height: 30%;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #ffffff;
+    background: #000000;
+    padding: 16px 24px;
+    box-sizing: border-box;
+  }
+  #product-info-brand {
+    font-family: "Arial Black", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 28px;
+    color: #d91e18;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  #product-info-name {
+    font-family: "Arial Black", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 36px;
+    line-height: 1.15;
+    word-wrap: break-word;
   }
 
   /* Text-only product card — shown for first-scan cold UPC where the
@@ -123,17 +166,6 @@
     line-height: 1.4;
     max-width: 90%;
     color: #cccccc;
-  }
-
-  #qr-overlay {
-    position: absolute;
-    bottom: 8px;
-    right: 8px;
-    width: 96px;
-    height: 96px;
-    background: #fff;
-    padding: 4px;
-    border-radius: 4px;
   }
 
   /* Idle placeholder shown when no command has arrived yet */
@@ -245,16 +277,21 @@
       <!-- Image asset -->
       <img id="main-image" src="" alt="Asset" />
 
-      <!-- Product display: product image + QR code overlay, plus a text-only
+      <!-- Product display: image above, brand/title beneath, plus a text-only
            card shown when no image URL is available (cold UPC first scan). -->
       <div id="product-container">
-        <img id="product-image" src="" alt="Product" />
+        <div id="product-image-wrap">
+          <img id="product-image" src="" alt="Product" />
+        </div>
+        <div id="product-info">
+          <div id="product-info-brand"></div>
+          <div id="product-info-name"></div>
+        </div>
         <div id="product-text" style="display:none;">
           <div id="product-text-name"></div>
           <div id="product-text-brand"></div>
           <div id="product-text-desc"></div>
         </div>
-        <img id="qr-overlay" src="" alt="QR code" />
       </div>
 
       <!-- Idle placeholder. Wi-Fi access is via long-press gesture (5s hold)
@@ -277,7 +314,7 @@
   var mainImage      = document.getElementById("main-image");
   var productCont    = document.getElementById("product-container");
   var productImage   = document.getElementById("product-image");
-  var qrOverlay      = document.getElementById("qr-overlay");
+  var productInfo    = document.getElementById("product-info");
   var idlePh         = document.getElementById("idle-placeholder");
   var tickerEl       = document.getElementById("ticker");
   var tickerContent  = document.getElementById("ticker-content");
@@ -318,7 +355,7 @@
     mainImage.src                = "";
     productCont.style.display    = "none";
     productImage.src             = "";
-    qrOverlay.src                = "";
+    if (productInfo) productInfo.style.display = "none";
     idlePh.style.display         = "none";
     mainZone.classList.remove("video-zone");
     // Re-enable the long-press catcher when leaving idle.
@@ -349,13 +386,12 @@
   }
 
   /**
-   * show_product — display a product image with a QR-code overlay,
+   * show_product — display a product image with brand + title beneath,
    * or a text-only card when no image URL is available.
    *
    * Expected (image present):
    *   { action: "show_product", image: "https://.../foo.webp" | "foo.webp",
-   *     qr_url: "https://...",
-   *     product_name?, product_brand?, product_desc? }
+   *     product_name?, product_brand?, product_desc?, qr_url? }
    * Expected (text-only fallback — first cold UPC scan):
    *   { action: "show_product", image: "" | null,
    *     product_name: "…", product_brand: "…", product_desc: "…",
@@ -368,6 +404,8 @@
     var nameEl  = document.getElementById("product-text-name");
     var brandEl = document.getElementById("product-text-brand");
     var descEl  = document.getElementById("product-text-desc");
+    var infoBrandEl = document.getElementById("product-info-brand");
+    var infoNameEl  = document.getElementById("product-info-name");
 
     var img = cmd.image ? String(cmd.image).trim() : "";
     var hasImage = img && img !== "null";
@@ -380,25 +418,22 @@
       productImage.src = src;
       productImage.style.display = "";
       if (productText) productText.style.display = "none";
+      // Show brand + title beneath the image
+      if (infoBrandEl) infoBrandEl.textContent = cmd.product_brand || "";
+      if (infoNameEl)  infoNameEl.textContent  = cmd.product_name  || "";
+      if (productInfo) productInfo.style.display = "flex";
     } else {
       // Cold UPC first scan — render the text-only card from the V2 payload.
       productImage.removeAttribute("src");
       productImage.style.display = "none";
+      if (productInfo) productInfo.style.display = "none";
       if (nameEl)  nameEl.textContent  = cmd.product_name  || "";
       if (brandEl) brandEl.textContent = cmd.product_brand || "";
       if (descEl)  descEl.textContent  = cmd.product_desc  || "";
       if (productText) productText.style.display = "flex";
     }
 
-    // QR code overlay.
-    if (cmd.qr_src) {
-      qrOverlay.src = "/assets/" + encodeURIComponent(cmd.qr_src);
-    } else if (cmd.qr_url) {
-      qrOverlay.src =
-        "https://api.qrserver.com/v1/create-qr-code/?size=88x88&data=" +
-        encodeURIComponent(cmd.qr_url);
-    }
-    productCont.style.display = "block";
+    productCont.style.display = "flex";
   }
 
   /**
