@@ -469,6 +469,9 @@ class TestShowProductDisplay:
             image_path=Path("/tmp/img.jpg"),
             qr_url="https://example.com/qr",
             nfc_url="https://example.com/nfc",
+            product_name="",
+            product_brand="",
+            product_desc="",
         )
 
     def test_forwards_without_nfc_url(
@@ -496,6 +499,127 @@ class TestShowProductDisplay:
 
         _, kwargs = mock_renderer.show_product_display.call_args
         assert kwargs.get("nfc_url") is None
+
+    def test_https_image_url_passes_through_unchanged(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+    ):
+        """V2 cloud returns productImage as a full WebP URL.  The backend must
+        forward URLs verbatim (not wrap them in Path()) so Chromium loads them
+        directly."""
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+
+        webp_url = "https://s3.example.com/products/abc.webp"
+        tmp_backend.show_product_display(
+            product_image_path=webp_url,
+            qr_url="https://example.com/qr",
+        )
+
+        _, kwargs = mock_renderer.show_product_display.call_args
+        assert kwargs["image_path"] == webp_url, (
+            "Remote URLs must be forwarded as-is, not converted to Path"
+        )
+
+    def test_schedules_return_to_idle_after_success(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The product-display screen has no auto-return (HTML, not MP4).
+        show_product_display must schedule a delayed return-to-idle so the
+        device doesn't stick on the product card forever."""
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+        # Speed up the test — use a tiny duration window
+        monkeypatch.setenv("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "0.05")
+        # Renderer reports it stays in "product" so the guard fires show_idle
+        mock_renderer.get_metrics.return_value = {
+            **mock_renderer.get_metrics.return_value,
+            "state": "product",
+        }
+        # Stub idle-mp4 resolution so backend.show_idle() reaches the renderer
+        monkeypatch.setattr(
+            tmp_backend, "_resolve_idle_mp4s",
+            lambda: [tmp_path / "fake.mp4"],
+        )
+
+        tmp_backend.show_product_display(
+            product_image_path="/tmp/img.jpg",
+            qr_url="https://example.com/qr",
+        )
+
+        # Wait briefly for the daemon thread to fire
+        import time
+        deadline = time.time() + 1.0
+        while time.time() < deadline and mock_renderer.show_idle.call_count == 0:
+            time.sleep(0.02)
+
+        assert mock_renderer.show_idle.called, (
+            "Backend must schedule a return to idle after product display"
+        )
+
+    def test_skips_return_to_idle_if_state_changed(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+        monkeypatch,
+    ):
+        """If a follow-up scan transitions to a new state before the product
+        timer fires, the timer must NOT clobber that newer state with idle."""
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+        monkeypatch.setenv("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "0.05")
+        # Renderer reports it has moved on to processing for the next scan
+        mock_renderer.get_metrics.return_value = {
+            **mock_renderer.get_metrics.return_value,
+            "state": "processing",
+        }
+
+        tmp_backend.show_product_display(
+            product_image_path="/tmp/img.jpg",
+            qr_url="https://example.com/qr",
+        )
+
+        import time
+        time.sleep(0.2)  # let the timer fire
+
+        assert not mock_renderer.show_idle.called, (
+            "Return to idle must be skipped when renderer is in a newer state"
+        )
 
 
 # ── Tests: impression interruption on state transition ────────────────────────

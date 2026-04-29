@@ -47,6 +47,13 @@ _DEFAULT_VLC_ARGS: list[str] = [
     "--vout=gles2,xcb_x11",
     "--file-caching=1000",
     "--network-caching=1500",
+    # Disable audio entirely. The kiosk has no speakers and ALSA's "default"
+    # PCM is unconfigured, so leaving audio enabled produces hundreds of
+    # `snd_pcm_open_noupdate: Unknown PCM default` errors per second that
+    # flood journalctl and starve real logs. --aout=none silences the audio
+    # output module; --no-audio disables audio decoding/streams as well.
+    "--no-audio",
+    "--aout=none",
 ]
 
 
@@ -118,9 +125,21 @@ class VLCZonePlayer:
             logger.error("VLCZonePlayer.show: media_paths is empty.")
             return False
 
-        if self._running:
-            self.hide()
+        # If the Tk window and VLC instance are already alive, swap the
+        # playlist in place instead of tearing everything down.  Recreating
+        # the vlc.Instance per state transition triggers a libVLC libevent
+        # use-after-free that crashes the process with `epoll_ctl: Invalid
+        # argument` and exit 133.  Reusing the instance avoids that race
+        # entirely.
+        if (
+            self._running
+            and self._vlc_instance is not None
+            and self._tk_root is not None
+            and self._media_list_player is not None
+        ):
+            return self._swap_media_list(media_paths, loop, on_playlist_end)
 
+        # First-time start (or recovery after a previous hide): full setup.
         self._on_playlist_end = on_playlist_end if not loop else None
         self._ready_event.clear()
         self._running = True
@@ -135,6 +154,80 @@ class VLCZonePlayer:
         # Wait up to 5 seconds for the Tk window and VLC to initialise.
         if not self._ready_event.wait(timeout=5.0):
             logger.warning("VLCZonePlayer: Tk/VLC did not initialise within 5 s.")
+            return False
+        return True
+
+    def _swap_media_list(
+        self,
+        media_paths: list[Path],
+        loop: bool,
+        on_playlist_end: Any,
+    ) -> bool:
+        """Swap the active playlist on the existing VLC instance.
+
+        Builds a fresh media_list using the live ``_vlc_instance``, schedules
+        the actual stop+set+play work on the Tk thread (VLC objects are not
+        thread-safe), and returns immediately.  The EndReached callback is
+        always attached during ``_tk_main``; this method only updates the
+        ``_on_playlist_end`` attribute that the handler reads.
+        """
+        try:
+            import vlc
+        except ImportError:
+            logger.error("python-vlc not installed; cannot swap media list.")
+            return False
+
+        instance = self._vlc_instance
+        try:
+            new_list = instance.media_list_new()
+            for path in media_paths:
+                new_list.add_media(instance.media_new(str(path)))
+        except Exception as exc:
+            logger.error("Failed to build new media list: %s", exc)
+            return False
+
+        new_callback = on_playlist_end if not loop else None
+
+        mlp = self._media_list_player
+        tk_root = self._tk_root
+
+        def _apply_swap() -> None:
+            # CRITICAL: disarm the callback BEFORE mlp.stop().  Stopping the
+            # current player can synchronously fire a final EndReached event
+            # for the media that was still playing — if `_on_playlist_end`
+            # is already pointing at the NEW callback, that spurious end
+            # would consume the new one (it's one-shot), and the actual end
+            # of the new playlist would have no callback to fire.  This is
+            # what made the deposit_item playlist hang and never return to
+            # idle when scans came in fast enough that processing was still
+            # playing when show_deposit_item swapped in.
+            self._on_playlist_end = None
+            try:
+                try:
+                    mlp.stop()
+                except Exception:
+                    pass
+                mlp.set_media_list(new_list)
+                if loop:
+                    mlp.set_playback_mode(vlc.PlaybackMode.loop)
+                else:
+                    mlp.set_playback_mode(vlc.PlaybackMode.default)
+                # Arm the new callback only after the previous media is fully
+                # stopped and the new list is loaded.
+                self._on_playlist_end = new_callback
+                mlp.play()
+                logger.info(
+                    "VLCZonePlayer: swapped to %d file(s) (loop=%s)",
+                    len(media_paths),
+                    loop,
+                )
+            except Exception as exc:
+                logger.error("VLCZonePlayer media-list swap failed: %s", exc)
+
+        try:
+            tk_root.after(0, _apply_swap)
+        except Exception as exc:
+            logger.error("VLCZonePlayer: could not schedule swap on Tk thread: %s", exc)
             return False
         return True
 
@@ -268,20 +361,26 @@ class VLCZonePlayer:
 
         if loop:
             mlp.set_playback_mode(vlc.PlaybackMode.loop)
-        elif self._on_playlist_end is not None:
-            # When not looping, fire the callback once the last item finishes.
-            def _on_vlc_end(event: Any) -> None:
+
+        # Always attach the EndReached handler so subsequent _swap_media_list
+        # calls (which may switch from loop=True to loop=False) get the
+        # callback fired without needing to re-attach.  The handler reads
+        # the live `_on_playlist_end` attribute and no-ops when it's None.
+        # The callback itself must NOT touch Tk/VLC objects directly (doing
+        # so from an internal VLC thread causes epoll_ctl crashes); the
+        # backend's _return_to_idle wraps show_idle() in a daemon thread.
+        def _on_vlc_end(event: Any) -> None:
+            cb = self._on_playlist_end
+            if cb is not None:
+                self._on_playlist_end = None  # one-shot per playlist
                 try:
-                    cb = self._on_playlist_end
-                    if cb is not None:
-                        self._on_playlist_end = None  # one-shot
-                        cb()
+                    cb()
                 except Exception as exc:
                     logger.warning("on_playlist_end callback error: %s", exc)
 
-            mp.event_manager().event_attach(
-                vlc.EventType.MediaPlayerEndReached, _on_vlc_end
-            )
+        mp.event_manager().event_attach(
+            vlc.EventType.MediaPlayerEndReached, _on_vlc_end
+        )
 
         mlp.play()
         logger.info(
