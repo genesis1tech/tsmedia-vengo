@@ -93,6 +93,14 @@ class RouterServer:
         # Unbounded queue; callers should not flood this faster than 100 Hz.
         self._command_queue: queue.Queue[dict] = queue.Queue()
 
+        # Last show_ticker command, cached so that newly-connected SSE clients
+        # (initial page load OR EventSource auto-reconnect) immediately receive
+        # the current ticker config. Without this, a reconnect after the
+        # config event is lost-forever and the page falls back to the
+        # hard-coded TICKER_DEFAULT.
+        self._last_ticker_cmd: dict | None = None
+        self._ticker_lock = threading.Lock()
+
         # Last known pixel rect of the #main zone, set by POST /video_zone_rect
         self._video_zone_rect: tuple[int, int, int, int] | None = None
         self._rect_lock = threading.Lock()
@@ -159,6 +167,9 @@ class RouterServer:
         ``{"action": "show_idle"}``
             Return to the idle state (clears ``#main``).
         """
+        if command.get("action") == "show_ticker":
+            with self._ticker_lock:
+                self._last_ticker_cmd = dict(command)
         self._command_queue.put(command)
         logger.debug("Command enqueued: %s", command.get("action"))
 
@@ -275,6 +286,19 @@ class RouterServer:
             """
 
             def generate() -> Iterator[str]:
+                # Replay the last known show_ticker so newly-connected clients
+                # (initial load or EventSource reconnect) get the current
+                # ticker config immediately instead of falling back to the
+                # hard-coded default.
+                with server_self._ticker_lock:
+                    last_ticker = (
+                        dict(server_self._last_ticker_cmd)
+                        if server_self._last_ticker_cmd is not None
+                        else None
+                    )
+                if last_ticker is not None:
+                    yield _sse_event(last_ticker)
+
                 last_keepalive = time.monotonic()
                 while True:
                     now = time.monotonic()
