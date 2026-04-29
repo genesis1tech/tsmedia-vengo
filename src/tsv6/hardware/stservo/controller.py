@@ -262,6 +262,54 @@ class STServoController:
 
         return False
 
+    def _verify_reached(
+        self,
+        target: int,
+        op: str,
+        tolerance: int = 50,
+    ) -> bool:
+        """Read back position and confirm the servo physically reached target.
+
+        Guards against the silent-failure mode where _set_position returns
+        True and _wait_for_movement returns True (because nothing is moving)
+        but the servo never actually moved — typically because torque was
+        disabled. On mismatch, re-enables torque, retries the position write
+        once, and reports failure if it still doesn't reach.
+
+        Returns True if the servo is within ``tolerance`` of ``target``.
+        """
+        if not self._connected or not self.servo:
+            return True  # simulation mode — nothing to verify
+
+        actual = self.get_position()
+        if abs(actual - target) <= tolerance:
+            return True
+
+        logger.error(
+            f"{op}: position-write completed but servo at {actual}, target {target} "
+            f"(delta {abs(actual - target)} > {tolerance}). "
+            f"Likely torque was disabled or movement was blocked. Retrying once."
+        )
+        print(
+            f"{op}: servo did not reach target ({actual} vs {target}); "
+            f"re-enabling torque and retrying"
+        )
+        self._enable_torque(True)
+        if not self._set_position(target):
+            return False
+        self._wait_for_movement()
+
+        actual = self.get_position()
+        if abs(actual - target) <= tolerance:
+            logger.info(f"{op}: retry succeeded — servo now at {actual}")
+            return True
+
+        logger.error(
+            f"{op}: retry failed — servo still at {actual}, target {target}. "
+            f"Check servo power, USB serial connection, and obstruction state."
+        )
+        return False
+
     def open_door(self, angle: Optional[int] = None, hold_time: float = 3.0) -> bool:
         """
         Open door by moving servo to open position.
@@ -286,16 +334,28 @@ class STServoController:
                 else:
                     target = self.open_position
 
+                # Torque may have been disabled out from under us by a previous
+                # obstruction-retry exhaustion, by the obstruction-handler
+                # service on its own exit, or by an explicit disable_servo()
+                # call. A WritePosEx to a torque-off servo silently no-ops, so
+                # we always re-arm torque before issuing motion commands.
+                self._enable_torque(True)
+
                 logger.info(f"Opening door: moving to position {target}")
                 print(f"Opening door: moving to position {target}")
 
                 if not self._set_position(target):
                     return False
 
-                # Wait for movement to complete
-                self._wait_for_movement()
+                if not self._wait_for_movement():
+                    logger.warning(
+                        f"open_door: _wait_for_movement timed out "
+                        f"(target={target}, current={self.get_position()})"
+                    )
 
-                # Hold position
+                if not self._verify_reached(target, op="open_door"):
+                    return False
+
                 if hold_time > 0:
                     time.sleep(hold_time)
 
@@ -326,16 +386,24 @@ class STServoController:
             self.is_moving = True
 
             try:
+                # See open_door: defensively re-arm torque before motion.
+                self._enable_torque(True)
+
                 logger.info(f"Closing door: moving to position {self.closed_position}")
                 print(f"Closing door: moving to position {self.closed_position}")
 
                 if not self._set_position(self.closed_position):
                     return False
 
-                # Wait for movement to complete
-                self._wait_for_movement()
+                if not self._wait_for_movement():
+                    logger.warning(
+                        f"close_door: _wait_for_movement timed out "
+                        f"(target={self.closed_position}, current={self.get_position()})"
+                    )
 
-                # Hold position
+                if not self._verify_reached(self.closed_position, op="close_door"):
+                    return False
+
                 if hold_time > 0:
                     time.sleep(hold_time)
 
@@ -450,6 +518,12 @@ class STServoController:
             self.is_moving = True
 
             try:
+                # Re-arm torque before close attempts.  The previous obstruction-
+                # exhaustion path leaves torque disabled (so the user can free
+                # the obstruction); without this re-enable, a follow-up scan
+                # would silently fail to move the servo at all.
+                self._enable_torque(True)
+
                 for attempt in range(max_retries):
                     logger.info(f"Close attempt {attempt + 1}/{max_retries}")
                     print(f"Close attempt {attempt + 1}/{max_retries}")
