@@ -42,8 +42,10 @@ from tsv6.utils.memory_optimizer import MemoryOptimizer, MemoryThresholds, get_g
 from tsv6.monitoring.watchdog_monitor import WatchdogMonitor
 from tsv6.utils.connection_tracker import ConnectionTracker, ConnectionDeadlineMonitor
 from tsv6.utils.splash_screen import SplashScreen
-from tsv6.services.connection_status_indicator import ConnectionStatusIndicator
-from tsv6.services.sensor_status_indicator import SensorStatusIndicator
+# SensorStatusIndicator / ConnectionStatusIndicator removed — they created
+# extra Tk windows that conflicted with the VLC zone window and offered no
+# user value at the screen positions used. WiFi access is now via the 5s
+# long-press gesture or the LXDE root-window menu when the kiosk is stopped.
 
 # Sleep mode imports
 # Removed for memory-fix branch
@@ -94,6 +96,13 @@ try:
 except ImportError:
     TSV6_NATIVE_AVAILABLE = False
     print("TSV6 native backend not available")
+
+# Touchscreen long-press gesture (evdev-level, bypasses Chromium DOM)
+try:
+    from tsv6.display.tsv6_player.touch_gesture import LongPressWatcher
+    LONGPRESS_AVAILABLE = True
+except ImportError:
+    LONGPRESS_AVAILABLE = False
 
 
 class ProductionVideoPlayer:
@@ -158,6 +167,9 @@ class ProductionVideoPlayer:
         self._door_sequence_active = False
         self._door_sequence_lock = threading.Lock()
 
+        # Long-press touchscreen gesture watcher (evdev-level; starts in start())
+        self._long_press_watcher = None
+
         # Cloud-supplied playlist override for the recycle-sensor timeout path.
         # Set from the openDoor payload's noItemPlaylist field at door-sequence
         # start; consumed by _handle_recycle_failure when the sensor times out.
@@ -166,13 +178,8 @@ class ProductionVideoPlayer:
         # Splash screen for LTE startup wait
         self.splash_screen = None
         
-        # Connection status indicator overlay
-        self.connection_indicator = None
-        self.connection_indicator_thread = None
+        # Sensor / connection status indicator overlays removed — see import note above.
 
-        # Sensor status indicator overlay
-        self.sensor_indicator = None
-        self.sensor_indicator_thread = None
         
         # Initialize systemd recovery manager first (needed for connection deadline monitor)
         self.systemd_recovery = SystemdRecoveryManager(
@@ -283,68 +290,6 @@ class ProductionVideoPlayer:
             self.logger.warning(f"Failed to initialize watchdog monitor: {e}")
             self.watchdog_monitor = None
     
-    def _initialize_connection_indicator(self):
-        """Initialize and start connection status indicator overlay."""
-        try:
-            self.connection_indicator = ConnectionStatusIndicator()
-            self.connection_indicator_thread = threading.Thread(
-                target=self._run_connection_indicator,
-                daemon=True,
-                name="ConnectionIndicator"
-            )
-            self.connection_indicator_thread.start()
-            self.logger.info("Connection status indicator started")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize connection indicator: {e}")
-            self.connection_indicator = None
-
-    def _run_connection_indicator(self):
-        """Run the connection indicator in a background thread."""
-        try:
-            if self.connection_indicator:
-                self.connection_indicator.run()
-        except Exception as e:
-            self.logger.error(f"Connection indicator error: {e}")
-
-    def _initialize_sensor_indicator(self):
-        """Initialize and start status indicator overlay (sensors + network)."""
-        try:
-            # Reuse ConnectionStatusIndicator's network checks
-            net_checker = ConnectionStatusIndicator()
-
-            self.sensor_indicator = SensorStatusIndicator(
-                bin_level_check=lambda: (
-                    self.tof_sensor is not None
-                    and getattr(self.tof_sensor, '_connected', False)
-                ),
-                recycle_check=lambda: (
-                    self.recycle_sensor is not None
-                    and getattr(self.recycle_sensor, '_connected', False)
-                ),
-                network_check=lambda: (
-                    net_checker._check_wifi_status()
-                    or net_checker._check_lte_status()
-                ),
-            )
-            self.sensor_indicator_thread = threading.Thread(
-                target=self._run_sensor_indicator,
-                daemon=True,
-                name="SensorIndicator",
-            )
-            self.sensor_indicator_thread.start()
-            self.logger.info("Status indicator started (sensors + network)")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize status indicator: {e}")
-            self.sensor_indicator = None
-
-    def _run_sensor_indicator(self):
-        """Run the status indicator in a background thread."""
-        try:
-            if self.sensor_indicator:
-                self.sensor_indicator.run()
-        except Exception as e:
-            self.logger.error(f"Status indicator error: {e}")
-
     def _initialize_network_monitor(self):
         """Initialize network monitoring with enhanced recovery integration"""
         try:
@@ -1426,10 +1371,12 @@ class ProductionVideoPlayer:
                 product_data.get("noItemPlaylist") if isinstance(product_data, dict) else None
             )
 
-            # Show deposit waiting screen (replaces processing image)
-            if self.display_backend is not None:
-                self.display_backend.show_deposit_item()
-            elif self.video_player and hasattr(self.video_player, 'display_deposit_waiting'):
+            # The deposit-item playlist is already showing from _on_barcode_scanned
+            # (it loops through the entire transaction). Legacy VLC fallback
+            # still needs the explicit deposit-waiting trigger here.
+            if self.display_backend is None and self.video_player and hasattr(
+                self.video_player, 'display_deposit_waiting'
+            ):
                 self.video_player.display_deposit_waiting()
 
             # Run verified door sequence in background to avoid blocking MQTT
@@ -1608,6 +1555,17 @@ class ProductionVideoPlayer:
         product_brand = product_data.get('productBrand', '') or ''
         product_desc = product_data.get('productDesc', '') or ''
         product_playlist_override = product_data.get('productPlaylist') if isinstance(product_data, dict) else None
+
+        # Diagnostic: surface which V2 image field actually arrived so we can
+        # tell apart cold-UPC first-scan (productImage=null, text-only fallback)
+        # from warm-cache (productImage=WebP URL) on every successful recycle.
+        self.logger.info(
+            "Product image fields — productImage=%r productImageOriginal=%r imageUrl=%r resolved=%r",
+            product_data.get('productImage'),
+            product_data.get('productImageOriginal'),
+            product_data.get('imageUrl'),
+            product_image_path,
+        )
 
         if self.display_backend is not None:
             self.display_backend.show_product_display(
@@ -1885,9 +1843,13 @@ class ProductionVideoPlayer:
         try:
             self.logger.info(f"Barcode scanned: {barcode_data}")
 
-            # Show processing screen while awaiting AWS response
+            # Show the deposit-item playlist immediately on scan and let it
+            # loop for the entire transaction (AWS lookup, door open/close).
+            # The success path (_handle_recycle_success) and failure paths
+            # (_handle_recycle_failure / no_match / barcode_not_qr) swap to
+            # their own screens, which ends the loop.
             if self.display_backend is not None:
-                self.display_backend.show_processing()
+                self.display_backend.show_deposit_item()
             elif self.video_player and hasattr(self.video_player, 'next_video'):
                 # Legacy VLC: advance to the next video as the processing signal
                 self.video_player.root.after(0, self.video_player.next_video)
@@ -1935,9 +1897,6 @@ class ProductionVideoPlayer:
         self.running = True
         
         try:
-            # Start status indicator overlay (sensors + network, lower left)
-            self._initialize_sensor_indicator()
-            
             # Start monitoring systems
             if self.network_monitor:
                 self.network_monitor.start()
@@ -2011,6 +1970,12 @@ class ProductionVideoPlayer:
                     print(f"Connectivity Mode: {self.connectivity_manager.config.mode.value}")
                 print(f"AWS IoT: {self.aws_config['thing_name']} ready")
 
+                # Start long-press touchscreen gesture (evdev-level, bypasses
+                # Chromium DOM which is unreliable when VLC's Tk X11 window
+                # sits above Chromium in the stacking order). Only meaningful
+                # for the native backend which runs Chromium+VLC locally.
+                self._start_long_press_watcher()
+
                 # Headless main loop — wait for shutdown signal
                 try:
                     self.shutdown_event.wait()
@@ -2050,7 +2015,172 @@ class ProductionVideoPlayer:
             self.error_recovery.report_error("system", "startup_failure", str(e), "critical")
         finally:
             self.shutdown()
-    
+
+    def _toggle_vlc_window(self, hide: bool) -> None:
+        """Unmap (hide=True) or re-map (hide=False) the VLC Tk X11 window.
+
+        VLC renders in a sibling Tk window that sits ABOVE Chromium in the
+        stacking order (that is how video shows through the transparent #main
+        zone on the router page).  XConfigureWindow(Above) is ignored by the
+        compositor on the Pi, so for settings visibility we UNMAP the Tk
+        window entirely.  VLC keeps running underneath, invisible; when the
+        user exits settings we map the Tk window back and VLC resumes visible
+        playback.
+
+        IMPORTANT: There can be multiple Tk windows on screen at once
+        (status indicator overlay = 4x24 px tk, VLC = full-screen tk #2).
+        We must target the LARGEST tk-class window — the small overlays
+        should stay visible (they convey connection state to the user).
+        """
+        try:
+            from Xlib import display as xdisplay
+            d = xdisplay.Display()
+            root = d.screen().root
+
+            tk_windows: list = []  # (area, geometry, window) tuples
+
+            def walk(w):
+                try:
+                    cls = w.get_wm_class()
+                except Exception:
+                    cls = None
+                # Match any tk* class (e.g. "tk", "tk #2", ...).
+                if cls and isinstance(cls[0], str) and cls[0].startswith("tk"):
+                    try:
+                        geom = w.get_geometry()
+                        tk_windows.append((geom.width * geom.height, geom, w))
+                    except Exception:
+                        pass
+                try:
+                    for c in w.query_tree().children:
+                        walk(c)
+                except Exception:
+                    pass
+
+            walk(root)
+
+            if not tk_windows:
+                self.logger.warning(
+                    "VLC Tk window not found; skip %s", "unmap" if hide else "map"
+                )
+                d.close()
+                return
+
+            # Pick the largest by area — that's the fullscreen VLC window.
+            tk_windows.sort(key=lambda t: t[0], reverse=True)
+            area, geom, win = tk_windows[0]
+
+            if hide:
+                win.unmap()
+            else:
+                win.map()
+            d.sync()
+            d.close()
+
+            self.logger.info(
+                "VLC Tk window %s (size=%dx%d, area=%d, candidates=%d)",
+                "unmapped" if hide else "mapped",
+                geom.width, geom.height, area, len(tk_windows),
+            )
+        except Exception:
+            self.logger.exception("Toggle VLC window failed")
+
+    def _open_settings(self) -> None:
+        """Long-press callback: hide VLC and navigate Chromium to /settings."""
+        self._toggle_vlc_window(hide=True)
+        try:
+            import json
+            import urllib.request
+
+            import websocket
+
+            pages = json.loads(
+                urllib.request.urlopen(
+                    "http://127.0.0.1:9222/json", timeout=2
+                ).read()
+            )
+            tgt = next(
+                (
+                    p
+                    for p in pages
+                    if p.get("type") == "page" and "8765" in p.get("url", "")
+                ),
+                None,
+            )
+            if not tgt:
+                self.logger.warning("Long-press: no kiosk page found via CDP")
+                return
+            ws = websocket.create_connection(
+                tgt["webSocketDebuggerUrl"],
+                timeout=2,
+                origin="http://localhost:9222",
+            )
+            ws.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "Page.navigate",
+                        "params": {"url": "http://127.0.0.1:8765/settings"},
+                    }
+                )
+            )
+            ws.recv()
+            ws.close()
+            self.logger.info("Long-press: navigated kiosk to /settings")
+        except Exception:
+            self.logger.exception("Long-press: CDP navigate failed")
+
+    def _resume_from_settings(self) -> None:
+        """Wake callback: re-map the VLC Tk window after user exits settings."""
+        self._toggle_vlc_window(hide=False)
+
+    def _start_long_press_watcher(self) -> None:
+        """Start the evdev-level long-press gesture watcher.
+
+        Only meaningful when the native TSV6NativeBackend is active (which
+        runs Chromium + VLC locally).  The REST backend (PiSignageAdapter)
+        talks to a remote player — long-press to open local /settings would
+        have no effect there.
+        """
+        if not LONGPRESS_AVAILABLE:
+            self.logger.warning(
+                "LongPressWatcher not available — long-press gesture disabled"
+            )
+            return
+
+        # Only wire up for the native backend (Chromium+VLC running locally).
+        # Guard the isinstance check so it doesn't NameError when the native
+        # backend module failed to import (TSV6_NATIVE_AVAILABLE=False).
+        if not TSV6_NATIVE_AVAILABLE or not isinstance(
+            self.display_backend, TSV6NativeBackend
+        ):
+            self.logger.info(
+                "Long-press skipped: display backend is not TSV6NativeBackend"
+            )
+            return
+
+        hold_seconds = float(os.environ.get("TSV6_LONGPRESS_SECONDS", "5"))
+
+        # Wire the wake callback so POST /api/exit-settings re-maps the VLC
+        # Tk window when the user leaves the settings page.
+        renderer = getattr(self.display_backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_wake_callback"):
+            router.set_wake_callback(self._resume_from_settings)
+
+        self._long_press_watcher = LongPressWatcher(
+            self._open_settings, hold_seconds=hold_seconds
+        )
+        started = self._long_press_watcher.start()
+        if started:
+            self.logger.info(
+                "Long-press watcher started (hold=%.1fs)", hold_seconds
+            )
+        else:
+            self.logger.warning(
+                "Long-press watcher failed to start (no touchscreen device?)"
+            )
+
     def shutdown(self):
         """Graceful shutdown of all systems"""
         if not self.running:
@@ -2061,14 +2191,6 @@ class ProductionVideoPlayer:
         self.shutdown_event.set()
         
         try:
-            # Stop status indicator
-            if self.sensor_indicator:
-                try:
-                    self.sensor_indicator.stop()
-                    self.logger.info("Sensor indicator stopped")
-                except Exception as e:
-                    self.logger.warning(f"Error stopping sensor indicator: {e}")
-
             # Stop PiSignage health monitor
             if self.pisignage_health_monitor:
                 try:
@@ -2097,6 +2219,14 @@ class ProductionVideoPlayer:
             # Stop barcode scanning
             if self.barcode_scanner:
                 self.barcode_scanner.stop_scanning()
+
+            # Stop long-press gesture watcher
+            if self._long_press_watcher:
+                try:
+                    self._long_press_watcher.stop()
+                    self.logger.info("Long-press watcher stopped")
+                except Exception as e:
+                    self.logger.warning(f"Error stopping long-press watcher: {e}")
 
             # Stop AWS manager
             if self.aws_manager:
