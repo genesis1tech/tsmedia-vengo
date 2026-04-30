@@ -642,9 +642,10 @@ class TestTSV6RendererShowMethods:
         mock_vlc: MagicMock,
     ) -> None:
         renderer.show_offline()
-        cmd = self._first_command(mock_router)
-        assert cmd["action"] == "show_html"
-        assert "offline" in cmd["src"]
+        # show_offline sends hide_vengo_idle then show_html
+        cmds = [c[0][0] for c in mock_router.send_command.call_args_list]
+        show_html_cmd = next(c for c in cmds if c["action"] == "show_html")
+        assert "offline" in show_html_cmd["src"]
 
     def test_show_idle_sends_show_video_zone(
         self,

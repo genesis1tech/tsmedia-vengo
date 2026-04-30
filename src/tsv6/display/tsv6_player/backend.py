@@ -315,19 +315,31 @@ class TSV6NativeBackend:
 
     def show_idle(self) -> bool:
         """
-        Switch to the idle/attract loop.
+        Switch to the idle/attract loop — Vengo ads or VLC fallback.
 
         Resolves MP4 paths from the tsv6_idle_loop playlist cache, hands
         them to the renderer, and starts impression tracking for each asset.
         """
         self._interrupt_current_idle()
 
-        mp4_paths = self._resolve_idle_mp4s()
-        if not mp4_paths and self._renderer is not None:
-            logger.warning("show_idle: no MP4 assets found in idle loop playlist")
+        if self._renderer is None:
             return False
 
-        if self._renderer is None:
+        # Vengo ad server is the primary idle display
+        from tsv6.config.config import config
+        if config.vengo.enabled:
+            url = self._build_vengo_url()
+            if url:
+                ok = self._renderer.show_vengo_idle(url)
+                if ok:
+                    return True
+            # URL build failed — fall through to VLC idle
+            logger.warning("Vengo URL build failed, falling back to VLC idle")
+
+        # Fallback: VLC idle loop (PiSignage-pushed assets)
+        mp4_paths = self._resolve_idle_mp4s()
+        if not mp4_paths:
+            logger.warning("show_idle: no MP4 assets found in idle loop playlist")
             return False
 
         ok = self._renderer.show_idle(mp4_paths)
@@ -797,6 +809,24 @@ class TSV6NativeBackend:
                     asset_id,
                     exc,
                 )
+
+    def _build_vengo_url(self) -> str:
+        """Build the Vengo web player URL for this device."""
+        from tsv6.config.config import config
+        from urllib.parse import quote
+
+        vc = config.vengo
+        if not self._identity:
+            return ""
+
+        url = (
+            f"{vc.web_player_base_url}"
+            f"?organization_id={vc.organization_id}"
+            f"&ad_unit_id={self._identity.player_name}"
+        )
+        if vc.no_ad_url:
+            url += f"&no_ad_url={quote(vc.no_ad_url, safe='')}"
+        return url
 
     def _resolve_playlist_mp4s(
         self, playlist_name: str, fallback_to_any_mp4: bool = False

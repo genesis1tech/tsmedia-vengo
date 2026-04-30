@@ -99,6 +99,7 @@ def mock_renderer():
     m.start.return_value = True
     m.is_connected = True
     m.show_idle.return_value = True
+    m.show_vengo_idle.return_value = True
     m.show_processing.return_value = True
     m.show_deposit_item.return_value = True
     m.show_product_display.return_value = True
@@ -366,7 +367,11 @@ class TestOnSetPlaylist:
         mock_renderer,
         mock_recorder,
         mock_tracker,
+        monkeypatch,
     ):
+        from tsv6.config.config import config as _cfg
+        monkeypatch.setattr(_cfg.vengo, "enabled", False)
+
         _connect_backend(
             tmp_backend,
             mock_protocol,
@@ -546,6 +551,9 @@ class TestShowProductDisplay:
         """The product-display screen has no auto-return (HTML, not MP4).
         show_product_display must schedule a delayed return-to-idle so the
         device doesn't stick on the product card forever."""
+        from tsv6.config.config import config as _cfg
+        monkeypatch.setattr(_cfg.vengo, "enabled", False)
+
         _connect_backend(
             tmp_backend,
             mock_protocol,
@@ -635,7 +643,11 @@ class TestImpressionInterruption:
         mock_recorder,
         mock_tracker,
         tmp_path,
+        monkeypatch,
     ):
+        from tsv6.config.config import config as _cfg
+        monkeypatch.setattr(_cfg.vengo, "enabled", False)
+
         _connect_backend(
             tmp_backend,
             mock_protocol,
@@ -668,7 +680,11 @@ class TestImpressionInterruption:
         mock_recorder,
         mock_tracker,
         tmp_path,
+        monkeypatch,
     ):
+        from tsv6.config.config import config as _cfg
+        monkeypatch.setattr(_cfg.vengo, "enabled", False)
+
         _connect_backend(
             tmp_backend,
             mock_protocol,
