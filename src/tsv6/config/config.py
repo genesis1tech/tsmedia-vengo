@@ -474,6 +474,17 @@ class ConnectivityConfig:
 
 
 @dataclass
+class VengoConfig:
+    """Vengo ad server integration configuration."""
+    enabled: bool = field(default_factory=lambda: os.environ.get("VENGO_ENABLED", "true").lower() in ("true", "1", "yes"))
+    organization_id: str = field(default_factory=lambda: os.environ.get("VENGO_ORGANIZATION_ID", "g1tech"))
+    web_player_base_url: str = field(default_factory=lambda: os.environ.get("VENGO_WEB_PLAYER_BASE_URL", "https://vast.vengo.tv"))
+    no_ad_url: str = field(default_factory=lambda: os.environ.get("VENGO_NO_AD_URL", ""))
+    ad_slot_duration_secs: int = 30
+    fallback_to_pisignage: bool = True
+
+
+@dataclass
 class PiSignageLocalConfig:
     """
     Local PiSignage feature toggle and settings that don't belong in the
@@ -509,6 +520,7 @@ class Config:
         self.lte = LTEConfig()
         self.connectivity = ConnectivityConfig()
         self.pisignage = PiSignageLocalConfig()
+        self.vengo = VengoConfig()
 
     def get_aws_topics(self) -> dict:
         """Get formatted AWS IoT topics for this device"""
@@ -586,6 +598,7 @@ __all__ = [
     'LTEConfig',
     'ConnectivityConfig',
     'PiSignageLocalConfig',
+    'VengoConfig',
     'config'
 ]
 
