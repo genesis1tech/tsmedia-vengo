@@ -478,6 +478,7 @@ class VengoConfig:
     """Vengo ad server integration configuration."""
     enabled: bool = field(default_factory=lambda: os.environ.get("VENGO_ENABLED", "true").lower() in ("true", "1", "yes"))
     organization_id: str = field(default_factory=lambda: os.environ.get("VENGO_ORGANIZATION_ID", "g1tech"))
+    ad_unit_id_override: str = field(default_factory=lambda: os.environ.get("VENGO_AD_UNIT_ID", ""))
     web_player_base_url: str = field(default_factory=lambda: os.environ.get("VENGO_WEB_PLAYER_BASE_URL", "https://vast.vengo.tv"))
     no_ad_url: str = field(default_factory=lambda: os.environ.get("VENGO_NO_AD_URL", ""))
     ad_slot_duration_secs: int = 30

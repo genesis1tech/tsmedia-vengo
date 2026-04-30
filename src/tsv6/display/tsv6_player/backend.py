@@ -819,10 +819,11 @@ class TSV6NativeBackend:
         if not self._identity:
             return ""
 
+        ad_unit_id = vc.ad_unit_id_override or self._identity.player_name
         url = (
             f"{vc.web_player_base_url}"
             f"?organization_id={vc.organization_id}"
-            f"&ad_unit_id={self._identity.player_name}"
+            f"&ad_unit_id={ad_unit_id}"
         )
         if vc.no_ad_url:
             url += f"&no_ad_url={quote(vc.no_ad_url, safe='')}"
