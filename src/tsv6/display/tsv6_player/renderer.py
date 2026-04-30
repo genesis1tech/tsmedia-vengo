@@ -180,7 +180,7 @@ class TSV6Renderer:
         if not mp4_paths:
             logger.warning("play_video_loop: no mp4_paths provided (state=%s).", state)
             return False
-        self._soft_stop_vlc_if_active()
+        self._vlc.set_window_visible(True)
         self._router.send_command(
             {"action": "show_video_zone", "zone": "main", "rect": list(self._main_rect)}
         )
@@ -245,7 +245,8 @@ class TSV6Renderer:
         ``nfc_url`` is accepted for API symmetry with DisplayController; the
         renderer doesn't render NFC visuals.
         """
-        self._soft_stop_vlc_if_active()
+        self._vlc.set_window_visible(False)
+        self._router.send_command({"action": "hide_video_zone"})
         if image_path is None:
             image = ""
         elif isinstance(image_path, Path):

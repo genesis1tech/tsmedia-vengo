@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -66,6 +66,7 @@ def _make_renderer_mock() -> MagicMock:
     m = MagicMock()
     m.start.return_value = True
     m.is_connected = True
+    m.play_video_loop.return_value = True
     m.show_idle.return_value = True
     m.show_processing.return_value = True
     m.show_deposit_item.return_value = True
@@ -157,7 +158,11 @@ def flow_ctx(tmp_path: Path):
     cache = tmp_path / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "pepsi_30s.mp4").write_bytes(b"fake-mp4")
+    (cache / "processing.mp4").write_bytes(b"fake-mp4")
+    (cache / "deposit_item.mp4").write_bytes(b"fake-mp4")
     backend._write_playlist_cache(_IDLE_PLAYLIST, ["pepsi_30s.mp4"])
+    backend._write_playlist_cache("tsv6_processing", ["processing.mp4"])
+    backend._write_playlist_cache("tsv6_deposit_item", ["deposit_item.mp4"])
 
     yield {
         "backend": backend,
@@ -197,14 +202,24 @@ class TestFullRecycleFlow:
         # ── Step 2: Barcode scanned → show processing ─────────────────────────
         result = backend.show_processing()
         assert result is True
-        renderer.show_processing.assert_called_once()
+        renderer.play_video_loop.assert_called_with(
+            [flow_ctx["cache"] / "processing.mp4"],
+            state="processing",
+            loop=False,
+            on_end=ANY,
+        )
         # Idle impression was interrupted.
         assert backend._current_idle_asset is None
 
         # ── Step 3: AWS openDoor → show deposit item ──────────────────────────
         result = backend.show_deposit_item()
         assert result is True
-        renderer.show_deposit_item.assert_called_once()
+        renderer.play_video_loop.assert_called_with(
+            [flow_ctx["cache"] / "deposit_item.mp4"],
+            state="deposit_item",
+            loop=True,
+            on_end=None,
+        )
 
         # ── Step 4: Servo open + ToF detects item + Servo close ───────────────
         # (Servo/ToF are outside the display backend; no assertions here)
@@ -220,6 +235,9 @@ class TestFullRecycleFlow:
             image_path=Path("/tmp/product.jpg"),
             qr_url="https://reward.example.com/txn123",
             nfc_url="https://reward.example.com/nfc/txn123",
+            product_name="",
+            product_brand="",
+            product_desc="",
         )
 
         # ── Step 6: Transaction complete → return to idle ─────────────────────
@@ -254,7 +272,12 @@ class TestFullRecycleFlow:
         backend.show_idle()
         backend.show_processing()
 
-        renderer.show_processing.assert_called_once()
+        renderer.play_video_loop.assert_called_with(
+            [flow_ctx["cache"] / "processing.mp4"],
+            state="processing",
+            loop=False,
+            on_end=ANY,
+        )
 
     def test_show_deposit_item_fires_after_servo_open(self, flow_ctx):
         """show_deposit_item is called after the servo begins opening."""
@@ -265,7 +288,12 @@ class TestFullRecycleFlow:
         backend.show_processing()
         backend.show_deposit_item()
 
-        renderer.show_deposit_item.assert_called_once()
+        renderer.play_video_loop.assert_called_with(
+            [flow_ctx["cache"] / "deposit_item.mp4"],
+            state="deposit_item",
+            loop=True,
+            on_end=None,
+        )
 
     def test_show_product_display_fires_with_correct_payload(self, flow_ctx):
         """show_product_display receives the correct image/qr/nfc arguments."""
@@ -282,6 +310,9 @@ class TestFullRecycleFlow:
             image_path=Path("/images/coke.jpg"),
             qr_url="https://rewards.example.com/coke",
             nfc_url="https://nfc.example.com/coke",
+            product_name="",
+            product_brand="",
+            product_desc="",
         )
 
     def test_show_idle_fires_at_end_of_transaction(self, flow_ctx):

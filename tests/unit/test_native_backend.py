@@ -389,7 +389,7 @@ class TestOnSetPlaylist:
         call_kwargs = mock_tracker.on_play_start.call_args
         assert call_kwargs.kwargs.get("playlist_name") == _IDLE_PLAYLIST
 
-    def test_setplaylist_processing_calls_show_processing_no_impression(
+    def test_setplaylist_processing_is_ignored_no_impression(
         self,
         tmp_backend,
         mock_protocol,
@@ -409,8 +409,8 @@ class TestOnSetPlaylist:
 
         tmp_backend._on_setplaylist("tsv6_processing")
 
-        mock_renderer.show_processing.assert_called_once()
-        # No impression should be started for system playlists.
+        mock_renderer.show_processing.assert_not_called()
+        # No impression should be started for ignored transient playlists.
         mock_tracker.on_play_start.assert_not_called()
 
     def test_setplaylist_returns_ack_string(

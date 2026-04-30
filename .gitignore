@@ -4,6 +4,10 @@
 # Git worktrees
 .worktrees/
 
+# Local Factory/Droid state
+.factory/
+.missions/
+
 # Python-generated files
 __pycache__/
 *.py[oc]

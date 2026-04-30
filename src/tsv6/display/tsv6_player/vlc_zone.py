@@ -91,6 +91,7 @@ class VLCZonePlayer:
         self._running = False
         self._ready_event = threading.Event()
         self._on_playlist_end: Any = None  # callable invoked when non-loop playlist finishes
+        self._window_visible = True
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -248,6 +249,28 @@ class VLCZonePlayer:
         if self._media_player:
             self._media_player.pause()
 
+    def set_window_visible(self, visible: bool) -> None:
+        """Map or unmap the VLC Tk window without destroying libVLC."""
+        self._window_visible = visible
+        if self._tk_root is None:
+            return
+
+        def _apply_visibility() -> None:
+            try:
+                if visible:
+                    self._tk_root.deiconify()
+                    self._tk_root.lift()
+                    self._tk_root.wm_attributes("-topmost", True)
+                else:
+                    self._tk_root.withdraw()
+            except Exception as exc:
+                logger.warning("VLCZonePlayer visibility change failed: %s", exc)
+
+        try:
+            self._tk_root.after(0, _apply_visibility)
+        except Exception as exc:
+            logger.warning("VLCZonePlayer could not schedule visibility change: %s", exc)
+
     def next(self) -> None:
         """Skip to the next item in the playlist."""
         if self._media_list_player:
@@ -351,6 +374,8 @@ class VLCZonePlayer:
         root.geometry(f"{w}x{h}+{x}+{y}")
         root.configure(background="black")
         root.wm_attributes("-topmost", True)
+        if not self._window_visible:
+            root.withdraw()
         self._tk_root = root
 
         # VLC instance.

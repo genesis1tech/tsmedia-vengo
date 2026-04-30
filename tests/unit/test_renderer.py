@@ -485,10 +485,29 @@ class TestTSV6RendererShowMethods:
         image = tmp_path / "assets" / "page1.png"
         image.write_bytes(b"fake")
         renderer.show_product_display(image, "https://example.com/qr")
-        cmd = self._first_command(mock_router)
+        cmds = [call[0][0] for call in mock_router.send_command.call_args_list]
+        cmd = next(c for c in cmds if c["action"] == "show_product")
         assert cmd["action"] == "show_product"
         assert cmd["image"] == "page1.png"
         assert cmd["qr_url"] == "https://example.com/qr"
+
+    def test_show_product_display_unmaps_vlc_window_without_destroying_instance(
+        self,
+        renderer: TSV6Renderer,
+        mock_router: MagicMock,
+        mock_vlc: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Product HTML must reveal Chromium without destroying/recreating VLC."""
+        mock_vlc.is_playing.return_value = True
+        image = tmp_path / "assets" / "page1.png"
+        image.write_bytes(b"fake")
+
+        renderer.show_product_display(image, "https://example.com/qr")
+
+        mock_vlc.set_window_visible.assert_called_once_with(False)
+        mock_vlc.soft_stop.assert_not_called()
+        mock_vlc.hide.assert_not_called()
 
     def test_show_no_match_sends_show_html(
         self,
@@ -559,6 +578,25 @@ class TestTSV6RendererShowMethods:
         mp4 = tmp_path / "idle.mp4"
         mp4.write_bytes(b"fake video")
         renderer.show_idle([mp4])
+        mock_vlc.show.assert_called_once()
+
+    def test_show_idle_remaps_vlc_window_without_soft_stopping_first(
+        self,
+        renderer: TSV6Renderer,
+        mock_router: MagicMock,
+        mock_vlc: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returning to VLC should remap the window and let VLCZonePlayer swap media."""
+        mock_vlc.is_playing.return_value = True
+        mp4 = tmp_path / "idle.mp4"
+        mp4.write_bytes(b"fake video")
+
+        renderer.show_idle([mp4])
+
+        mock_vlc.set_window_visible.assert_called_once_with(True)
+        mock_vlc.soft_stop.assert_not_called()
+        mock_vlc.hide.assert_not_called()
         mock_vlc.show.assert_called_once()
 
     def test_show_idle_empty_list_returns_false(
