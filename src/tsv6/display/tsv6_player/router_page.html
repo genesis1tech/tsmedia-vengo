@@ -294,6 +294,9 @@
         </div>
       </div>
 
+      <!-- Vengo ad server web player iframe -->
+      <iframe id="vengo-player" scrolling="no" style="display:none; width:100%; height:100%; border:0; background:#000; position:absolute; top:0; left:0; z-index:1;"></iframe>
+
       <!-- Idle placeholder. Wi-Fi access is via long-press gesture (5s hold)
            or via the LXDE root-window menu when the kiosk is not running. -->
       <div id="idle-placeholder">
@@ -361,6 +364,12 @@
     // Re-enable the long-press catcher when leaving idle.
     var catcher = document.getElementById("tsv6-longpress-catcher");
     if (catcher) catcher.style.pointerEvents = "auto";
+    // Hide Vengo ad iframe so overlays render correctly
+    var vengoPlayer = document.getElementById("vengo-player");
+    if (vengoPlayer) {
+      vengoPlayer.style.display = "none";
+      vengoPlayer.src = "";
+    }
   }
 
   // ── Command handlers ──────────────────────────────────────────────────────
@@ -603,6 +612,31 @@
     tickerEl.dataset.tsv6CssKeys = nextKeys.join(",");
   }
 
+  // ── Vengo ad server handlers ──────────────────────────────────────────────
+
+  function handleShowVengoIdle(cmd) {
+    clearMain();
+    var url = cmd.url || "";
+    if (!url) {
+      console.warn("show_vengo_idle: no URL provided");
+      handleShowIdle();
+      return;
+    }
+    _vengoUrl = url;
+    var iframe = document.getElementById("vengo-player");
+    iframe.src = url;
+    iframe.style.display = "block";
+  }
+
+  function handleHideVengoIdle() {
+    var iframe = document.getElementById("vengo-player");
+    if (iframe) {
+      iframe.style.display = "none";
+      iframe.src = "";
+    }
+    _vengoUrl = "";
+  }
+
   // ── SSE dispatcher ────────────────────────────────────────────────────────
   var HANDLERS = {
     "show_html":        handleShowHtml,
@@ -611,7 +645,9 @@
     "show_video_zone":  handleShowVideoZone,
     "hide_video_zone":  handleHideVideoZone,
     "show_idle":        handleShowIdle,
-    "show_ticker":      handleShowTicker
+    "show_ticker":      handleShowTicker,
+    "show_vengo_idle":  handleShowVengoIdle,
+    "hide_vengo_idle":  handleHideVengoIdle
   };
 
   function dispatch(cmd) {
@@ -622,6 +658,28 @@
       console.warn("TSV6: unknown action:", cmd.action);
     }
   }
+
+  // ── Vengo web player message listener ─────────────────────────────────────
+  var _vengoUrl = "";
+  window.addEventListener("message", function(event) {
+    var msg = event.data;
+    if (msg === "ALL_ADS_COMPLETED") {
+      console.log("Vengo: all ads completed — refreshing");
+      var iframe = document.getElementById("vengo-player");
+      if (iframe && _vengoUrl) {
+        iframe.src = _vengoUrl + "&_t=" + Date.now();
+      }
+    } else if (msg === "AD_ERROR") {
+      console.warn("Vengo: ad error — falling back to idle");
+      handleShowIdle();
+    } else if (msg === "STARTED") {
+      console.log("Vengo: ad started");
+    } else if (msg === "COMPLETE") {
+      console.log("Vengo: ad complete");
+    } else if (msg === "ON_ADS_MANAGER_LOADED") {
+      console.log("Vengo: ads manager loaded");
+    }
+  });
 
   // ── Connect to SSE stream ─────────────────────────────────────────────────
   function connectSSE() {
