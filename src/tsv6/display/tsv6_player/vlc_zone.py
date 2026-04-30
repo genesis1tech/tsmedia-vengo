@@ -19,18 +19,18 @@ Thread-safety
 -------------
 All public methods are designed to be called from one orchestration thread.
 The ``_tk_thread`` owns the Tkinter event loop and must be the only thread
-calling Tkinter APIs.  Public methods that need Tk state schedule work via
-``_tk_root.after(0, ...)`` where necessary, but for most operations the
-caller does not need a synchronous result.
+calling Tkinter APIs. Public methods that need Tk state enqueue work for the
+Tk thread to drain on its next update tick.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,7 @@ class VLCZonePlayer:
         self._ready_event = threading.Event()
         self._on_playlist_end: Any = None  # callable invoked when non-loop playlist finishes
         self._window_visible = True
+        self._tk_tasks: queue.Queue[tuple[Callable[[], None], str]] = queue.Queue()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -190,7 +191,6 @@ class VLCZonePlayer:
         new_callback = on_playlist_end if not loop else None
 
         mlp = self._media_list_player
-        tk_root = self._tk_root
 
         def _apply_swap() -> None:
             # CRITICAL: disarm the callback BEFORE mlp.stop().  Stopping the
@@ -225,10 +225,7 @@ class VLCZonePlayer:
             except Exception as exc:
                 logger.error("VLCZonePlayer media-list swap failed: %s", exc)
 
-        try:
-            tk_root.after(0, _apply_swap)
-        except Exception as exc:
-            logger.error("VLCZonePlayer: could not schedule swap on Tk thread: %s", exc)
+        if not self._enqueue_tk_task(_apply_swap, "media-list swap"):
             return False
         return True
 
@@ -242,7 +239,7 @@ class VLCZonePlayer:
             logger.warning("update_rect called before show().")
             return
         x, y, w, h = rect
-        self._tk_root.after(0, lambda: self._apply_rect(x, y, w, h))
+        self._enqueue_tk_task(lambda: self._apply_rect(x, y, w, h), "rect update")
 
     def pause(self) -> None:
         """Toggle pause on the VLC media player."""
@@ -250,7 +247,7 @@ class VLCZonePlayer:
             self._media_player.pause()
 
     def set_window_visible(self, visible: bool) -> None:
-        """Map or unmap the VLC Tk window without destroying libVLC."""
+        """Raise or lower the VLC Tk window without destroying libVLC."""
         self._window_visible = visible
         if self._tk_root is None:
             return
@@ -262,14 +259,12 @@ class VLCZonePlayer:
                     self._tk_root.lift()
                     self._tk_root.wm_attributes("-topmost", True)
                 else:
-                    self._tk_root.withdraw()
+                    self._tk_root.wm_attributes("-topmost", False)
+                    self._tk_root.lower()
             except Exception as exc:
                 logger.warning("VLCZonePlayer visibility change failed: %s", exc)
 
-        try:
-            self._tk_root.after(0, _apply_visibility)
-        except Exception as exc:
-            logger.warning("VLCZonePlayer could not schedule visibility change: %s", exc)
+        self._enqueue_tk_task(_apply_visibility, "visibility change")
 
     def next(self) -> None:
         """Skip to the next item in the playlist."""
@@ -322,7 +317,9 @@ class VLCZonePlayer:
             self._vlc_instance = None
         if self._tk_root:
             try:
-                self._tk_root.after(0, self._tk_root.destroy)
+                self._clear_tk_tasks()
+                root = self._tk_root
+                self._enqueue_tk_task(root.destroy, "Tk destroy")
             except Exception:
                 pass
             self._tk_root = None
@@ -439,13 +436,46 @@ class VLCZonePlayer:
 
         # Run the Tk event loop until self._running becomes False.
         while self._running:
+            self._drain_tk_tasks()
             try:
                 root.update()
             except tk.TclError:
                 break
             time.sleep(0.016)  # ~60 Hz poll
 
+        self._drain_tk_tasks()
+
     def _apply_rect(self, x: int, y: int, w: int, h: int) -> None:
         """Apply a geometry change from within the Tk thread."""
         if self._tk_root:
             self._tk_root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _enqueue_tk_task(self, task: Callable[[], None], description: str) -> bool:
+        if self._tk_root is None:
+            return False
+        if threading.current_thread() is self._tk_thread:
+            try:
+                task()
+            except Exception as exc:
+                logger.warning("VLCZonePlayer %s failed: %s", description, exc)
+            return True
+        self._tk_tasks.put((task, description))
+        return True
+
+    def _drain_tk_tasks(self) -> None:
+        while True:
+            try:
+                task, description = self._tk_tasks.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                task()
+            except Exception as exc:
+                logger.warning("VLCZonePlayer %s failed: %s", description, exc)
+
+    def _clear_tk_tasks(self) -> None:
+        while True:
+            try:
+                self._tk_tasks.get_nowait()
+            except queue.Empty:
+                return

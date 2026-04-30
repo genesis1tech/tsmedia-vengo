@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -399,6 +400,98 @@ class TestCdpSerialization:
         kiosk._ws_url = None
         with pytest.raises(RuntimeError, match="CDP not connected"):
             kiosk._cdp_send("Page.reload", {})
+
+
+# --------------------------------------------------------------------------- #
+#  VLCZonePlayer — Tk-thread task scheduling                                  #
+# --------------------------------------------------------------------------- #
+
+class TestVLCZonePlayerScheduling:
+    def test_visibility_uses_internal_queue_and_lowers_for_hidden_state(self) -> None:
+        player = VLCZonePlayer()
+        root = MagicMock()
+        player._tk_root = root
+
+        player.set_window_visible(False)
+
+        root.after.assert_not_called()
+        player._drain_tk_tasks()
+        root.wm_attributes.assert_called_once_with("-topmost", False)
+        root.lower.assert_called_once()
+        root.withdraw.assert_not_called()
+
+    def test_swap_media_list_uses_internal_queue_not_tk_after(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        fake_vlc = SimpleNamespace(
+            PlaybackMode=SimpleNamespace(loop="loop", default="default")
+        )
+        monkeypatch.setitem(sys.modules, "vlc", fake_vlc)
+
+        media_list = MagicMock()
+        instance = MagicMock()
+        instance.media_list_new.return_value = media_list
+        instance.media_new.side_effect = lambda path: f"media:{path}"
+        media_list_player = MagicMock()
+        root = MagicMock()
+
+        player = VLCZonePlayer()
+        player._running = True
+        player._tk_root = root
+        player._vlc_instance = instance
+        player._media_list_player = media_list_player
+
+        mp4 = tmp_path / "state.mp4"
+        mp4.write_bytes(b"fake")
+
+        assert player._swap_media_list([mp4], loop=False, on_playlist_end=None) is True
+
+        root.after.assert_not_called()
+        media_list_player.play.assert_not_called()
+
+        player._drain_tk_tasks()
+
+        media_list.add_media.assert_called_once_with(f"media:{mp4}")
+        media_list_player.stop.assert_called_once()
+        media_list_player.set_media_list.assert_called_once_with(media_list)
+        media_list_player.set_playback_mode.assert_called_once_with("default")
+        media_list_player.play.assert_called_once()
+
+    def test_hide_discards_queued_media_swaps_before_destroy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        fake_vlc = SimpleNamespace(
+            PlaybackMode=SimpleNamespace(loop="loop", default="default")
+        )
+        monkeypatch.setitem(sys.modules, "vlc", fake_vlc)
+
+        instance = MagicMock()
+        instance.media_list_new.return_value = MagicMock()
+        media_list_player = MagicMock()
+        media_player = MagicMock()
+        root = MagicMock()
+
+        player = VLCZonePlayer()
+        player._running = True
+        player._tk_root = root
+        player._vlc_instance = instance
+        player._media_list_player = media_list_player
+        player._media_player = media_player
+
+        mp4 = tmp_path / "state.mp4"
+        mp4.write_bytes(b"fake")
+        player._swap_media_list([mp4], loop=False, on_playlist_end=None)
+
+        player.hide()
+        player._drain_tk_tasks()
+
+        media_list_player.set_media_list.assert_not_called()
+        media_list_player.play.assert_not_called()
+        root.destroy.assert_called_once()
 
 
 # --------------------------------------------------------------------------- #
