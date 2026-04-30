@@ -253,6 +253,25 @@ class VLCZonePlayer:
         if self._media_list_player:
             self._media_list_player.next()
 
+    def soft_stop(self) -> None:
+        """Stop playback but keep the VLC instance and Tk window alive.
+
+        Use when the display is switching to a non-VLC state (e.g. product
+        display HTML) and will need to resume VLC later.  Avoids the
+        use-after-free crash (exit 133) that occurs when ``hide()`` destroys
+        the libVLC instance and a subsequent ``show()`` recreates it.
+        """
+        if self._media_list_player:
+            try:
+                self._media_list_player.stop()
+            except Exception:
+                pass
+        if self._media_player:
+            try:
+                self._media_player.stop()
+            except Exception:
+                pass
+
     def stop(self) -> None:
         """Stop playback and destroy the Tk window."""
         self.hide()

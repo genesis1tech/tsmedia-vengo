@@ -1,0 +1,55 @@
+{
+  "$schema": "https://factory.ai/schema/settings.json",
+  "models": {
+    "aliases": {
+      "mission.orchestrator": "gemini-3.1-pro",
+      "mission.worker": "glm-5.1",
+      "mission.validator": "gpt-5.4-mini"
+    }
+  },
+  "mission": {
+    "heartbeat_minutes": 15,
+    "max_validator_retries": 2,
+    "control_port": 7777,
+    "auto_open_browser": true,
+    "skill_forge_max_minutes": 10,
+    "missions_root": ".missions",
+    "default_skill_scope": "mission",
+    "promote_after_uses": 2,
+    "use_gh_for_pr": true,
+    "research_order": ["gh", "context7", "exa", "websearch"],
+    "autonomy": {
+      "default_preset": "interactive",
+      "default_max_wall_minutes": 480,
+      "default_out_of_scope_policy": "pause",
+      "default_dependency_addition_policy": "pause",
+      "default_pr_merge_authority": "human",
+      "default_ci_failure_policy": "retry-once-then-escalate",
+      "default_phase_failure_policy": "escalate"
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git worktree *)",
+      "Bash(git status)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(git merge:*)",
+      "Bash(gh pr *)",
+      "Bash(gh issue *)",
+      "Bash(gh search *)",
+      "Bash(gh api *)",
+      "Bash(gh repo *)",
+      "Bash(python3 *)",
+      "Bash(jq:*)",
+      "Read",
+      "Write",
+      "Edit"
+    ]
+  }
+}

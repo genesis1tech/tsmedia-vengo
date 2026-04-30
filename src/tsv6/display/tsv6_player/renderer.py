@@ -245,7 +245,7 @@ class TSV6Renderer:
         ``nfc_url`` is accepted for API symmetry with DisplayController; the
         renderer doesn't render NFC visuals.
         """
-        self._stop_vlc_if_active()
+        self._soft_stop_vlc_if_active()
         if image_path is None:
             image = ""
         elif isinstance(image_path, Path):
@@ -396,6 +396,18 @@ class TSV6Renderer:
         """Stop VLC and send ``hide_video_zone`` if VLC was playing."""
         if self._vlc.is_playing():
             self._vlc.hide()
+            self._router.send_command({"action": "hide_video_zone"})
+
+    def _soft_stop_vlc_if_active(self) -> None:
+        """Stop VLC playback but keep the instance alive for reuse.
+
+        Avoids the libVLC use-after-free crash (exit 133 / SIGTRAP) that
+        occurs when ``hide()`` destroys the instance and ``show()`` recreates
+        it shortly after — the exact pattern triggered by
+        ``show_product_display`` followed by ``show_idle`` 3.5s later.
+        """
+        if self._vlc.is_playing():
+            self._vlc.soft_stop()
             self._router.send_command({"action": "hide_video_zone"})
 
     def _refresh_main_rect(self) -> None:
