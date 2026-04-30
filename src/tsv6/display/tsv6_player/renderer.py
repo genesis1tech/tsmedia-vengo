@@ -180,7 +180,7 @@ class TSV6Renderer:
         if not mp4_paths:
             logger.warning("play_video_loop: no mp4_paths provided (state=%s).", state)
             return False
-        self._stop_vlc_if_active()
+        self._soft_stop_vlc_if_active()
         self._router.send_command(
             {"action": "show_video_zone", "zone": "main", "rect": list(self._main_rect)}
         )
