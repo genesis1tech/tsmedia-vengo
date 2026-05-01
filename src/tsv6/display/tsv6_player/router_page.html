@@ -30,9 +30,9 @@
     height: 100%;
   }
 
-  /* Main content zone — leaves space at bottom for the TSV6 footer.
-     Height is adjusted dynamically via --tsv6-ticker-h when the server
-     sends a tickerHeight value. */
+  /* Main content zone — leaves space at bottom for the TSV6 footer except
+     when the Vengo web player is active. Vengo must occupy the full screen
+     and the ticker is layered over it. */
   #main {
     position: absolute;
     top: 0; left: 0;
@@ -43,6 +43,9 @@
     transition: background-color 0.1s ease;
   }
   body.product-active #main {
+    height: 100%;
+  }
+  body.vengo-active #main {
     height: 100%;
   }
 
@@ -441,6 +444,7 @@
     if (productInfo) productInfo.style.display = "none";
     idlePh.style.display         = "none";
     document.body.classList.remove("product-active");
+    document.body.classList.remove("vengo-active");
     mainZone.classList.remove("video-zone");
     // Re-enable the long-press catcher when leaving idle.
     var catcher = document.getElementById("tsv6-longpress-catcher");
@@ -727,6 +731,7 @@
       return;
     }
     _vengoUrl = url;
+    document.body.classList.add("vengo-active");
     var iframe = document.getElementById("vengo-player");
     iframe.src = url;
     iframe.style.display = "block";
@@ -739,6 +744,7 @@
       iframe.src = "";
     }
     _vengoUrl = "";
+    document.body.classList.remove("vengo-active");
   }
 
   // ── SSE dispatcher ────────────────────────────────────────────────────────
