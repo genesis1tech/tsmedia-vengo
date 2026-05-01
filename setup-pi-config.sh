@@ -93,7 +93,12 @@ sudo sed -i '/# ==* TSV6/,/^$/d' "$CONFIG_FILE" 2>/dev/null || true
 # Remove old gpu_mem settings
 sudo sed -i '/^gpu_mem=/d' "$CONFIG_FILE"
 
-# Add DSI display configuration with Pi 5 enhancements
+# Remove any older DSI-only HDMI disable settings before writing the TSV6 block.
+sudo sed -i '/^hdmi_ignore_hotplug=/d' "$CONFIG_FILE" 2>/dev/null || true
+sudo sed -i '/^hdmi_ignore_composite=/d' "$CONFIG_FILE" 2>/dev/null || true
+sudo sed -i '/^hdmi_blanking=/d' "$CONFIG_FILE" 2>/dev/null || true
+
+# Add DSI display configuration with Pi 5 enhancements and HDMI enabled.
 sudo tee -a "$CONFIG_FILE" > /dev/null << 'EOL'
 
 # ====================================================================
@@ -107,6 +112,13 @@ dtparam=audio=on
 disable_overscan=1
 framebuffer_width=800
 framebuffer_height=480
+
+# HDMI output for external portable monitor.
+# DSI settings above remain unchanged; HDMI is enabled as a second framebuffer.
+hdmi_force_hotplug=1
+hdmi_group=2
+hdmi_mode=82
+hdmi_drive=2
 
 # Power management for stable operation
 dtparam=pwr_led_gpio=off
@@ -196,6 +208,7 @@ echo "  - Filesystem expanded"
 echo "  - Console autologin configured"
 echo "  - Boot splash disabled"
 echo "  - Waveshare 7\" DSI display configured"
+echo "  - HDMI output enabled for external portable monitor (1080p60)"
 echo "  - GPU memory: 256MB"
 echo "  - PCIe Gen 3 enabled"
 echo "  - CMA: 256M"

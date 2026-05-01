@@ -269,7 +269,7 @@ fi
 sudo systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
 
 # Configure Waveshare DSI display with Pi 5 optimizations
-info "Configuring Waveshare 7-inch DSI display (Pi 5 optimized)..."
+info "Configuring Waveshare 7-inch DSI display plus HDMI output (Pi 5 optimized)..."
 CONFIG_FILE="/boot/firmware/config.txt"
 
 # Backup existing config
@@ -277,7 +277,12 @@ if [[ -f "$CONFIG_FILE" ]]; then
     sudo cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d_%H%M%S)"
 fi
 
-# Add DSI display configuration with Pi 5 enhancements
+# Remove any older DSI-only HDMI disable settings before writing the TSV6 block.
+sudo sed -i '/^hdmi_ignore_hotplug=/d' "$CONFIG_FILE" 2>/dev/null || true
+sudo sed -i '/^hdmi_ignore_composite=/d' "$CONFIG_FILE" 2>/dev/null || true
+sudo sed -i '/^hdmi_blanking=/d' "$CONFIG_FILE" 2>/dev/null || true
+
+# Add DSI display configuration with Pi 5 enhancements and HDMI enabled.
 sudo tee -a "$CONFIG_FILE" > /dev/null << 'EOL'
 
 # ====================================================================
@@ -291,6 +296,13 @@ dtparam=audio=on
 disable_overscan=1
 framebuffer_width=800
 framebuffer_height=480
+
+# HDMI output for external portable monitor.
+# DSI settings above remain unchanged; HDMI is enabled as a second framebuffer.
+hdmi_force_hotplug=1
+hdmi_group=2
+hdmi_mode=82
+hdmi_drive=2
 
 # Power management for stable operation
 dtparam=pwr_led_gpio=off
@@ -308,7 +320,7 @@ max_framebuffers=2
 cma=256M@256M
 EOL
 
-info "DSI display configuration added to $CONFIG_FILE (Pi 5 optimized)"
+info "DSI display configuration and HDMI output added to $CONFIG_FILE (Pi 5 optimized)"
 
 # Set hostname with timestamp for uniqueness
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -893,10 +905,16 @@ else
 fi
 
 info "Checking display configuration..."
-if grep -q "vc4-kms-dsi-waveshare-panel" /boot/firmware/config.txt; then
+if grep -q "dtoverlay=vc4-kms-dsi-7inch" /boot/firmware/config.txt; then
     info "Waveshare DSI overlay configured"
 else
     warning "Waveshare DSI overlay not found in config.txt"
+fi
+
+if grep -q "^hdmi_force_hotplug=1" /boot/firmware/config.txt; then
+    info "HDMI output enabled for external portable monitor"
+else
+    warning "HDMI output setting not found in config.txt"
 fi
 
 info "Checking GPU memory allocation..."

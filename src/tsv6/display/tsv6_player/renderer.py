@@ -197,9 +197,14 @@ class TSV6Renderer:
     def show_vengo_idle(self, url: str) -> bool:
         """Display the Vengo ad player iframe as idle content.
 
-        Stops VLC if playing, then sends show_vengo_idle SSE command with the URL.
+        Parks VLC, then sends show_vengo_idle SSE command with the URL.
         """
-        self._stop_vlc_if_active()
+        # A completed one-shot state playlist can leave VLC with its final
+        # frame mapped even though is_playing() is already false. Always park
+        # the VLC window before revealing Chromium/Vengo idle content.
+        self._vlc.soft_stop()
+        self._vlc.set_window_visible(False)
+        self._router.send_command({"action": "hide_video_zone"})
         self._router.send_command({
             "action": "show_vengo_idle",
             "url": url,
@@ -286,6 +291,11 @@ class TSV6Renderer:
             }
         )
         self._state = "product"
+        return True
+
+    def hide_product_display(self) -> bool:
+        """Animate the product display away before returning to idle."""
+        self._router.send_command({"action": "hide_product"})
         return True
 
     def show_no_match(self) -> bool:
@@ -428,7 +438,7 @@ class TSV6Renderer:
         Avoids the libVLC use-after-free crash (exit 133 / SIGTRAP) that
         occurs when ``hide()`` destroys the instance and ``show()`` recreates
         it shortly after — the exact pattern triggered by
-        ``show_product_display`` followed by ``show_idle`` 3.5s later.
+        ``show_product_display`` followed by ``show_idle`` a few seconds later.
         """
         if self._vlc.is_playing():
             self._vlc.soft_stop()

@@ -96,8 +96,7 @@ class RouterServer:
         # Last show_ticker command, cached so that newly-connected SSE clients
         # (initial page load OR EventSource auto-reconnect) immediately receive
         # the current ticker config. Without this, a reconnect after the
-        # config event is lost-forever and the page falls back to the
-        # hard-coded TICKER_DEFAULT.
+        # config event is lost-forever and the page shows an empty ticker.
         self._last_ticker_cmd: dict | None = None
         self._ticker_lock = threading.Lock()
 
@@ -106,7 +105,7 @@ class RouterServer:
         self._rect_lock = threading.Lock()
 
         # Optional callback invoked by POST /api/exit-settings. Used to restart
-        # the idle player (VLC) when the user leaves the settings page.
+        # the idle display path when the user leaves the settings page.
         self._on_wake: "Optional[Callable[[], None]]" = None
 
         self._app = self._build_app()
@@ -450,7 +449,7 @@ class RouterServer:
 
         @app.route("/api/exit-settings", methods=["POST"])
         def exit_settings() -> Response:
-            """Resume the idle player (restarts VLC) and redirect browser to /."""
+            """Resume the idle display path and redirect browser to /."""
             if server_self._on_wake is not None:
                 try:
                     server_self._on_wake()

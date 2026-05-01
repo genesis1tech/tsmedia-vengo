@@ -440,13 +440,13 @@ class TSV6NativeBackend:
         product card would stick on screen forever.
 
         Duration is tunable via ``TSV6_PRODUCT_DISPLAY_DURATION_SECS``
-        (default 15s).  The state-guard in ``_async_return_to_idle`` makes
+        (default 5s).  The state-guard in ``_async_return_to_idle`` makes
         this safe against a follow-up scan: if the renderer has already
         moved on to a newer state when the timer fires, the return-to-idle
         is skipped.
         """
         try:
-            duration = float(os.environ.get("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "3.5"))
+            duration = float(os.environ.get("TSV6_PRODUCT_DISPLAY_DURATION_SECS", "5"))
         except ValueError:
             duration = 5.0
         threading.Thread(
@@ -468,6 +468,10 @@ class TSV6NativeBackend:
                     "Product display window elapsed (%.1fs) — returning to idle.",
                     delay,
                 )
+                hide_product = getattr(self._renderer, "hide_product_display", None)
+                if callable(hide_product):
+                    hide_product()
+                    time.sleep(0.35)
                 self.show_idle()
             else:
                 logger.info(

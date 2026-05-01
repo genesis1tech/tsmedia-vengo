@@ -222,7 +222,7 @@
   var useSaved = false;
 
   function exitSettings() {
-    // Ping backend so it can resume the idle player (restart VLC) before we navigate away.
+    // Ping backend so it can resume the idle player before we navigate away.
     fetch("/api/exit-settings", { method: "POST" })
       .catch(function () {})
       .finally(function () { window.location.href = "/"; });

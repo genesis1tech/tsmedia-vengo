@@ -602,6 +602,16 @@ class TestTSV6RendererShowMethods:
         mock_vlc.soft_stop.assert_not_called()
         mock_vlc.hide.assert_not_called()
 
+    def test_hide_product_display_sends_hide_product(
+        self,
+        renderer: TSV6Renderer,
+        mock_router: MagicMock,
+        mock_vlc: MagicMock,
+    ) -> None:
+        renderer.hide_product_display()
+        cmd = self._first_command(mock_router)
+        assert cmd["action"] == "hide_product"
+
     def test_show_no_match_sends_show_html(
         self,
         renderer: TSV6Renderer,

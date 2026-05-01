@@ -120,33 +120,37 @@ class TestShowVengoIdle:
 
         assert result is True
 
-    def test_stops_vlc_if_active(
+    def test_parks_vlc_when_active(
         self,
         renderer: TSV6Renderer,
         mock_router: MagicMock,
         mock_vlc: MagicMock,
     ):
-        """Stops VLC playback before showing Vengo iframe."""
+        """Stops and lowers VLC playback before showing Vengo iframe."""
         mock_vlc.is_playing.return_value = True
 
         renderer.show_vengo_idle("https://vast.vengo.tv?org=1")
 
-        mock_vlc.hide.assert_called_once()
+        mock_vlc.soft_stop.assert_called_once()
+        mock_vlc.set_window_visible.assert_called_once_with(False)
         hide_cmd = _find_command(mock_router, "hide_video_zone")
         assert hide_cmd is not None
 
-    def test_does_not_stop_vlc_if_not_playing(
+    def test_parks_vlc_even_after_playback_ended(
         self,
         renderer: TSV6Renderer,
         mock_router: MagicMock,
         mock_vlc: MagicMock,
     ):
-        """Does not call VLC hide if VLC is not playing."""
+        """A finished MP4 can still leave its final frame mapped over Chromium."""
         mock_vlc.is_playing.return_value = False
 
         renderer.show_vengo_idle("https://vast.vengo.tv?org=1")
 
-        mock_vlc.hide.assert_not_called()
+        mock_vlc.soft_stop.assert_called_once()
+        mock_vlc.set_window_visible.assert_called_once_with(False)
+        hide_cmd = _find_command(mock_router, "hide_video_zone")
+        assert hide_cmd is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

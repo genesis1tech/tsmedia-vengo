@@ -590,6 +590,53 @@ class TestShowProductDisplay:
             "Backend must schedule a return to idle after product display"
         )
 
+    def test_default_product_display_duration_is_five_seconds(
+        self,
+        tmp_backend,
+        monkeypatch,
+    ):
+        """Product display should hold for five seconds unless overridden."""
+        captured: dict[str, object] = {}
+
+        class FakeThread:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def start(self):
+                pass
+
+        monkeypatch.delenv("TSV6_PRODUCT_DISPLAY_DURATION_SECS", raising=False)
+        monkeypatch.setattr(threading, "Thread", FakeThread)
+
+        tmp_backend._schedule_product_return_to_idle()
+
+        assert captured["args"] == ("product", 5.0)
+
+    def test_return_to_idle_animates_product_away_first(
+        self,
+        tmp_backend,
+        mock_renderer,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The product card should drop out before idle resumes."""
+        from tsv6.config.config import config as _cfg
+        monkeypatch.setattr(_cfg.vengo, "enabled", False)
+        monkeypatch.setattr(
+            tmp_backend, "_resolve_idle_mp4s",
+            lambda: [tmp_path / "fake.mp4"],
+        )
+        tmp_backend._renderer = mock_renderer
+        mock_renderer.get_metrics.return_value = {
+            **mock_renderer.get_metrics.return_value,
+            "state": "product",
+        }
+
+        tmp_backend._delayed_return_to_idle("product", 0)
+
+        mock_renderer.hide_product_display.assert_called_once()
+        mock_renderer.show_idle.assert_called_once()
+
     def test_skips_return_to_idle_if_state_changed(
         self,
         tmp_backend,

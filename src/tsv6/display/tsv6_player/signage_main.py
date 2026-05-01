@@ -273,13 +273,24 @@ def main() -> int:
                 logger.exception("Long-press: CDP navigate failed")
 
         def _resume_idle() -> None:
-            """Called when the user closes settings; remaps the Tk (VLC) window
-            so video is visible again. VLC was never stopped — it kept rendering
-            to its window while we had it unmapped."""
+            """Called when the user closes settings.
+
+            Remap the legacy VLC window if present, then explicitly restart the
+            idle display path. In Vengo mode this sends a fresh show_vengo_idle
+            command to Chromium; without it, returning from /settings can leave
+            the router page on the ready placeholder.
+            """
             _toggle_vlc_window(hide=False)
+            try:
+                if not backend.show_idle():
+                    logger.warning("Settings exit: backend.show_idle() returned false")
+                else:
+                    logger.info("Settings exit: idle display restarted")
+            except Exception:
+                logger.exception("Settings exit: failed to restart idle display")
 
         # Wire the wake callback into the router so POST /api/exit-settings
-        # restarts VLC playback when the user leaves the settings page.
+        # restarts idle playback when the user leaves the settings page.
         renderer = getattr(backend, "_renderer", None)
         router = getattr(renderer, "_router", None) if renderer else None
         if router is not None and hasattr(router, "set_wake_callback"):
