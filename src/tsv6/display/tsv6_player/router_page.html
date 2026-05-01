@@ -229,7 +229,7 @@
     fill: currentColor;
   }
 
-  /* ── Red "SCAN BARCODE TO RECYCLE" footer (preserved exactly) ────────────── */
+  /* ── Dynamic ticker footer ───────────────────────────────────────────────── */
   #ticker {
     position: absolute;
     bottom: 0; left: 0;
@@ -323,8 +323,8 @@
         <div id="idle-ip-address"></div>
       </div>
     </div>
-    <!-- Red branded footer; text is updated dynamically via the show_ticker command. -->
-    <div id="ticker"><span id="ticker-content">SCAN BARCODE TO RECYCLE</span></div>
+    <!-- Dynamic footer; text is populated via the show_ticker command. -->
+    <div id="ticker"><span id="ticker-content"></span></div>
   </div>
 
 <script>
@@ -342,7 +342,6 @@
   var idleIpAddress  = document.getElementById("idle-ip-address");
   var tickerEl       = document.getElementById("ticker");
   var tickerContent  = document.getElementById("ticker-content");
-  var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
   var idleIpUpdateInFlight = false;
   var idleIpUpdateTimer = null;
 
@@ -550,8 +549,8 @@
 
   /**
    * show_ticker — update the red footer text and style.
-   *   cmd.text        : string shown in the footer (falls back to TICKER_DEFAULT when empty)
-   *   cmd.enabled     : if false, revert to the branded default text
+   *   cmd.text        : string shown in the footer
+   *   cmd.enabled     : if false, clear the ticker text
    *   cmd.scroll      : true to animate as a horizontal marquee
    *   cmd.speed       : 1–10, higher is faster (scroll duration = ~60s/speed)
    *   cmd.fontFamily  : Google Fonts family name or a system font ("Roboto", "Arial Black", …)
@@ -564,7 +563,7 @@
    */
   function handleShowTicker(cmd) {
     cmd = cmd || {};
-    var text = (cmd.enabled && cmd.text) ? String(cmd.text) : TICKER_DEFAULT;
+    var text = (cmd.enabled && cmd.text) ? String(cmd.text) : "";
     tickerContent.textContent = text;
     var scroll = !!(cmd.enabled && cmd.scroll);
     tickerEl.classList.toggle("scroll", scroll);

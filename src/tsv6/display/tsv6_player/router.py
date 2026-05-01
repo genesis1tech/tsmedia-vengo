@@ -96,8 +96,7 @@ class RouterServer:
         # Last show_ticker command, cached so that newly-connected SSE clients
         # (initial page load OR EventSource auto-reconnect) immediately receive
         # the current ticker config. Without this, a reconnect after the
-        # config event is lost-forever and the page falls back to the
-        # hard-coded TICKER_DEFAULT.
+        # config event is lost-forever and the page shows an empty ticker.
         self._last_ticker_cmd: dict | None = None
         self._ticker_lock = threading.Lock()
 
