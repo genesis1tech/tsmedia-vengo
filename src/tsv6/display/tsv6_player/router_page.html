@@ -42,6 +42,9 @@
     overflow: hidden;
     transition: background-color 0.1s ease;
   }
+  body.product-active #main {
+    height: 100%;
+  }
 
   /* Transparent state — used when VLC renders behind this zone */
   #main.video-zone {
@@ -76,10 +79,10 @@
     background: #ffffff;
   }
 
-  /* Image area — fills the product screen while preserving image aspect ratio */
+  /* Image area — preserves image aspect ratio above the product details */
   #product-image-wrap {
     width: 100%;
-    height: 100%;
+    height: 74%;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -94,18 +97,18 @@
     object-position: center center;
   }
 
-  /* Brand + title beneath the image — lower 30% */
+  /* Brand + title beneath the image */
   #product-info {
     width: 100%;
-    height: 30%;
+    height: 26%;
     display: none;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
-    color: #ffffff;
-    background: #000000;
-    padding: 16px 24px;
+    color: #111111;
+    background: #ffffff;
+    padding: 8px 28px 28px;
     box-sizing: border-box;
   }
   #product-info-brand {
@@ -120,7 +123,7 @@
   #product-info-name {
     font-family: "Arial Black", Arial, sans-serif;
     font-weight: 900;
-    font-size: 36px;
+    font-size: 34px;
     line-height: 1.15;
     word-wrap: break-word;
   }
@@ -245,6 +248,9 @@
     z-index: 100;
     overflow: hidden;
     white-space: nowrap;
+  }
+  body.product-active #ticker {
+    display: none;
   }
   /* Fallback branded footer label — shown when no dynamic ticker is set. */
   #ticker-content {
@@ -408,6 +414,7 @@
     productImage.src             = "";
     if (productInfo) productInfo.style.display = "none";
     idlePh.style.display         = "none";
+    document.body.classList.remove("product-active");
     mainZone.classList.remove("video-zone");
     // Re-enable the long-press catcher when leaving idle.
     var catcher = document.getElementById("tsv6-longpress-catcher");
@@ -475,9 +482,9 @@
       productImage.src = src;
       productImage.style.display = "";
       if (productText) productText.style.display = "none";
-      if (infoBrandEl) infoBrandEl.textContent = "";
-      if (infoNameEl)  infoNameEl.textContent  = "";
-      if (productInfo) productInfo.style.display = "none";
+      if (infoBrandEl) infoBrandEl.textContent = cmd.product_brand || "";
+      if (infoNameEl)  infoNameEl.textContent  = cmd.product_name  || "";
+      if (productInfo) productInfo.style.display = "flex";
     } else {
       // Cold UPC first scan — render the text-only card from the V2 payload.
       productImage.removeAttribute("src");
@@ -489,6 +496,7 @@
       if (productText) productText.style.display = "flex";
     }
 
+    document.body.classList.add("product-active");
     productCont.style.display = "flex";
   }
 
