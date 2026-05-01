@@ -77,6 +77,27 @@
     height: 100%;
     flex-direction: column;
     background: #ffffff;
+    transform: translateY(-105%);
+    will-change: transform;
+    z-index: 4;
+  }
+
+  #product-container.product-visible {
+    animation: product-drop-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  #product-container.product-exiting {
+    animation: product-drop-out 300ms cubic-bezier(0.7, 0, 0.84, 0) both;
+  }
+
+  @keyframes product-drop-in {
+    from { transform: translateY(-105%); }
+    to   { transform: translateY(0); }
+  }
+
+  @keyframes product-drop-out {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-105%); }
   }
 
   /* Image area — preserves image aspect ratio above the product details */
@@ -344,6 +365,7 @@
   var tickerContent  = document.getElementById("ticker-content");
   var idleIpUpdateInFlight = false;
   var idleIpUpdateTimer = null;
+  var productHideTimer = null;
 
   function scheduleIdleIpAddressUpdate(delayMs) {
     if (!idleIpAddress) return;
@@ -405,11 +427,16 @@
 
   // ── Helper: hide all content slots ───────────────────────────────────────
   function clearMain() {
+    if (productHideTimer) {
+      clearTimeout(productHideTimer);
+      productHideTimer = null;
+    }
     mainIframe.style.display     = "none";
     mainIframe.src               = "";
     mainImage.style.display      = "none";
     mainImage.src                = "";
     productCont.style.display    = "none";
+    productCont.classList.remove("product-visible", "product-exiting");
     productImage.src             = "";
     if (productInfo) productInfo.style.display = "none";
     idlePh.style.display         = "none";
@@ -497,6 +524,28 @@
 
     document.body.classList.add("product-active");
     productCont.style.display = "flex";
+    productCont.classList.remove("product-visible", "product-exiting");
+    void productCont.offsetHeight;
+    productCont.classList.add("product-visible");
+  }
+
+  function handleHideProduct() {
+    if (productHideTimer) {
+      clearTimeout(productHideTimer);
+      productHideTimer = null;
+    }
+    if (!productCont || productCont.style.display === "none") {
+      document.body.classList.remove("product-active");
+      return;
+    }
+    productCont.classList.remove("product-visible");
+    productCont.classList.add("product-exiting");
+    productHideTimer = setTimeout(function () {
+      productCont.style.display = "none";
+      productCont.classList.remove("product-exiting");
+      document.body.classList.remove("product-active");
+      productHideTimer = null;
+    }, 320);
   }
 
   /**
@@ -697,6 +746,7 @@
     "show_html":        handleShowHtml,
     "show_image":       handleShowImage,
     "show_product":     handleShowProduct,
+    "hide_product":     handleHideProduct,
     "show_video_zone":  handleShowVideoZone,
     "hide_video_zone":  handleHideVideoZone,
     "show_idle":        handleShowIdle,

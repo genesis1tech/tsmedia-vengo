@@ -293,6 +293,11 @@ class TSV6Renderer:
         self._state = "product"
         return True
 
+    def hide_product_display(self) -> bool:
+        """Animate the product display away before returning to idle."""
+        self._router.send_command({"action": "hide_product"})
+        return True
+
     def show_no_match(self) -> bool:
         """Display the "no match" error screen.  Returns ``True`` always."""
         self._stop_vlc_if_active()
@@ -433,7 +438,7 @@ class TSV6Renderer:
         Avoids the libVLC use-after-free crash (exit 133 / SIGTRAP) that
         occurs when ``hide()`` destroys the instance and ``show()`` recreates
         it shortly after — the exact pattern triggered by
-        ``show_product_display`` followed by ``show_idle`` 3.5s later.
+        ``show_product_display`` followed by ``show_idle`` a few seconds later.
         """
         if self._vlc.is_playing():
             self._vlc.soft_stop()
