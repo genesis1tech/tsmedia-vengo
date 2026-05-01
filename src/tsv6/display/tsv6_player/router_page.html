@@ -181,6 +181,18 @@
     letter-spacing: 1px;
     gap: 24px;
   }
+  #idle-title {
+    text-align: center;
+  }
+  #idle-ip-address {
+    color: #777;
+    font-family: Arial, sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.3;
+    text-align: center;
+  }
 
   /* WiFi settings button on the idle/ready screen */
   #wifi-settings-btn {
@@ -300,7 +312,8 @@
       <!-- Idle placeholder. Wi-Fi access is via long-press gesture (5s hold)
            or via the LXDE root-window menu when the kiosk is not running. -->
       <div id="idle-placeholder">
-        TSV6 Ready
+        <div id="idle-title">tsMedia Player Ready</div>
+        <div id="idle-ip-address"></div>
       </div>
     </div>
     <!-- Red branded footer; text is updated dynamically via the show_ticker command. -->
@@ -319,9 +332,24 @@
   var productImage   = document.getElementById("product-image");
   var productInfo    = document.getElementById("product-info");
   var idlePh         = document.getElementById("idle-placeholder");
+  var idleIpAddress  = document.getElementById("idle-ip-address");
   var tickerEl       = document.getElementById("ticker");
   var tickerContent  = document.getElementById("ticker-content");
   var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
+
+  function updateIdleIpAddress() {
+    if (!idleIpAddress) return;
+    fetch("/api/wifi/status", { cache: "no-store" })
+      .then(function (response) { return response.json(); })
+      .then(function (status) {
+        idleIpAddress.textContent = status && status.ip ? status.ip : "";
+      })
+      .catch(function () {
+        idleIpAddress.textContent = "";
+      });
+  }
+  updateIdleIpAddress();
+  window.setInterval(updateIdleIpAddress, 60000);
 
   // Lazy-load a Google Fonts family once per family name. The ticker height is
   // 60px, so the browser only needs a handful of weights; we request 400/700/900
@@ -486,6 +514,7 @@
    */
   function handleShowIdle() {
     clearMain();
+    updateIdleIpAddress();
     idlePh.style.display = "flex";
     // Hide the long-press catcher so the WiFi settings button is tappable.
     var catcher = document.getElementById("tsv6-longpress-catcher");

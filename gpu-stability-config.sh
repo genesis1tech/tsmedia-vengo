@@ -48,20 +48,23 @@ configure_vc4_stability() {
         log "Configured VC4 with increased CMA allocation"
     fi
     
-    # Disable HDMI outputs since using DSI ribbon cable display
-    if ! grep -q "hdmi_ignore_hotplug=1" /boot/config.txt; then
-        echo "hdmi_ignore_hotplug=1" >> /boot/config.txt
-        echo "hdmi_ignore_composite=1" >> /boot/config.txt
-        echo "hdmi_blanking=1" >> /boot/config.txt
-        log "Disabled HDMI outputs for DSI-only operation"
+    # Keep DSI active and enable HDMI for an external portable monitor.
+    sed -i '/^hdmi_ignore_hotplug=/d' /boot/config.txt
+    sed -i '/^hdmi_ignore_composite=/d' /boot/config.txt
+    sed -i '/^hdmi_blanking=/d' /boot/config.txt
+
+    if ! grep -q "hdmi_force_hotplug=1" /boot/config.txt; then
+        echo "hdmi_force_hotplug=1" >> /boot/config.txt
+        echo "hdmi_group=2" >> /boot/config.txt
+        echo "hdmi_mode=82" >> /boot/config.txt  # 1920x1080 60Hz
+        echo "hdmi_drive=2" >> /boot/config.txt
+        log "Enabled HDMI output for external portable monitor"
     fi
-    
-    # Optimize for DSI display
-    if ! grep -q "display_auto_detect=0" /boot/config.txt; then
-        echo "display_auto_detect=0" >> /boot/config.txt
-        log "Disabled automatic display detection"
-    fi
-    fi
+
+    # Keep display auto-detection on so HDMI hotplug works alongside explicit DSI.
+    sed -i '/^display_auto_detect=/d' /boot/config.txt
+    echo "display_auto_detect=1" >> /boot/config.txt
+    log "Enabled display auto-detection for DSI + HDMI"
     
     # Disable power management features that can cause GPU instability
     if ! grep -q "avoid_warnings=1" /boot/config.txt; then
