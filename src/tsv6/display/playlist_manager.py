@@ -46,8 +46,8 @@ PLAYLIST_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "tsv6_no_match": {
         "description": "Barcode not recognised — cannot accept",
-        "assets": ["cannot_accept.jpg"],
-        "asset_dir": "event_images",
+        "assets": ["unrecognized-item-scanned.mp4"],
+        "asset_dir": "assets/videos",
         "layout": "1",
     },
     "tsv6_barcode_not_qr": {
