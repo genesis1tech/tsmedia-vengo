@@ -336,9 +336,25 @@
   var tickerEl       = document.getElementById("ticker");
   var tickerContent  = document.getElementById("ticker-content");
   var TICKER_DEFAULT = "SCAN BARCODE TO RECYCLE";
+  var idleIpUpdateInFlight = false;
+  var idleIpUpdateTimer = null;
+
+  function scheduleIdleIpAddressUpdate(delayMs) {
+    if (!idleIpAddress) return;
+    if (idleIpUpdateTimer !== null) {
+      window.clearTimeout(idleIpUpdateTimer);
+    }
+    idleIpUpdateTimer = window.setTimeout(updateIdleIpAddress, delayMs);
+  }
 
   function updateIdleIpAddress() {
     if (!idleIpAddress) return;
+    if (idleIpUpdateInFlight) return;
+    if (idleIpUpdateTimer !== null) {
+      window.clearTimeout(idleIpUpdateTimer);
+      idleIpUpdateTimer = null;
+    }
+    idleIpUpdateInFlight = true;
     fetch("/api/wifi/status", { cache: "no-store" })
       .then(function (response) { return response.json(); })
       .then(function (status) {
@@ -346,10 +362,13 @@
       })
       .catch(function () {
         idleIpAddress.textContent = "";
+      })
+      .then(function () {
+        idleIpUpdateInFlight = false;
+        scheduleIdleIpAddressUpdate(60000);
       });
   }
   updateIdleIpAddress();
-  window.setInterval(updateIdleIpAddress, 60000);
 
   // Lazy-load a Google Fonts family once per family name. The ticker height is
   // 60px, so the browser only needs a handful of weights; we request 400/700/900

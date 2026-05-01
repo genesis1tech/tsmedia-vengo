@@ -20,71 +20,109 @@ backup_file() {
     fi
 }
 
+resolve_file() {
+    local file="$1"
+    if command -v readlink >/dev/null 2>&1; then
+        readlink -f "$file"
+    else
+        echo "$file"
+    fi
+}
+
+get_boot_config_file() {
+    if [[ -f /boot/firmware/config.txt ]]; then
+        resolve_file /boot/firmware/config.txt
+    elif [[ -f /boot/config.txt ]]; then
+        resolve_file /boot/config.txt
+    else
+        echo "Could not find Raspberry Pi boot config file" >&2
+        exit 1
+    fi
+}
+
+get_boot_cmdline_file() {
+    if [[ -f /boot/firmware/cmdline.txt ]]; then
+        resolve_file /boot/firmware/cmdline.txt
+    elif [[ -f /boot/cmdline.txt ]]; then
+        resolve_file /boot/cmdline.txt
+    else
+        echo "Could not find Raspberry Pi boot cmdline file" >&2
+        exit 1
+    fi
+}
+
 configure_gpu_memory() {
     log "Configuring GPU memory allocation..."
-    backup_file "/boot/config.txt"
+    local config_file
+    config_file="$(get_boot_config_file)"
+    backup_file "$config_file"
     
     # Increase GPU memory to 128MB for stable video processing
-    if ! grep -q "gpu_mem=128" /boot/config.txt; then
-        echo "gpu_mem=128" >> /boot/config.txt
+    if ! grep -q "gpu_mem=128" "$config_file"; then
+        echo "gpu_mem=128" >> "$config_file"
         log "Set GPU memory to 128MB"
     fi
     
     # Disable GPU memory split dynamic allocation to prevent instability
-    if ! grep -q "gpu_mem_256=128" /boot/config.txt; then
-        echo "gpu_mem_256=128" >> /boot/config.txt
-        echo "gpu_mem_512=128" >> /boot/config.txt
-        echo "gpu_mem_1024=128" >> /boot/config.txt
+    if ! grep -q "gpu_mem_256=128" "$config_file"; then
+        echo "gpu_mem_256=128" >> "$config_file"
+        echo "gpu_mem_512=128" >> "$config_file"
+        echo "gpu_mem_1024=128" >> "$config_file"
         log "Set fixed GPU memory allocation for all RAM sizes"
     fi
 }
 
 configure_vc4_stability() {
     log "Configuring VC4 driver stability settings..."
+    local config_file
+    config_file="$(get_boot_config_file)"
     
     # Disable problematic VC4 features that cause atomic commit issues
-    if ! grep -q "dtoverlay=vc4-kms-v3d,cma-256" /boot/config.txt; then
-        echo "dtoverlay=vc4-kms-v3d,cma-256" >> /boot/config.txt
+    if ! grep -q "dtoverlay=vc4-kms-v3d,cma-256" "$config_file"; then
+        echo "dtoverlay=vc4-kms-v3d,cma-256" >> "$config_file"
         log "Configured VC4 with increased CMA allocation"
     fi
     
     # Keep DSI active and enable HDMI for an external portable monitor.
-    sed -i '/^hdmi_ignore_hotplug=/d' /boot/config.txt
-    sed -i '/^hdmi_ignore_composite=/d' /boot/config.txt
-    sed -i '/^hdmi_blanking=/d' /boot/config.txt
+    sed -i '/^hdmi_ignore_hotplug=/d' "$config_file"
+    sed -i '/^hdmi_ignore_composite=/d' "$config_file"
+    sed -i '/^hdmi_blanking=/d' "$config_file"
 
-    if ! grep -q "hdmi_force_hotplug=1" /boot/config.txt; then
-        echo "hdmi_force_hotplug=1" >> /boot/config.txt
-        echo "hdmi_group=2" >> /boot/config.txt
-        echo "hdmi_mode=82" >> /boot/config.txt  # 1920x1080 60Hz
-        echo "hdmi_drive=2" >> /boot/config.txt
+    if ! grep -q "hdmi_force_hotplug=1" "$config_file"; then
+        echo "hdmi_force_hotplug=1" >> "$config_file"
+        echo "hdmi_group=2" >> "$config_file"
+        echo "hdmi_mode=82" >> "$config_file"  # 1920x1080 60Hz
+        echo "hdmi_drive=2" >> "$config_file"
         log "Enabled HDMI output for external portable monitor"
     fi
 
     # Keep display auto-detection on so HDMI hotplug works alongside explicit DSI.
-    sed -i '/^display_auto_detect=/d' /boot/config.txt
-    echo "display_auto_detect=1" >> /boot/config.txt
+    sed -i '/^display_auto_detect=/d' "$config_file"
+    echo "display_auto_detect=1" >> "$config_file"
     log "Enabled display auto-detection for DSI + HDMI"
     
     # Disable power management features that can cause GPU instability
-    if ! grep -q "avoid_warnings=1" /boot/config.txt; then
-        echo "avoid_warnings=1" >> /boot/config.txt
-        echo "disable_overscan=1" >> /boot/config.txt
-        echo "max_usb_current=1" >> /boot/config.txt
+    if ! grep -q "avoid_warnings=1" "$config_file"; then
+        echo "avoid_warnings=1" >> "$config_file"
+        echo "disable_overscan=1" >> "$config_file"
+        echo "max_usb_current=1" >> "$config_file"
         log "Disabled power management warnings and overscan"
     fi
 }
 
 configure_kernel_parameters() {
     log "Configuring kernel parameters for video stability..."
-    backup_file "/boot/cmdline.txt"
+    local cmdline_file
+    cmdline_file="$(get_boot_cmdline_file)"
+    backup_file "$cmdline_file"
     
     # Add kernel parameters to improve video stability
-    local cmdline=$(cat /boot/cmdline.txt)
+    local cmdline
+    cmdline=$(cat "$cmdline_file")
     local new_params="cma=256M@256M"
     
     if [[ ! "$cmdline" =~ cma=256M ]]; then
-        echo "$cmdline $new_params" > /boot/cmdline.txt
+        echo "$cmdline $new_params" > "$cmdline_file"
         log "Added kernel parameters for stable video output"
     fi
 }

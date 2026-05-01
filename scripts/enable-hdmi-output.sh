@@ -69,23 +69,28 @@ if command -v xrandr >/dev/null 2>&1; then
     fi
 
     log "Current xrandr outputs:"
-    xrandr --query || warn "xrandr query failed; X11 may not be running yet"
+    if XRANDR_OUTPUT="$(xrandr --query 2>/dev/null)"; then
+        printf '%s\n' "$XRANDR_OUTPUT"
+    else
+        XRANDR_OUTPUT=""
+        warn "xrandr query failed; X11 may not be running yet"
+    fi
 
-    DSI_OUTPUT="$(xrandr --query 2>/dev/null | awk '/^DSI-[0-9]+ connected/ {print $1; exit}')"
+    DSI_OUTPUT="$(printf '%s\n' "$XRANDR_OUTPUT" | awk '/^DSI-[0-9]+ connected/ {print $1; exit}')"
 
     # Clear any stale mode from a connector that was connected before reboot
     # but is disconnected now. This happens on Pi 5 when switching between the
     # two micro-HDMI ports.
-    for output in $(xrandr --query 2>/dev/null | awk '/^HDMI.* disconnected/ {print $1}'); do
+    for output in $(printf '%s\n' "$XRANDR_OUTPUT" | awk '/^HDMI.* disconnected/ {print $1}'); do
         xrandr --output "$output" --off 2>/dev/null || true
     done
 
-    HDMI_OUTPUT="$(xrandr --query 2>/dev/null | awk '/^HDMI.* connected/ {print $1; exit}')"
+    HDMI_OUTPUT="$(printf '%s\n' "$XRANDR_OUTPUT" | awk '/^HDMI.* connected/ {print $1; exit}')"
     if [ -n "$HDMI_OUTPUT" ]; then
         log "Enabling connected HDMI output: $HDMI_OUTPUT"
         if [ -n "$DSI_OUTPUT" ]; then
             log "Keeping DSI primary and placing HDMI to the right: $DSI_OUTPUT -> $HDMI_OUTPUT"
-            if xrandr --query | awk -v out="$HDMI_OUTPUT" '
+            if printf '%s\n' "$XRANDR_OUTPUT" | awk -v out="$HDMI_OUTPUT" '
                 $1 == out {in_output = 1; next}
                 in_output && /^[^[:space:]]/ {in_output = 0}
                 in_output && $1 == "1920x1080" {found = 1}
