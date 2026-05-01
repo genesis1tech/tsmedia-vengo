@@ -66,29 +66,30 @@
     object-position: center center;
   }
 
-  /* Product display: product image above, brand/title beneath */
+  /* Product display: full-screen proportional image on a white canvas */
   #product-container {
     display: none;
     position: relative;
     width: 100%;
     height: 100%;
     flex-direction: column;
-    background: #000;
+    background: #ffffff;
   }
 
-  /* Image area — fills upper 70% of the container */
+  /* Image area — fills the product screen while preserving image aspect ratio */
   #product-image-wrap {
     width: 100%;
-    height: 70%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    background: #ffffff;
   }
 
   #product-image {
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
     object-position: center center;
   }
@@ -474,10 +475,9 @@
       productImage.src = src;
       productImage.style.display = "";
       if (productText) productText.style.display = "none";
-      // Show brand + title beneath the image
-      if (infoBrandEl) infoBrandEl.textContent = cmd.product_brand || "";
-      if (infoNameEl)  infoNameEl.textContent  = cmd.product_name  || "";
-      if (productInfo) productInfo.style.display = "flex";
+      if (infoBrandEl) infoBrandEl.textContent = "";
+      if (infoNameEl)  infoNameEl.textContent  = "";
+      if (productInfo) productInfo.style.display = "none";
     } else {
       // Cold UPC first scan — render the text-only card from the V2 payload.
       productImage.removeAttribute("src");
