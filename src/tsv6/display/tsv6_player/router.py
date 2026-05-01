@@ -106,7 +106,7 @@ class RouterServer:
         self._rect_lock = threading.Lock()
 
         # Optional callback invoked by POST /api/exit-settings. Used to restart
-        # the idle player (VLC) when the user leaves the settings page.
+        # the idle display path when the user leaves the settings page.
         self._on_wake: "Optional[Callable[[], None]]" = None
 
         self._app = self._build_app()
@@ -450,7 +450,7 @@ class RouterServer:
 
         @app.route("/api/exit-settings", methods=["POST"])
         def exit_settings() -> Response:
-            """Resume the idle player (restarts VLC) and redirect browser to /."""
+            """Resume the idle display path and redirect browser to /."""
             if server_self._on_wake is not None:
                 try:
                     server_self._on_wake()
