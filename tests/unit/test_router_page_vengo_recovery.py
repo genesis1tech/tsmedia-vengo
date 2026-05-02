@@ -32,6 +32,13 @@ def test_ad_error_refreshes_vengo_instead_of_showing_placeholder():
 def test_vengo_watchdog_refreshes_silent_iframe_stalls():
     html = _router_html()
 
-    assert "_VENGO_STALL_REFRESH_MS" in html
+    assert "_VENGO_POSTMESSAGE_TIMEOUT_MS = 120 * 1000" in html
     assert "startVengoWatchdog" in html
-    assert "no activity for " in html
+    assert "no postMessage for " in html
+
+
+def test_vengo_watchdog_tracks_iframe_postmessages():
+    html = _router_html()
+
+    assert "event.source === iframe.contentWindow" in html
+    assert "noteVengoMessage" in html

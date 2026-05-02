@@ -724,40 +724,40 @@
 
   // ── Vengo ad server handlers ──────────────────────────────────────────────
   var _vengoUrl = "";
-  var _vengoLastActivityAt = 0;
+  var _vengoLastMessageAt = 0;
   var _vengoWatchdogTimer = null;
-  var _VENGO_STALL_REFRESH_MS = 10 * 60 * 1000;
+  var _VENGO_POSTMESSAGE_TIMEOUT_MS = 120 * 1000;
 
   function vengoCacheBustUrl(url) {
     var separator = url.indexOf("?") === -1 ? "?" : "&";
     return url + separator + "_t=" + Date.now();
   }
 
-  function noteVengoActivity() {
-    _vengoLastActivityAt = Date.now();
+  function noteVengoMessage() {
+    _vengoLastMessageAt = Date.now();
   }
 
   function refreshVengoIdle(reason) {
     var iframe = document.getElementById("vengo-player");
     if (!iframe || !_vengoUrl || iframe.style.display === "none") return;
     console.warn("Vengo: refreshing iframe (" + reason + ")");
-    noteVengoActivity();
+    noteVengoMessage();
     iframe.src = vengoCacheBustUrl(_vengoUrl);
   }
 
   function startVengoWatchdog() {
     stopVengoWatchdog();
-    noteVengoActivity();
+    noteVengoMessage();
     _vengoWatchdogTimer = window.setInterval(function() {
       if (!_vengoUrl) {
         stopVengoWatchdog();
         return;
       }
-      var inactiveFor = Date.now() - _vengoLastActivityAt;
-      if (inactiveFor >= _VENGO_STALL_REFRESH_MS) {
-        refreshVengoIdle("no activity for " + Math.round(inactiveFor / 1000) + "s");
+      var silentFor = Date.now() - _vengoLastMessageAt;
+      if (silentFor >= _VENGO_POSTMESSAGE_TIMEOUT_MS) {
+        refreshVengoIdle("no postMessage for " + Math.round(silentFor / 1000) + "s");
       }
-    }, 60 * 1000);
+    }, 30 * 1000);
   }
 
   function stopVengoWatchdog() {
@@ -778,7 +778,7 @@
     _vengoUrl = url;
     document.body.classList.add("vengo-active");
     var iframe = document.getElementById("vengo-player");
-    noteVengoActivity();
+    noteVengoMessage();
     iframe.src = url;
     iframe.style.display = "block";
     startVengoWatchdog();
@@ -821,6 +821,10 @@
   // ── Vengo web player message listener ─────────────────────────────────────
   window.addEventListener("message", function(event) {
     var msg = event.data;
+    var iframe = document.getElementById("vengo-player");
+    if (iframe && event.source === iframe.contentWindow) {
+      noteVengoMessage();
+    }
     if (msg === "ALL_ADS_COMPLETED") {
       console.log("Vengo: all ads completed — refreshing");
       refreshVengoIdle("all ads completed");
@@ -828,13 +832,10 @@
       console.warn("Vengo: ad error — refreshing idle player");
       refreshVengoIdle("ad error");
     } else if (msg === "STARTED") {
-      noteVengoActivity();
       console.log("Vengo: ad started");
     } else if (msg === "COMPLETE") {
-      noteVengoActivity();
       console.log("Vengo: ad complete");
     } else if (msg === "ON_ADS_MANAGER_LOADED") {
-      noteVengoActivity();
       console.log("Vengo: ads manager loaded");
     }
   });
@@ -842,7 +843,7 @@
   var _vengoIframe = document.getElementById("vengo-player");
   if (_vengoIframe) {
     _vengoIframe.addEventListener("load", function() {
-      if (_vengoUrl) noteVengoActivity();
+      if (_vengoUrl) noteVengoMessage();
       console.log("Vengo: iframe loaded");
     });
     _vengoIframe.addEventListener("error", function() {

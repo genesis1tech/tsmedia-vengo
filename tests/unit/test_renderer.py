@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -279,6 +280,42 @@ class TestChromiumKioskCommandLine:
             height=1080,
         )
         assert "--window-size=1920,1080" in k._build_command()
+
+
+# --------------------------------------------------------------------------- #
+#  ChromiumKiosk — process output logging                                      #
+# --------------------------------------------------------------------------- #
+
+class TestChromiumKioskOutputLogging:
+    def test_chromium_log_path_can_be_overridden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_path = tmp_path / "logs" / "chromium.log"
+        monkeypatch.setenv("TSV6_CHROMIUM_LOG_PATH", str(log_path))
+        kiosk = ChromiumKiosk(url="http://127.0.0.1:8765/", user_data_dir=tmp_path)
+
+        assert kiosk._chromium_log_path() == log_path
+
+    def test_start_captures_chromium_stdout_and_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TSV6_CHROMIUM_LOG_PATH", str(tmp_path / "chromium.log"))
+        kiosk = ChromiumKiosk(url="http://127.0.0.1:8765/", user_data_dir=tmp_path)
+        fake_process = MagicMock()
+        fake_process.pid = 123
+        fake_process.stdout = None
+        monkeypatch.setattr(kiosk, "_wait_for_cdp", lambda: True)
+
+        with patch(
+            "tsv6.display.tsv6_player.chromium.subprocess.Popen",
+            return_value=fake_process,
+        ) as popen:
+            assert kiosk.start() is True
+
+        kwargs = popen.call_args.kwargs
+        assert kwargs["stdout"] == subprocess.PIPE
+        assert kwargs["stderr"] == subprocess.STDOUT
+        assert kwargs["text"] is True
 
 
 # --------------------------------------------------------------------------- #
