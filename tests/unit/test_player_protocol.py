@@ -47,6 +47,8 @@ def _make_client(
             on_config=kwargs.get("on_config", MagicMock()),
             on_sync=kwargs.get("on_sync", MagicMock()),
             on_setplaylist=kwargs.get("on_setplaylist", MagicMock(return_value="ok")),
+            on_connect=kwargs.get("on_connect", None),
+            on_disconnect=kwargs.get("on_disconnect", None),
             on_playlist_media=kwargs.get("on_playlist_media", None),
             on_shell=kwargs.get("on_shell", None),
             on_snapshot=kwargs.get("on_snapshot", None),
@@ -110,11 +112,15 @@ def client_with_handlers():
             import logging
             logging.getLogger(__name__).info("Connected (test)")
             self_inner._flush_queue()
+            if self_inner._on_connect is not None:
+                self_inner._on_connect()
 
         # disconnect
         def _disconnect():
             with self_inner._lock:
                 self_inner._connected = False
+            if self_inner._on_disconnect is not None:
+                self_inner._on_disconnect()
 
         # config
         def _on_config(config_obj):
@@ -223,7 +229,7 @@ class TestConnect:
         sio.connect.assert_called_once_with(
             "http://test:3000",
             socketio_path="/newsocket.io",
-            transports=["websocket"],
+            transports=["polling"],
         )
         assert result is True
 
@@ -250,15 +256,13 @@ class TestSendStatus:
 
         args = sio.emit.call_args
         assert args[0][0] == "status"
-        settings = args[0][1]
+        settings, status, priority = args[0][1]
         assert settings["cpuSerialNumber"] == "CPU-123"
         assert settings["name"] == "dev01"
         assert settings["version"] == _PLAYER_VERSION
         assert settings["platform_version"] == _PLATFORM_VERSION
         assert "myIpAddress" in settings
-        status = args[0][2]
         assert status == {"tvStatus": True}
-        priority = args[0][3]
         assert priority == 0
 
     def test_identity_fields_always_present(self):
@@ -267,7 +271,7 @@ class TestSendStatus:
 
         client.send_status({})
 
-        settings = sio.emit.call_args[0][1]
+        settings = sio.emit.call_args[0][1][0]
         for key in ("cpuSerialNumber", "name", "version", "platform_version", "myIpAddress"):
             assert key in settings, f"Missing identity key: {key}"
 
@@ -295,6 +299,24 @@ class TestSendStatus:
         assert len(client._status_queue) == 0
         sio.emit.assert_called()
 
+    def test_connect_callback_fires_on_connect(self, client_with_handlers):
+        client, _sio, *_ = client_with_handlers
+        callback = MagicMock()
+        client._on_connect = callback
+
+        _fire_event(client, "connect")
+
+        callback.assert_called_once()
+
+    def test_disconnect_callback_fires_on_disconnect(self, client_with_handlers):
+        client, _sio, *_ = client_with_handlers
+        callback = MagicMock()
+        client._on_disconnect = callback
+
+        _fire_event(client, "disconnect")
+
+        callback.assert_called_once()
+
     def test_queue_bounded_at_500(self):
         client, sio = _make_client()
         for i in range(_STATUS_QUEUE_MAX + 50):
@@ -317,9 +339,8 @@ class TestRequestReconfig:
 
         args = sio.emit.call_args[0]
         assert args[0] == "status"
-        settings = args[1]
+        settings, _status, priority = args[1]
         assert settings.get("request") is True
-        priority = args[3]
         assert priority == 1
 
     def test_request_reconfig_queues_when_disconnected(self):

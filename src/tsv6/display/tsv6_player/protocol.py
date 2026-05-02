@@ -73,6 +73,8 @@ class PlayerProtocolClient:
         on_config: Callable[[dict], None],
         on_sync: Callable[..., None],
         on_setplaylist: Callable[[str], str],
+        on_connect: Callable[[], None] | None = None,
+        on_disconnect: Callable[[], None] | None = None,
         on_playlist_media: Callable[[str], dict] | None = None,
         on_shell: Callable[[str], dict] | None = None,
         on_snapshot: Callable[[], bytes] | None = None,
@@ -85,6 +87,8 @@ class PlayerProtocolClient:
         self._on_config = on_config
         self._on_sync = on_sync
         self._on_setplaylist = on_setplaylist
+        self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._on_playlist_media = on_playlist_media
         self._on_shell = on_shell
         self._on_snapshot = on_snapshot
@@ -272,12 +276,22 @@ class PlayerProtocolClient:
                     self._reconnections += 1
             logger.info("Connected to %s", self._server_url)
             self._flush_queue()
+            if self._on_connect is not None:
+                try:
+                    self._on_connect()
+                except Exception as exc:
+                    logger.warning("on_connect callback error: %s", exc)
 
         @sio.event
         def disconnect() -> None:  # type: ignore[misc]
             with self._lock:
                 self._connected = False
             logger.info("Disconnected from %s", self._server_url)
+            if self._on_disconnect is not None:
+                try:
+                    self._on_disconnect()
+                except Exception as exc:
+                    logger.warning("on_disconnect callback error: %s", exc)
 
         @sio.event
         def connect_error(data: Any) -> None:  # type: ignore[misc]
