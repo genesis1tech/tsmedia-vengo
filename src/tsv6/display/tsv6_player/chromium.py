@@ -258,6 +258,16 @@ class ChromiumKiosk:
             "--overscroll-history-navigation=0",
             "--disable-pinch",
             "--autoplay-policy=no-user-gesture-required",
+            # Pi 5 + X11 + Chromium 147 has repeatedly hit GPU shared-image and
+            # command-buffer fatal errors while rendering the Vengo iframe. Keep
+            # kiosk rendering on the software path so a GPU context failure cannot
+            # leave the ad player visually stuck while Chromium still appears alive.
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--disable-gpu-rasterization",
+            "--disable-accelerated-2d-canvas",
+            "--disable-accelerated-video-decode",
+            "--disable-zero-copy",
             # Touch support — Goodix on Waveshare DSI only dispatches JS touch/pointer
             # events when touch-events is explicitly enabled on Linux/X11.
             "--touch-events=enabled",

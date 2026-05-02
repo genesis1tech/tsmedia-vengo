@@ -253,6 +253,16 @@ class TestChromiumKioskCommandLine:
     def test_autoplay_policy_flag(self, kiosk: ChromiumKiosk) -> None:
         assert "--autoplay-policy=no-user-gesture-required" in kiosk._build_command()
 
+    def test_gpu_acceleration_disabled_for_kiosk_stability(
+        self, kiosk: ChromiumKiosk
+    ) -> None:
+        cmd = kiosk._build_command()
+        assert "--disable-gpu" in cmd
+        assert "--disable-gpu-compositing" in cmd
+        assert "--disable-gpu-rasterization" in cmd
+        assert "--disable-accelerated-video-decode" in cmd
+        assert "--disable-zero-copy" in cmd
+
     def test_disable_infobars(self, kiosk: ChromiumKiosk) -> None:
         assert "--disable-infobars" in kiosk._build_command()
 
