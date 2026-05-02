@@ -2214,8 +2214,18 @@ class ProductionVideoPlayer:
             self.logger.exception("Long-press: CDP navigate failed")
 
     def _resume_from_settings(self) -> None:
-        """Wake callback: re-map the VLC Tk window after user exits settings."""
+        """Wake callback: restore the idle display after user exits settings."""
         self._toggle_vlc_window(hide=False)
+        try:
+            if self.display_backend is None:
+                self.logger.warning("Settings exit: no display backend available")
+                return
+            if not self.display_backend.show_idle():
+                self.logger.warning("Settings exit: backend.show_idle() returned false")
+            else:
+                self.logger.info("Settings exit: idle display restarted")
+        except Exception:
+            self.logger.exception("Settings exit: failed to restart idle display")
 
     def _start_long_press_watcher(self) -> None:
         """Start the evdev-level long-press gesture watcher.

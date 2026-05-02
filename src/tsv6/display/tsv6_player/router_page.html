@@ -450,6 +450,8 @@
     var catcher = document.getElementById("tsv6-longpress-catcher");
     if (catcher) catcher.style.pointerEvents = "auto";
     // Hide Vengo ad iframe so overlays render correctly
+    if (typeof stopVengoWatchdog === "function") stopVengoWatchdog();
+    _vengoUrl = "";
     var vengoPlayer = document.getElementById("vengo-player");
     if (vengoPlayer) {
       vengoPlayer.style.display = "none";
@@ -721,6 +723,49 @@
   }
 
   // ── Vengo ad server handlers ──────────────────────────────────────────────
+  var _vengoUrl = "";
+  var _vengoLastActivityAt = 0;
+  var _vengoWatchdogTimer = null;
+  var _VENGO_STALL_REFRESH_MS = 10 * 60 * 1000;
+
+  function vengoCacheBustUrl(url) {
+    var separator = url.indexOf("?") === -1 ? "?" : "&";
+    return url + separator + "_t=" + Date.now();
+  }
+
+  function noteVengoActivity() {
+    _vengoLastActivityAt = Date.now();
+  }
+
+  function refreshVengoIdle(reason) {
+    var iframe = document.getElementById("vengo-player");
+    if (!iframe || !_vengoUrl || iframe.style.display === "none") return;
+    console.warn("Vengo: refreshing iframe (" + reason + ")");
+    noteVengoActivity();
+    iframe.src = vengoCacheBustUrl(_vengoUrl);
+  }
+
+  function startVengoWatchdog() {
+    stopVengoWatchdog();
+    noteVengoActivity();
+    _vengoWatchdogTimer = window.setInterval(function() {
+      if (!_vengoUrl) {
+        stopVengoWatchdog();
+        return;
+      }
+      var inactiveFor = Date.now() - _vengoLastActivityAt;
+      if (inactiveFor >= _VENGO_STALL_REFRESH_MS) {
+        refreshVengoIdle("no activity for " + Math.round(inactiveFor / 1000) + "s");
+      }
+    }, 60 * 1000);
+  }
+
+  function stopVengoWatchdog() {
+    if (_vengoWatchdogTimer) {
+      window.clearInterval(_vengoWatchdogTimer);
+      _vengoWatchdogTimer = null;
+    }
+  }
 
   function handleShowVengoIdle(cmd) {
     clearMain();
@@ -733,11 +778,14 @@
     _vengoUrl = url;
     document.body.classList.add("vengo-active");
     var iframe = document.getElementById("vengo-player");
+    noteVengoActivity();
     iframe.src = url;
     iframe.style.display = "block";
+    startVengoWatchdog();
   }
 
   function handleHideVengoIdle() {
+    stopVengoWatchdog();
     var iframe = document.getElementById("vengo-player");
     if (iframe) {
       iframe.style.display = "none";
@@ -771,26 +819,36 @@
   }
 
   // ── Vengo web player message listener ─────────────────────────────────────
-  var _vengoUrl = "";
   window.addEventListener("message", function(event) {
     var msg = event.data;
     if (msg === "ALL_ADS_COMPLETED") {
       console.log("Vengo: all ads completed — refreshing");
-      var iframe = document.getElementById("vengo-player");
-      if (iframe && _vengoUrl) {
-        iframe.src = _vengoUrl + "&_t=" + Date.now();
-      }
+      refreshVengoIdle("all ads completed");
     } else if (msg === "AD_ERROR") {
-      console.warn("Vengo: ad error — falling back to idle");
-      handleShowIdle();
+      console.warn("Vengo: ad error — refreshing idle player");
+      refreshVengoIdle("ad error");
     } else if (msg === "STARTED") {
+      noteVengoActivity();
       console.log("Vengo: ad started");
     } else if (msg === "COMPLETE") {
+      noteVengoActivity();
       console.log("Vengo: ad complete");
     } else if (msg === "ON_ADS_MANAGER_LOADED") {
+      noteVengoActivity();
       console.log("Vengo: ads manager loaded");
     }
   });
+
+  var _vengoIframe = document.getElementById("vengo-player");
+  if (_vengoIframe) {
+    _vengoIframe.addEventListener("load", function() {
+      if (_vengoUrl) noteVengoActivity();
+      console.log("Vengo: iframe loaded");
+    });
+    _vengoIframe.addEventListener("error", function() {
+      refreshVengoIdle("iframe error");
+    });
+  }
 
   // ── Connect to SSE stream ─────────────────────────────────────────────────
   function connectSSE() {

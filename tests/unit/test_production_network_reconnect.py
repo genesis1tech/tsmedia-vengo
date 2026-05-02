@@ -79,3 +79,15 @@ def test_network_reconnect_restart_is_debounced(monkeypatch):
     time.sleep(0.05)
 
     assert backend.show_idle_calls == 1
+
+
+def test_settings_exit_restarts_idle_display():
+    backend = _FakeDisplayBackend(state="vengo_idle")
+    player = _player(backend)
+    toggle_calls = []
+    player._toggle_vlc_window = lambda hide: toggle_calls.append(hide)
+
+    player._resume_from_settings()
+
+    assert toggle_calls == [False]
+    assert backend.show_idle_calls == 1
