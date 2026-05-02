@@ -47,6 +47,31 @@ from tsv6.utils.splash_screen import SplashScreen
 # user value at the screen positions used. WiFi access is now via the 5s
 # long-press gesture or the LXDE root-window menu when the kiosk is stopped.
 
+
+def env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean environment variable with a safe default."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+    """Parse an integer environment variable with a lower bound."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed >= minimum else default
+
 # Sleep mode imports
 # Removed for memory-fix branch
 
@@ -194,11 +219,20 @@ class ProductionVideoPlayer:
         
         # Connection tracking and deadline monitoring (Issue #TS_538A7DD4)
         self.connection_tracker = ConnectionTracker()
+        connection_deadline_minutes = env_int(
+            "TSV6_CONNECTION_DEADLINE_MINUTES",
+            30,
+            minimum=1,
+        )
+        connection_deadline_force_reboot = env_bool(
+            "TSV6_CONNECTION_DEADLINE_FORCE_REBOOT",
+            True,
+        )
         self.connection_deadline_monitor = ConnectionDeadlineMonitor(
-            disconnection_deadline_minutes=30,
+            disconnection_deadline_minutes=connection_deadline_minutes,
             check_interval_seconds=60,
             on_deadline_exceeded=self._on_connection_deadline_exceeded,
-            enable_forced_reboot=True,  # Enable in production
+            enable_forced_reboot=connection_deadline_force_reboot,
             systemd_recovery_manager=self.systemd_recovery  # CRITICAL FIX: Pass recovery manager
         )
         

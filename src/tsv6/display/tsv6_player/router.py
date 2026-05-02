@@ -194,6 +194,35 @@ class RouterServer:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _split_nmcli_terse(line: str) -> list[str]:
+        """Split an ``nmcli -t`` line while preserving escaped colons."""
+        return [
+            token.replace("\x00", ":")
+            for token in line.replace("\\:", "\x00").split(":")
+        ]
+
+    @staticmethod
+    def _saved_wifi_profile_names() -> list[str]:
+        """Return NetworkManager profile names whose type is WiFi."""
+        try:
+            listing = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("saved_wifi_profile_names list failed: %s", exc)
+            return []
+        names: list[str] = []
+        for line in listing.stdout.splitlines():
+            tokens = RouterServer._split_nmcli_terse(line)
+            if len(tokens) < 2:
+                continue
+            name, conn_type = tokens[0], tokens[1]
+            if conn_type == "802-11-wireless" and name:
+                names.append(name)
+        return names
+
+    @staticmethod
     def _saved_wifi_profiles() -> dict[str, str]:
         """Return a mapping of SSID → NetworkManager profile NAME.
 
@@ -204,46 +233,112 @@ class RouterServer:
         The returned map lets ``nmcli connection up <name>`` target the
         right profile even when the NAME differs from the SSID.
         """
-        try:
-            listing = subprocess.run(
-                ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except Exception as exc:
-            logger.warning("saved_wifi_profiles list failed: %s", exc)
-            return {}
-        names: list[str] = []
-        for line in listing.stdout.splitlines():
-            # nmcli -t escapes ':' inside NAME as '\:'. Unescape before splitting.
-            tokens = [t.replace("\x00", ":") for t in
-                      line.replace("\\:", "\x00").split(":")]
-            if len(tokens) < 2:
-                continue
-            name, conn_type = tokens[0], tokens[1]
-            if conn_type == "802-11-wireless" and name:
-                names.append(name)
+        names = RouterServer._saved_wifi_profile_names()
         profiles: dict[str, str] = {}
         for name in names:
-            try:
-                detail = subprocess.run(
-                    ["nmcli", "-t", "-f", "802-11-wireless.ssid",
-                     "connection", "show", name],
-                    capture_output=True, text=True, timeout=3,
-                )
-            except Exception as exc:
-                logger.debug("saved_wifi_profiles detail %s failed: %s", name, exc)
-                profiles.setdefault(name, name)  # best-effort
-                continue
-            ssid = name
-            for line in detail.stdout.splitlines():
-                if line.startswith("802-11-wireless.ssid:"):
-                    value = line.split(":", 1)[1].replace("\\:", ":").strip()
-                    if value and value != "--":
-                        ssid = value
-                    break
+            ssid = RouterServer._profile_ssid(name) or name
             # First profile wins if multiple match the same SSID.
             profiles.setdefault(ssid, name)
         return profiles
+
+    @staticmethod
+    def _profile_ssid(profile: str) -> str:
+        """Return the SSID configured for a NetworkManager WiFi profile."""
+        try:
+            detail = subprocess.run(
+                ["nmcli", "-t", "-f", "802-11-wireless.ssid",
+                 "connection", "show", profile],
+                capture_output=True, text=True, timeout=3,
+            )
+        except Exception as exc:
+            logger.debug("profile_ssid %s failed: %s", profile, exc)
+            return ""
+        for line in detail.stdout.splitlines():
+            if line.startswith("802-11-wireless.ssid:"):
+                value = line.split(":", 1)[1].replace("\\:", ":").strip()
+                if value and value != "--":
+                    return value
+                break
+        return ""
+
+    @staticmethod
+    def _current_wifi_ssid() -> str:
+        """Return the currently active WiFi SSID, if any."""
+        try:
+            active = subprocess.run(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi",
+                 "list", "--rescan", "no"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as exc:
+            logger.debug("current_wifi_ssid failed: %s", exc)
+            return ""
+        for line in active.stdout.splitlines():
+            parts = RouterServer._split_nmcli_terse(line)
+            if len(parts) >= 2 and parts[0] == "yes":
+                return parts[1]
+        return ""
+
+    @staticmethod
+    def _profile_autoconnect_priority(profile: str) -> int:
+        """Return a WiFi profile autoconnect priority, defaulting to 0."""
+        try:
+            result = subprocess.run(
+                ["nmcli", "-g", "connection.autoconnect-priority",
+                 "connection", "show", profile],
+                capture_output=True, text=True, timeout=3,
+            )
+        except Exception as exc:
+            logger.debug("profile priority %s failed: %s", profile, exc)
+            return 0
+        try:
+            return int(result.stdout.strip().splitlines()[0])
+        except (IndexError, ValueError):
+            return 0
+
+    @staticmethod
+    def _stabilize_selected_wifi_profile(selected_profile: str) -> list[str]:
+        """
+        Make the selected WiFi profile the preferred local profile.
+
+        This intentionally avoids hard-coded SSIDs. Whichever network the user
+        selected wins future NetworkManager autoconnect decisions; stale
+        positive-priority profiles are demoted but kept as saved credentials.
+        Returns non-fatal warning messages.
+        """
+        warnings: list[str] = []
+        if not selected_profile:
+            return ["No NetworkManager profile found to stabilize"]
+
+        selected_cmd = [
+            "nmcli", "connection", "modify", selected_profile,
+            "connection.autoconnect", "yes",
+            "connection.autoconnect-priority", "300",
+            "connection.autoconnect-retries", "0",
+            "802-11-wireless.powersave", "2",
+            "ipv4.route-metric", "600",
+        ]
+        selected = subprocess.run(
+            selected_cmd, capture_output=True, text=True, timeout=10,
+        )
+        if selected.returncode != 0:
+            msg = selected.stderr.strip() or selected.stdout.strip()
+            warnings.append(f"Failed to stabilize selected profile: {msg}")
+
+        for profile in RouterServer._saved_wifi_profile_names():
+            if profile == selected_profile:
+                continue
+            if RouterServer._profile_autoconnect_priority(profile) <= 0:
+                continue
+            demote = subprocess.run(
+                ["nmcli", "connection", "modify", profile,
+                 "connection.autoconnect-priority", "0"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if demote.returncode != 0:
+                msg = demote.stderr.strip() or demote.stdout.strip()
+                warnings.append(f"Failed to demote profile {profile}: {msg}")
+        return warnings
 
     # ── Flask application factory ─────────────────────────────────────────────
 
@@ -426,8 +521,20 @@ class RouterServer:
             if not ssid:
                 return jsonify({"ok": False, "error": "ssid required"}), 400
             try:
+                saved_profiles = self._saved_wifi_profiles()
+                profile = saved_profiles.get(ssid, ssid)
+                current_ssid = self._current_wifi_ssid()
+
+                if current_ssid == ssid:
+                    warnings = self._stabilize_selected_wifi_profile(profile)
+                    msg = "Already connected; selected profile preferred"
+                    if warnings:
+                        msg = f"{msg}. Warnings: {'; '.join(warnings)}"
+                    logger.info("wifi_connect ssid=%s already active profile=%s",
+                                ssid, profile)
+                    return jsonify({"ok": True, "message": msg, "already_connected": True})
+
                 if use_saved:
-                    profile = self._saved_wifi_profiles().get(ssid, ssid)
                     cmd = ["nmcli", "connection", "up", profile]
                 else:
                     cmd = ["nmcli", "device", "wifi", "connect", ssid]
@@ -438,6 +545,11 @@ class RouterServer:
                 )
                 ok = result.returncode == 0
                 msg = (result.stdout + result.stderr).strip()
+                if ok:
+                    profile = self._saved_wifi_profiles().get(ssid, profile)
+                    warnings = self._stabilize_selected_wifi_profile(profile)
+                    if warnings:
+                        msg = f"{msg}\nWarnings: {'; '.join(warnings)}".strip()
                 logger.info("wifi_connect ssid=%s saved=%s ok=%s msg=%s",
                             ssid, use_saved, ok, msg[:200])
                 return jsonify({"ok": ok, "message": msg})
