@@ -12,11 +12,13 @@ All subsystems are mocked — no filesystem, network, or real threads.
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tsv6.display.identity import PlayerIdentity
+from tsv6.display.tsv6_player import backend as backend_module
 from tsv6.display.tsv6_player.backend import TSV6NativeBackend
 
 
@@ -54,6 +56,15 @@ def _make_backend(
     # Simulate connect() having run — set identity directly.
     backend._identity = identity or _make_identity()
     return backend
+
+
+def _wait_for(predicate, timeout: float = 1.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -340,3 +351,33 @@ class TestShowIdleVengo:
 
         # Vengo idle does not use the VLC impression tracker
         mock_tracker.on_play_start.assert_not_called()
+
+
+class TestProtocolReconnectVengoRestart:
+    """Display-server reconnect should refresh Vengo idle."""
+
+    def test_protocol_reconnect_restarts_idle_when_started(
+        self, vengo_backend: TSV6NativeBackend, mock_renderer: MagicMock, monkeypatch
+    ):
+        monkeypatch.setattr(backend_module.time, "sleep", lambda _delay: None)
+        vengo_backend._started = True
+        vengo_backend._renderer = mock_renderer
+        vengo_backend.show_idle = MagicMock(return_value=True)
+
+        vengo_backend._on_protocol_connect()
+
+        assert _wait_for(lambda: vengo_backend.show_idle.called)
+
+    def test_protocol_reconnect_does_not_interrupt_product(
+        self, vengo_backend: TSV6NativeBackend, mock_renderer: MagicMock, monkeypatch
+    ):
+        monkeypatch.setattr(backend_module.time, "sleep", lambda _delay: None)
+        mock_renderer.get_metrics.return_value = {"state": "product"}
+        vengo_backend._started = True
+        vengo_backend._renderer = mock_renderer
+        vengo_backend.show_idle = MagicMock(return_value=True)
+
+        vengo_backend._on_protocol_connect()
+
+        time.sleep(0.05)
+        vengo_backend.show_idle.assert_not_called()

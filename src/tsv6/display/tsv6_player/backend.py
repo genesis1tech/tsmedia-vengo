@@ -187,6 +187,7 @@ class TSV6NativeBackend:
                 on_config=self._on_config,
                 on_sync=self._on_sync,
                 on_setplaylist=self._on_setplaylist,
+                on_connect=self._on_protocol_connect,
             )
 
             connected = self._protocol.connect()
@@ -288,6 +289,33 @@ class TSV6NativeBackend:
             self._renderer is None or self._renderer.is_connected
         )
         return protocol_ok and renderer_ok
+
+    def _on_protocol_connect(self) -> None:
+        """Refresh Vengo idle after the display server connection recovers."""
+        if not self._started or self._renderer is None:
+            return
+
+        def restart_idle() -> None:
+            try:
+                time.sleep(1.0)
+                state = self._renderer.get_metrics().get("state", "")
+                if state and state not in ("idle", "vengo_idle", "offline", "stopped", "uninitialised"):
+                    logger.info(
+                        "Protocol reconnected; leaving display state %r untouched",
+                        state,
+                    )
+                    return
+                logger.info("Protocol reconnected; restarting Vengo idle player")
+                if not self.show_idle():
+                    logger.warning("Vengo idle restart after protocol reconnect returned false")
+            except Exception as exc:
+                logger.warning("Protocol reconnect idle restart failed: %s", exc)
+
+        threading.Thread(
+            target=restart_idle,
+            name="tsv6-protocol-reconnect-idle",
+            daemon=True,
+        ).start()
 
     def get_metrics(self) -> dict:
         """Return merged metrics from all four subsystems."""
