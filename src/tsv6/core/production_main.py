@@ -170,6 +170,12 @@ class ProductionVideoPlayer:
         # Long-press touchscreen gesture watcher (evdev-level; starts in start())
         self._long_press_watcher = None
 
+        # Network reconnects can leave Chromium on the local ready screen while
+        # the Vengo iframe was loaded during an offline window. Debounce the
+        # idle restart so repeated NM events do not thrash the display.
+        self._vengo_reconnect_lock = threading.Lock()
+        self._last_vengo_reconnect_restart_at = 0.0
+
         # Cloud-supplied playlist override for the recycle-sensor timeout path.
         # Set from the openDoor payload's noItemPlaylist field at door-sequence
         # start; consumed by _handle_recycle_failure when the sensor times out.
@@ -1270,6 +1276,49 @@ class ProductionVideoPlayer:
         # Trigger AWS reconnection if needed
         if self.aws_manager and not self.aws_manager.connected:
             self.aws_manager.start_auto_reconnect()
+        self._restart_vengo_after_network_reconnect()
+
+    def _restart_vengo_after_network_reconnect(self):
+        """Re-issue the idle/Vengo display command after Wi-Fi comes back."""
+        if self.display_backend is None:
+            return
+
+        now = time.monotonic()
+        with self._vengo_reconnect_lock:
+            if now - self._last_vengo_reconnect_restart_at < 15.0:
+                self.logger.debug("Skipping Vengo reconnect restart; recently attempted")
+                return
+            self._last_vengo_reconnect_restart_at = now
+
+        delay = float(os.environ.get("TSV6_VENGO_RECONNECT_RESTART_DELAY_SECS", "2.0"))
+
+        def restart_idle():
+            try:
+                if delay > 0:
+                    time.sleep(delay)
+
+                metrics = {}
+                if hasattr(self.display_backend, "get_metrics"):
+                    metrics = self.display_backend.get_metrics() or {}
+                state = metrics.get("renderer_state") or metrics.get("state") or ""
+                if state and state not in ("idle", "vengo_idle", "offline", "stopped", "uninitialised"):
+                    self.logger.info(
+                        "Network reconnected; leaving display state %r untouched",
+                        state,
+                    )
+                    return
+
+                self.logger.info("Network reconnected; restarting Vengo idle player")
+                if not self.display_backend.show_idle():
+                    self.logger.warning("Vengo idle restart after network reconnect returned false")
+            except Exception as e:
+                self.logger.error(f"Failed to restart Vengo idle after network reconnect: {e}")
+
+        threading.Thread(
+            target=restart_idle,
+            name="VengoReconnectRestart",
+            daemon=True,
+        ).start()
     
     def _on_health_update(self, metrics):
         """Handle health metric updates"""

@@ -11,6 +11,8 @@ import time
 from typing import Optional, Dict, Any
 from enum import Enum
 
+logger = logging.getLogger(__name__)
+
 try:
     import dbus
     HAVE_DBUS = True
