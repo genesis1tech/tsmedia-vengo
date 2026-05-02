@@ -216,16 +216,31 @@
   var password = "";
   var pwVisible = false;
   var kbMode = "abc"; // abc | ABC | sym
+  var resumePosted = false;
   // True when the selected network has a saved NetworkManager profile and the
   // user hasn't typed a replacement password — in that case Connect reuses the
   // stored credentials via `nmcli connection up`.
   var useSaved = false;
 
+  function postExitSettings() {
+    if (resumePosted) return;
+    resumePosted = true;
+
+    if (navigator.sendBeacon) {
+      try {
+        if (navigator.sendBeacon("/api/exit-settings", "")) return;
+      } catch (e) {}
+    }
+
+    try {
+      fetch("/api/exit-settings", { method: "POST", keepalive: true }).catch(function () {});
+    } catch (e) {}
+  }
+
   function exitSettings() {
     // Ping backend so it can resume the idle player before we navigate away.
-    fetch("/api/exit-settings", { method: "POST" })
-      .catch(function () {})
-      .finally(function () { window.location.href = "/"; });
+    postExitSettings();
+    window.location.href = "/";
   }
 
   function toast(msg, cls, ms) {
@@ -464,6 +479,8 @@
   refreshStatus();
   scan();
   setInterval(refreshStatus, 10000);
+  window.addEventListener("pagehide", postExitSettings);
+  window.addEventListener("beforeunload", postExitSettings);
 }());
 </script>
 </body>
