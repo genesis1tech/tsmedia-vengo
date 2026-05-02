@@ -51,10 +51,27 @@ disable_intel_wifi() {
 }
 
 enable_broadcom_wifi() {
-    log "Enabling onboard Broadcom WiFi (loading brcmfmac)..."
-    modprobe brcmfmac 2>/dev/null || true
-    nmcli radio wifi on 2>/dev/null || true
-    sleep 2  # Wait for interface to appear
+    log "Enabling onboard Broadcom WiFi..."
+    if lsmod | awk '{print $1}' | grep -qx "brcmfmac"; then
+        log "Broadcom brcmfmac already loaded"
+    else
+        log "Loading brcmfmac..."
+        modprobe brcmfmac 2>/dev/null || true
+    fi
+
+    local wifi_radio
+    wifi_radio=$(nmcli radio wifi 2>/dev/null || echo "unknown")
+    if [ "$wifi_radio" != "enabled" ]; then
+        log "WiFi radio is ${wifi_radio}; turning it on"
+        nmcli radio wifi on 2>/dev/null || true
+    else
+        log "WiFi radio already enabled"
+    fi
+
+    if [ ! -d /sys/class/net/wlan0 ]; then
+        sleep 2  # Wait for interface to appear after loading the driver
+    fi
+
     # Enforce WiFi route metric 600 so LTE (metric 100) wins default route
     # when both interfaces are active during failover transitions
     local wifi_conn

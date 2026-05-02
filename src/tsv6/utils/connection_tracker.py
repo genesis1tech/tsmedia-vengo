@@ -94,7 +94,7 @@ class ConnectionDeadlineMonitor:
         self.deadline_exceeded = False
         
         self.logger.info(
-            f"Connection Deadline Monitor initialized: "
+            f"AWS IoT Connection Deadline Monitor initialized: "
             f"deadline={self.deadline_minutes} min, "
             f"forced_reboot={'enabled' if self.enable_forced_reboot else 'disabled'}"
         )
@@ -135,7 +135,7 @@ class ConnectionDeadlineMonitor:
                 self.disconnected_since = time.time()
                 self.deadline_exceeded = False
                 self.logger.warning(
-                    f"Connection marked as DISCONNECTED - deadline timer started "
+                    f"AWS IoT connection marked as DISCONNECTED - deadline timer started "
                     f"({self.deadline_minutes} min)"
                 )
     
@@ -145,7 +145,7 @@ class ConnectionDeadlineMonitor:
             if self.disconnected_since is not None:
                 downtime_minutes = (time.time() - self.disconnected_since) / 60
                 self.logger.info(
-                    f"Connection marked as CONNECTED - deadline timer reset "
+                    f"AWS IoT connection marked as CONNECTED - deadline timer reset "
                     f"(was disconnected for {downtime_minutes:.1f} min)"
                 )
                 self.disconnected_since = None
@@ -179,8 +179,8 @@ class ConnectionDeadlineMonitor:
         downtime_minutes = self.get_disconnection_duration_minutes()
         
         self.logger.critical(
-            f"🚨 CONNECTION DEADLINE EXCEEDED! "
-            f"Disconnected for {downtime_minutes:.1f} minutes "
+            f"🚨 AWS IOT CONNECTION DEADLINE EXCEEDED! "
+            f"AWS IoT disconnected for {downtime_minutes:.1f} minutes "
             f"(deadline: {self.deadline_minutes} min)"
         )
         
@@ -209,7 +209,7 @@ class ConnectionDeadlineMonitor:
         instead of 'sudo reboot' which requires passwordless sudo.
         """
         self.logger.critical(
-            "🚨 FORCED SYSTEM REBOOT - Connection deadline exceeded"
+            "🚨 FORCED SYSTEM REBOOT - AWS IoT connection deadline exceeded"
         )
         
         try:
