@@ -8,9 +8,9 @@
 #      internet reachability
 #
 # Feeds the systemd watchdog on success or during a grace period.
-# After sustained failure (>3 consecutive misses), STOPS feeding
-# the watchdog so systemd's WatchdogSec=120 expires and
-# FailureAction=reboot-force reboots the device.
+# After sustained failure (>3 consecutive misses), requests a clean
+# systemd reboot. If systemd is too wedged to reboot cleanly, this script
+# stops feeding the watchdog so WatchdogSec provides a last-resort reboot.
 #
 # This script is independent of the Python application.
 # If the Python process crashes or hangs, this script still runs.
@@ -27,6 +27,7 @@ PING_TARGET_2="${PING_TARGET_2:-1.1.1.1}"
 WIFI_INTERFACE="${WIFI_INTERFACE:-wlan0}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-60}"
 MAX_FAILURES="${MAX_FAILURES:-3}"
+REBOOT_COMMAND="${REBOOT_COMMAND:-/usr/bin/systemctl reboot}"
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -78,6 +79,14 @@ ping_test() {
     return 1
 }
 
+request_clean_reboot() {
+    log crit "Requesting clean reboot after sustained network failure"
+    systemd-notify --status="CRITICAL: network unreachable; clean reboot requested"
+    sync || true
+    # shellcheck disable=SC2086
+    $REBOOT_COMMAND
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -107,10 +116,11 @@ main() {
                 systemd-notify WATCHDOG=1
                 systemd-notify --status="DEGRADED: ping failed ${failure_count}/${MAX_FAILURES} (grace period)"
             else
-                # Grace period exhausted — STOP feeding watchdog
-                log crit "Ping failed (${failure_count}/${MAX_FAILURES}) — STOPPED feeding watchdog, reboot imminent"
-                systemd-notify --status="CRITICAL: network unreachable for ${failure_count} checks, watchdog will expire"
-                # Do NOT call systemd-notify WATCHDOG=1 here
+                # Grace period exhausted — request a clean reboot first.
+                # Do NOT call systemd-notify WATCHDOG=1 here; WatchdogSec is
+                # the fallback if systemd cannot honor the clean reboot request.
+                log crit "Ping failed (${failure_count}/${MAX_FAILURES}) — clean reboot requested"
+                request_clean_reboot
             fi
         fi
 

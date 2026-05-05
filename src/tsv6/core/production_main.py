@@ -233,7 +233,28 @@ class ProductionVideoPlayer:
             check_interval_seconds=60,
             on_deadline_exceeded=self._on_connection_deadline_exceeded,
             enable_forced_reboot=connection_deadline_force_reboot,
-            systemd_recovery_manager=self.systemd_recovery  # CRITICAL FIX: Pass recovery manager
+            systemd_recovery_manager=self.systemd_recovery,  # CRITICAL FIX: Pass recovery manager
+            connection_name="AWS IoT",
+            reboot_reason="AWS IoT connection deadline exceeded",
+        )
+
+        network_failure_reboot_minutes = env_int(
+            "TSV6_NETWORK_FAILURE_REBOOT_MINUTES",
+            8,
+            minimum=1,
+        )
+        network_failure_force_reboot = env_bool(
+            "TSV6_NETWORK_FAILURE_FORCE_REBOOT",
+            True,
+        )
+        self.network_deadline_monitor = ConnectionDeadlineMonitor(
+            disconnection_deadline_minutes=network_failure_reboot_minutes,
+            check_interval_seconds=30,
+            on_deadline_exceeded=self._on_network_deadline_exceeded,
+            enable_forced_reboot=network_failure_force_reboot,
+            systemd_recovery_manager=self.systemd_recovery,
+            connection_name="Network",
+            reboot_reason="network unreachable past configured deadline",
         )
         
         # State tracking
@@ -1303,10 +1324,20 @@ class ProductionVideoPlayer:
     def _on_network_disconnect(self, status):
         """Handle network disconnection — recovery is handled by NetworkManager (Layer 0)"""
         self.logger.error(f"Network disconnected: {status}")
+        try:
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.mark_disconnected()
+        except Exception as e:
+            self.logger.error(f"Error updating network deadline monitor on disconnect: {e}")
 
     def _on_network_reconnect(self, status):
         """Handle network reconnection (detected by observe-only monitor)"""
         self.logger.info(f"Network reconnected: {status}")
+        try:
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.mark_connected()
+        except Exception as e:
+            self.logger.error(f"Error updating network deadline monitor on reconnect: {e}")
         # Trigger AWS reconnection if needed
         if self.aws_manager and not self.aws_manager.connected:
             self.aws_manager.start_auto_reconnect()
@@ -2001,6 +2032,7 @@ class ProductionVideoPlayer:
 
             # Start connection deadline monitoring
             self.connection_deadline_monitor.start()
+            self.network_deadline_monitor.start()
 
             # Connect AWS manager
             if self.aws_manager:
@@ -2350,6 +2382,8 @@ class ProductionVideoPlayer:
             # Stop connection deadline monitoring
             if self.connection_deadline_monitor:
                 self.connection_deadline_monitor.stop()
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.stop()
             
             # Stop error recovery
             if self.error_recovery:
@@ -2414,6 +2448,12 @@ class ProductionVideoPlayer:
                 "deadline_minutes": self.connection_deadline_monitor.deadline_minutes,
                 "deadline_exceeded": self.connection_deadline_monitor.deadline_exceeded
             }
+        if self.network_deadline_monitor:
+            status["network_deadline_monitor"] = {
+                "disconnection_duration_minutes": self.network_deadline_monitor.get_disconnection_duration_minutes(),
+                "deadline_minutes": self.network_deadline_monitor.deadline_minutes,
+                "deadline_exceeded": self.network_deadline_monitor.deadline_exceeded
+            }
 
         if self.bin_level_monitor:
             status["bin_level"] = self.bin_level_monitor.get_monitor_status()
@@ -2432,6 +2472,20 @@ class ProductionVideoPlayer:
             "aws_connection",
             "deadline_exceeded",
             f"Disconnected for {downtime_minutes:.1f} minutes - forcing reboot",
+            "critical"
+        )
+
+    def _on_network_deadline_exceeded(self, downtime_minutes: float):
+        """Handle sustained network outage deadline exceeded."""
+        self.logger.critical(
+            f"Network failure deadline exceeded! Network unreachable for {downtime_minutes:.1f} minutes. "
+            f"System will cleanly reboot shortly."
+        )
+
+        self.error_recovery.report_error(
+            "network",
+            "deadline_exceeded",
+            f"Network unreachable for {downtime_minutes:.1f} minutes - clean reboot requested",
             "critical"
         )
 

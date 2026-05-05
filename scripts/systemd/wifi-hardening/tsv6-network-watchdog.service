@@ -11,9 +11,10 @@ Restart=on-failure
 RestartSec=30
 
 # Watchdog: script must call systemd-notify WATCHDOG=1 within this window.
-# If it stops (because pings fail beyond grace period), systemd reboots.
+# On sustained network failure, the script requests a clean reboot first.
+# If systemd is wedged and that request cannot complete, this is the fallback.
 WatchdogSec=120
-FailureAction=reboot-force
+FailureAction=reboot
 
 # Optional per-deployment overrides
 EnvironmentFile=-/etc/default/tsv6-network-watchdog

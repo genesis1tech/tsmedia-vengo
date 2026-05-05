@@ -65,7 +65,9 @@ class ConnectionDeadlineMonitor:
         check_interval_seconds: int = 60,
         on_deadline_exceeded: Optional[Callable] = None,
         enable_forced_reboot: bool = True,
-        systemd_recovery_manager: Optional['SystemdRecoveryManager'] = None
+        systemd_recovery_manager: Optional['SystemdRecoveryManager'] = None,
+        connection_name: str = "AWS IoT",
+        reboot_reason: Optional[str] = None,
     ):
         """
         Initialize connection deadline monitor.
@@ -76,12 +78,16 @@ class ConnectionDeadlineMonitor:
             on_deadline_exceeded: Callback when deadline exceeded (before reboot)
             enable_forced_reboot: Enable automatic reboot (set False for testing)
             systemd_recovery_manager: SystemD recovery manager for privileged operations
+            connection_name: Human-readable connection label for logs/status
+            reboot_reason: Human-readable reboot reason for logs
         """
         self.deadline_minutes = disconnection_deadline_minutes
         self.check_interval = check_interval_seconds
         self.on_deadline_exceeded = on_deadline_exceeded
         self.enable_forced_reboot = enable_forced_reboot
         self.systemd_recovery = systemd_recovery_manager
+        self.connection_name = connection_name
+        self.reboot_reason = reboot_reason or f"{connection_name} connection deadline exceeded"
         
         self.logger = logging.getLogger(__name__)
         self.running = False
@@ -94,7 +100,7 @@ class ConnectionDeadlineMonitor:
         self.deadline_exceeded = False
         
         self.logger.info(
-            f"AWS IoT Connection Deadline Monitor initialized: "
+            f"{self.connection_name} Connection Deadline Monitor initialized: "
             f"deadline={self.deadline_minutes} min, "
             f"forced_reboot={'enabled' if self.enable_forced_reboot else 'disabled'}"
         )
@@ -108,7 +114,7 @@ class ConnectionDeadlineMonitor:
         self._stop_event.clear()
         self._monitor_thread = threading.Thread(
             target=self._monitor_loop,
-            name="ConnectionDeadlineMonitor",
+            name=f"{self.connection_name.replace(' ', '')}ConnectionDeadlineMonitor",
             daemon=True
         )
         self._monitor_thread.start()
@@ -135,7 +141,7 @@ class ConnectionDeadlineMonitor:
                 self.disconnected_since = time.time()
                 self.deadline_exceeded = False
                 self.logger.warning(
-                    f"AWS IoT connection marked as DISCONNECTED - deadline timer started "
+                    f"{self.connection_name} connection marked as DISCONNECTED - deadline timer started "
                     f"({self.deadline_minutes} min)"
                 )
     
@@ -145,7 +151,7 @@ class ConnectionDeadlineMonitor:
             if self.disconnected_since is not None:
                 downtime_minutes = (time.time() - self.disconnected_since) / 60
                 self.logger.info(
-                    f"AWS IoT connection marked as CONNECTED - deadline timer reset "
+                    f"{self.connection_name} connection marked as CONNECTED - deadline timer reset "
                     f"(was disconnected for {downtime_minutes:.1f} min)"
                 )
                 self.disconnected_since = None
@@ -179,8 +185,8 @@ class ConnectionDeadlineMonitor:
         downtime_minutes = self.get_disconnection_duration_minutes()
         
         self.logger.critical(
-            f"🚨 AWS IOT CONNECTION DEADLINE EXCEEDED! "
-            f"AWS IoT disconnected for {downtime_minutes:.1f} minutes "
+            f"🚨 {self.connection_name.upper()} CONNECTION DEADLINE EXCEEDED! "
+            f"{self.connection_name} disconnected for {downtime_minutes:.1f} minutes "
             f"(deadline: {self.deadline_minutes} min)"
         )
         
@@ -209,7 +215,7 @@ class ConnectionDeadlineMonitor:
         instead of 'sudo reboot' which requires passwordless sudo.
         """
         self.logger.critical(
-            "🚨 FORCED SYSTEM REBOOT - AWS IoT connection deadline exceeded"
+            f"🚨 CLEAN SYSTEM REBOOT REQUESTED - {self.reboot_reason}"
         )
         
         try:
@@ -233,11 +239,24 @@ class ConnectionDeadlineMonitor:
             # Fallback 1: Try systemctl reboot (no sudo required if polkit configured)
             try:
                 self.logger.info("Fallback: Attempting systemctl reboot...")
-                subprocess.run(['systemctl', 'reboot'], timeout=5, check=False)
-                self.logger.critical("System reboot via systemctl initiated")
-                return
+                result = subprocess.run(['systemctl', 'reboot'], timeout=5, check=False)
+                if result.returncode == 0:
+                    self.logger.critical("System reboot via systemctl initiated")
+                    return
+                self.logger.error(f"systemctl reboot returned {result.returncode}")
             except Exception as systemctl_error:
                 self.logger.error(f"systemctl reboot failed: {systemctl_error}")
+
+            # Fallback 1b: production service users may have NOPASSWD sudo for systemctl.
+            try:
+                self.logger.info("Fallback: Attempting sudo systemctl reboot...")
+                result = subprocess.run(['sudo', '-n', 'systemctl', 'reboot'], timeout=5, check=False)
+                if result.returncode == 0:
+                    self.logger.critical("System reboot via sudo systemctl initiated")
+                    return
+                self.logger.error(f"sudo systemctl reboot returned {result.returncode}")
+            except Exception as sudo_systemctl_error:
+                self.logger.error(f"sudo systemctl reboot failed: {sudo_systemctl_error}")
             
             # Fallback 2: Try direct reboot command (may require permissions)
             try:
