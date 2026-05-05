@@ -27,10 +27,19 @@ class _FakeDisplayBackend:
         return True
 
 
+class _FakeNetworkDeadlineMonitor:
+    def __init__(self):
+        self.mark_connected_calls = 0
+
+    def mark_connected(self):
+        self.mark_connected_calls += 1
+
+
 def _player(display_backend):
     player = ProductionVideoPlayer.__new__(ProductionVideoPlayer)
     player.aws_manager = _FakeAWSManager(connected=False)
     player.display_backend = display_backend
+    player.network_deadline_monitor = _FakeNetworkDeadlineMonitor()
     player._vengo_reconnect_lock = threading.Lock()
     player._last_vengo_reconnect_restart_at = 0.0
     player.logger = logging.getLogger("test-production-network-reconnect")
@@ -49,6 +58,7 @@ def test_network_reconnect_restarts_vengo_idle(monkeypatch):
         time.sleep(0.01)
 
     assert player.aws_manager.start_auto_reconnect_calls == 1
+    assert player.network_deadline_monitor.mark_connected_calls == 1
     assert backend.show_idle_calls == 1
 
 

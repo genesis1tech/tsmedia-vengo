@@ -86,3 +86,45 @@ def test_deadline_monitor_tries_sudo_reboot_when_systemd_manager_fails():
     assert run.call_args_list[0].args[0] == ["sync"]
     assert run.call_args_list[1].args[0] == ["systemctl", "reboot"]
     assert run.call_args_list[2].args[0] == ["sudo", "-n", "systemctl", "reboot"]
+    assert len(run.call_args_list) == 3
+
+
+def test_deadline_monitor_reports_failure_when_all_reboot_commands_are_denied(caplog):
+    recovery = Mock()
+    recovery.execute_system_reboot.return_value = False
+    monitor = ConnectionDeadlineMonitor(
+        disconnection_deadline_minutes=1,
+        enable_forced_reboot=True,
+        systemd_recovery_manager=recovery,
+        connection_name="Network",
+    )
+    monitor.disconnected_since = time.time() - 90
+
+    denied = CompletedProcess(
+        ["systemctl", "reboot"],
+        1,
+        "",
+        "Interactive authentication required.",
+    )
+    results = [
+        CompletedProcess(["sync"], 0),
+        denied,
+        CompletedProcess(["sudo", "-n", "systemctl", "reboot"], 1, "", "sudo denied"),
+        CompletedProcess(["reboot"], 1, "", "permission denied"),
+    ]
+
+    with caplog.at_level("CRITICAL"), patch(
+        "src.tsv6.utils.connection_tracker.time.sleep"
+    ), patch(
+        "src.tsv6.utils.connection_tracker.subprocess.run",
+        side_effect=results,
+    ) as run:
+        monitor._handle_deadline_exceeded()
+
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["sync"],
+        ["systemctl", "reboot"],
+        ["sudo", "-n", "systemctl", "reboot"],
+        ["reboot"],
+    ]
+    assert "All reboot methods failed" in caplog.text
