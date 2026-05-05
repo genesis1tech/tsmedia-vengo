@@ -261,9 +261,11 @@ class ConnectionDeadlineMonitor:
             # Fallback 2: Try direct reboot command (may require permissions)
             try:
                 self.logger.warning("Last resort: Attempting direct reboot command...")
-                subprocess.run(['reboot'], timeout=5, check=False)
-                self.logger.critical("System reboot via direct command initiated")
-                return
+                result = subprocess.run(['reboot'], timeout=5, check=False)
+                if result.returncode == 0:
+                    self.logger.critical("System reboot via direct command initiated")
+                    return
+                self.logger.error(f"Direct reboot returned {result.returncode}")
             except Exception as reboot_error:
                 self.logger.error(f"Direct reboot failed: {reboot_error}")
             
