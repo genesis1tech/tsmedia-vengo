@@ -72,8 +72,15 @@ class STServoController:
             timeout: Command timeout in seconds
             on_obstruction_callback: Callback function(retry_count, servo_id) called on obstruction
         """
-        # Load from environment variables if not specified
-        self.port = port or os.environ.get('TSV6_SERVO_PORT') or self._auto_detect_port()
+        # Load from environment variables if not specified.  Production defaults
+        # to real hardware; simulation must be opted into explicitly so a
+        # missing USB adapter cannot be mistaken for a successful door move.
+        env_port = os.environ.get('TSV6_SERVO_PORT')
+        self._explicit_port = port or env_port
+        self.simulation_mode = os.environ.get(
+            'TSV6_SERVO_SIMULATION', 'false'
+        ).lower() in ('true', '1', 'yes')
+        self.port = self._explicit_port or self._auto_detect_port()
         self.baudrate = int(os.environ.get('TSV6_SERVO_BAUD', baudrate))
         self.servo_id = int(os.environ.get('TSV6_SERVO_ID', servo_id))
         self.open_position = int(os.environ.get('TSV6_SERVO_OPEN_POS', open_position))
@@ -94,6 +101,7 @@ class STServoController:
         if not STSERVO_AVAILABLE:
             logger.warning("STServo SDK not available - running in simulation mode")
             print("STServo SDK not available - running in simulation mode")
+            self.simulation_mode = True
             return
 
         self._connect()
@@ -145,6 +153,9 @@ class STServoController:
             return False
 
         try:
+            if not self._explicit_port:
+                self.port = self._auto_detect_port()
+
             logger.info(f"Connecting to STServo on {self.port} at {self.baudrate} baud...")
 
             self.port_handler = PortHandler(self.port)
@@ -155,6 +166,23 @@ class STServoController:
                 return False
 
             self.servo = sms_sts(self.port_handler)
+
+            ping_result = self.servo.ping(self.servo_id)
+            comm_result = ping_result[1] if isinstance(ping_result, tuple) and len(ping_result) > 1 else 0
+            if comm_result != 0:
+                logger.error(
+                    f"STServo adapter opened on {self.port}, but servo ID {self.servo_id} "
+                    f"did not respond to ping (comm_result={comm_result}). "
+                    "Check servo power, TTL bus wiring, and servo ID."
+                )
+                try:
+                    self.port_handler.closePort()
+                except Exception:
+                    pass
+                self.servo = None
+                self.port_handler = None
+                return False
+
             self._connected = True
 
             # Enable torque
@@ -173,11 +201,30 @@ class STServoController:
         except Exception as e:
             logger.error(f"Failed to connect to STServo: {e}")
             self._connected = False
+            self.servo = None
             return False
+
+    @property
+    def is_connected(self) -> bool:
+        """True when the controller has an active hardware connection."""
+        return self._connected and self.servo is not None
+
+    def _ensure_connected(self) -> bool:
+        """Reconnect after adapter unplug/replug before issuing commands."""
+        if self.is_connected:
+            return True
+        if self.simulation_mode:
+            return False
+
+        logger.warning("STServo not connected; attempting adapter re-detection/reconnect")
+        return self._connect()
 
     def _enable_torque(self, enable: bool) -> bool:
         """Enable or disable servo torque."""
         if not self._connected or not self.servo:
+            if enable and not self.simulation_mode and not self._ensure_connected():
+                logger.error("Cannot enable servo torque: servo adapter is not connected")
+                return False
             return False
 
         try:
@@ -202,6 +249,13 @@ class STServoController:
         Returns:
             True if successful
         """
+        if not self._connected or not self.servo:
+            if not self.simulation_mode and not self._ensure_connected():
+                logger.error(
+                    f"Cannot move servo to position {position}: servo adapter is not connected"
+                )
+                return False
+
         if not self._connected or not self.servo:
             # Simulation mode
             logger.info(f"[SIM] Moving servo to position {position}")
@@ -279,7 +333,10 @@ class STServoController:
         Returns True if the servo is within ``tolerance`` of ``target``.
         """
         if not self._connected or not self.servo:
-            return True  # simulation mode — nothing to verify
+            if self.simulation_mode:
+                return True  # simulation mode — nothing to verify
+            logger.error(f"{op}: cannot verify target {target}; servo adapter is not connected")
+            return False
 
         actual = self.get_position()
         if abs(actual - target) <= tolerance:
@@ -427,6 +484,9 @@ class STServoController:
             True if obstruction detected, False if movement completed normally
         """
         if not self._connected or not self.servo:
+            if not self.simulation_mode:
+                logger.error("Cannot monitor close movement: servo adapter is not connected")
+                return True
             # Simulation mode - no obstruction
             time.sleep(0.5)
             return False
@@ -652,7 +712,8 @@ class STServoController:
 
         for pos in test_positions:
             print(f"  Moving to position {pos}...")
-            self._set_position(pos)
+            if not self._set_position(pos):
+                return False
             time.sleep(1.0)
 
         print("Servo test complete")

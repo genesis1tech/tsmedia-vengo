@@ -815,17 +815,38 @@ class ProductionVideoPlayer:
                 # Initialize STServo controller (uses USB serial, not GPIO)
                 # Configuration loaded from environment variables or defaults
                 self.servo_controller = STServoController()
-                self.logger.info("STServo controller initialized")
+                if not getattr(self.servo_controller, "simulation_mode", False) and not getattr(
+                    self.servo_controller, "is_connected", False
+                ):
+                    self.logger.error(
+                        "STServo controller initialized without a hardware connection; "
+                        "door commands will fail until the USB servo adapter is reconnected"
+                    )
+                    self.error_recovery.report_error(
+                        "servo_controller",
+                        "initialization",
+                        "servo adapter not connected",
+                        "medium",
+                    )
+                else:
+                    self.logger.info("STServo controller initialized")
 
                 # Ensure servo is at closed position on startup
                 try:
                     self.logger.info("Initializing servo to closed position...")
-                    self.servo_controller.close_door(hold_time=0.5)
-                    self.logger.info("Servo initialized to closed position")
+                    if self.servo_controller.close_door(hold_time=0.5):
+                        self.logger.info("Servo initialized to closed position")
+                        self.error_recovery.report_success("servo_controller")
+                    else:
+                        self.logger.error("Failed to initialize servo to closed position")
+                        self.error_recovery.report_error(
+                            "servo_controller",
+                            "initialization",
+                            "failed to close servo at startup",
+                            "medium",
+                        )
                 except Exception as servo_init_error:
                     self.logger.warning(f"Failed to initialize servo to closed position: {servo_init_error}")
-
-                self.error_recovery.report_success("servo_controller")
             else:
                 self.logger.warning("STServo controller not available")
 
