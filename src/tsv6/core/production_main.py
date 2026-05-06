@@ -973,6 +973,7 @@ class ProductionVideoPlayer:
 
                 self.display_backend = backend
                 self._pisignage_enabled = True
+                self._wire_settings_wake_callback()
                 self.error_recovery.report_success("pisignage")
                 self.logger.info(
                     "TSV6NativeBackend initialized — server=%s installation=%s",
@@ -2280,6 +2281,18 @@ class ProductionVideoPlayer:
         except Exception:
             self.logger.exception("Settings exit: failed to restart idle display")
 
+    def _wire_settings_wake_callback(self) -> bool:
+        """Wire POST /api/exit-settings to restart idle/Vengo playback."""
+        renderer = getattr(self.display_backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_wake_callback"):
+            router.set_wake_callback(self._resume_from_settings)
+            self.logger.info("Settings wake callback wired")
+            return True
+
+        self.logger.warning("Settings wake callback not wired: router unavailable")
+        return False
+
     def _start_long_press_watcher(self) -> None:
         """Start the evdev-level long-press gesture watcher.
 
@@ -2307,12 +2320,8 @@ class ProductionVideoPlayer:
 
         hold_seconds = float(os.environ.get("TSV6_LONGPRESS_SECONDS", "5"))
 
-        # Wire the wake callback so POST /api/exit-settings re-maps the VLC
-        # Tk window when the user leaves the settings page.
-        renderer = getattr(self.display_backend, "_renderer", None)
-        router = getattr(renderer, "_router", None) if renderer else None
-        if router is not None and hasattr(router, "set_wake_callback"):
-            router.set_wake_callback(self._resume_from_settings)
+        # The settings wake callback is wired during native backend init so
+        # Close works even if the long-press watcher fails to start.
 
         self._long_press_watcher = LongPressWatcher(
             self._open_settings, hold_seconds=hold_seconds

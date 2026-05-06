@@ -27,6 +27,19 @@ class _FakeDisplayBackend:
         return True
 
 
+class _FakeRouter:
+    def __init__(self):
+        self.callback = None
+
+    def set_wake_callback(self, callback):
+        self.callback = callback
+
+
+class _FakeRenderer:
+    def __init__(self, router):
+        self._router = router
+
+
 class _FakeNetworkDeadlineMonitor:
     def __init__(self):
         self.mark_connected_calls = 0
@@ -98,6 +111,24 @@ def test_settings_exit_restarts_idle_display():
     player._toggle_vlc_window = lambda hide: toggle_calls.append(hide)
 
     player._resume_from_settings()
+
+    assert toggle_calls == [False]
+    assert backend.show_idle_calls == 1
+
+
+def test_settings_wake_callback_is_wired_without_long_press():
+    router = _FakeRouter()
+    backend = _FakeDisplayBackend(state="vengo_idle")
+    backend._renderer = _FakeRenderer(router)
+    player = _player(backend)
+    toggle_calls = []
+    player._toggle_vlc_window = lambda hide: toggle_calls.append(hide)
+
+    assert player._wire_settings_wake_callback() is True
+    assert router.callback.__self__ is player
+    assert router.callback.__func__ is ProductionVideoPlayer._resume_from_settings
+
+    router.callback()
 
     assert toggle_calls == [False]
     assert backend.show_idle_calls == 1

@@ -18,8 +18,8 @@ def _settings_html() -> str:
 def test_settings_page_posts_exit_on_unload():
     html = _settings_html()
 
-    assert 'window.addEventListener("pagehide", postExitSettings)' in html
-    assert 'window.addEventListener("beforeunload", postExitSettings)' in html
+    assert 'window.addEventListener("pagehide", beaconExitSettings)' in html
+    assert 'window.addEventListener("beforeunload", beaconExitSettings)' in html
     assert 'navigator.sendBeacon("/api/exit-settings"' in html
     assert 'fetch("/api/exit-settings", { method: "POST", keepalive: true })' in html
 
@@ -28,4 +28,6 @@ def test_close_button_reuses_unload_resume_path():
     html = _settings_html()
 
     assert "function exitSettings()" in html
-    assert "postExitSettings();" in html
+    assert "function postExitSettings()" in html
+    assert "postExitSettings().then(goHome);" in html
+    assert "setTimeout(goHome, 1500);" in html

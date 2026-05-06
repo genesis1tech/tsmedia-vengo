@@ -223,6 +223,18 @@
   var useSaved = false;
 
   function postExitSettings() {
+    if (resumePosted) return Promise.resolve();
+    resumePosted = true;
+
+    try {
+      return fetch("/api/exit-settings", { method: "POST", keepalive: true })
+        .catch(function () {});
+    } catch (e) {
+      return Promise.resolve();
+    }
+  }
+
+  function beaconExitSettings() {
     if (resumePosted) return;
     resumePosted = true;
 
@@ -238,9 +250,15 @@
   }
 
   function exitSettings() {
-    // Ping backend so it can resume the idle player before we navigate away.
-    postExitSettings();
-    window.location.href = "/";
+    // Let the backend restart Vengo idle before we navigate away from settings.
+    var done = false;
+    var goHome = function () {
+      if (done) return;
+      done = true;
+      window.location.href = "/";
+    };
+    postExitSettings().then(goHome);
+    setTimeout(goHome, 1500);
   }
 
   function toast(msg, cls, ms) {
@@ -479,8 +497,8 @@
   refreshStatus();
   scan();
   setInterval(refreshStatus, 10000);
-  window.addEventListener("pagehide", postExitSettings);
-  window.addEventListener("beforeunload", postExitSettings);
+  window.addEventListener("pagehide", beaconExitSettings);
+  window.addEventListener("beforeunload", beaconExitSettings);
 }());
 </script>
 </body>
