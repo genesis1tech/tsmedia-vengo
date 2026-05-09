@@ -2271,7 +2271,24 @@ class ProductionVideoPlayer:
     def _resume_from_settings(self) -> None:
         """Wake callback: restore the idle display after user exits settings."""
         self._toggle_vlc_window(hide=False)
+
         try:
+            delay = float(os.environ.get("TSV6_SETTINGS_RESUME_DELAY_SECS", "0.75"))
+        except ValueError:
+            delay = 0.75
+
+        threading.Thread(
+            target=self._delayed_resume_from_settings,
+            args=(delay,),
+            name="SettingsResumeIdle",
+            daemon=True,
+        ).start()
+
+    def _delayed_resume_from_settings(self, delay: float) -> None:
+        """Resume idle after the browser has navigated back to the player page."""
+        try:
+            if delay > 0:
+                time.sleep(delay)
             if self.display_backend is None:
                 self.logger.warning("Settings exit: no display backend available")
                 return
