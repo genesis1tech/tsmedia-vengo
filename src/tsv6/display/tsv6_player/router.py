@@ -42,10 +42,12 @@ import queue
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
+from tsv6.display.identity import get_player_identity
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,15 @@ _SSE_POLL_INTERVAL: float = 0.05
 
 # How often a keep-alive comment is sent to prevent proxy timeouts (seconds).
 _SSE_KEEPALIVE_INTERVAL: float = 15.0
+
+_DISPLAY_STATE_ACTIONS: set[str] = {
+    "show_html",
+    "show_image",
+    "show_product",
+    "show_video_zone",
+    "show_idle",
+    "show_vengo_idle",
+}
 
 
 def _sse_event(data: dict) -> str:
@@ -100,6 +111,12 @@ class RouterServer:
         self._last_ticker_cmd: dict | None = None
         self._ticker_lock = threading.Lock()
 
+        # Last display-state command, cached for newly-connected SSE clients.
+        # Settings navigation and Chromium/EventSource reconnects can otherwise
+        # miss a one-shot idle command and remain on the page's ready placeholder.
+        self._last_display_cmd: dict | None = None
+        self._display_lock = threading.Lock()
+
         # Last known pixel rect of the #main zone, set by POST /video_zone_rect
         self._video_zone_rect: tuple[int, int, int, int] | None = None
         self._rect_lock = threading.Lock()
@@ -107,6 +124,10 @@ class RouterServer:
         # Optional callback invoked by POST /api/exit-settings. Used to restart
         # the idle display path when the user leaves the settings page.
         self._on_wake: "Optional[Callable[[], None]]" = None
+
+        # Optional callback for motor calibration commands from /settings.
+        # Signature: callback(action, payload) -> dict
+        self._on_motor_command: "Optional[Callable[[str, dict[str, Any]], dict[str, Any]]]" = None
 
         self._app = self._build_app()
         self._server_thread: threading.Thread | None = None
@@ -169,6 +190,9 @@ class RouterServer:
         if command.get("action") == "show_ticker":
             with self._ticker_lock:
                 self._last_ticker_cmd = dict(command)
+        if command.get("action") in _DISPLAY_STATE_ACTIONS:
+            with self._display_lock:
+                self._last_display_cmd = dict(command)
         self._command_queue.put(command)
         logger.debug("Command enqueued: %s", command.get("action"))
 
@@ -180,6 +204,34 @@ class RouterServer:
     def set_wake_callback(self, callback: Optional[Callable[[], None]]) -> None:
         """Install a callback invoked when the user exits the settings page."""
         self._on_wake = callback
+
+    def set_motor_callback(
+        self,
+        callback: Optional[Callable[[str, dict[str, Any]], dict[str, Any]]],
+    ) -> None:
+        """Install a callback invoked by motor setup endpoints."""
+        self._on_motor_command = callback
+
+    def _run_motor_command(
+        self,
+        action: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> tuple[dict[str, Any], int]:
+        """Run a motor setup command through the production app callback."""
+        if self._on_motor_command is None:
+            return {
+                "ok": False,
+                "error": "motor setup unavailable",
+                "available": False,
+            }, 503
+        try:
+            result = self._on_motor_command(action, payload or {})
+        except Exception as exc:
+            logger.exception("Motor command %s failed", action)
+            return {"ok": False, "error": str(exc), "available": True}, 500
+
+        status = 200 if result.get("ok", False) else int(result.get("status", 400))
+        return result, status
 
     def get_video_zone_rect(self) -> tuple[int, int, int, int] | None:
         """
@@ -393,6 +445,17 @@ class RouterServer:
                 if last_ticker is not None:
                     yield _sse_event(last_ticker)
 
+                # Replay the current display state after ticker replay so
+                # reconnecting clients leave the built-in ready placeholder.
+                with server_self._display_lock:
+                    last_display = (
+                        dict(server_self._last_display_cmd)
+                        if server_self._last_display_cmd is not None
+                        else None
+                    )
+                if last_display is not None:
+                    yield _sse_event(last_display)
+
                 last_keepalive = time.monotonic()
                 while True:
                     now = time.monotonic()
@@ -457,6 +520,57 @@ class RouterServer:
                 return jsonify({"connected": current is not None, "current": current, "ip": ip_addr})
             except Exception as exc:
                 return jsonify({"connected": False, "error": str(exc)}), 500
+
+        @app.route("/api/device/status")
+        def device_status() -> Response:
+            """Return the settings landing-page device status."""
+            try:
+                identity = get_player_identity()
+                active = subprocess.run(
+                    ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY",
+                     "device", "wifi", "list", "--rescan", "no"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                current = None
+                for line in active.stdout.splitlines():
+                    parts = line.split(":")
+                    if len(parts) >= 4 and parts[0] == "yes":
+                        current = {
+                            "ssid": parts[1],
+                            "signal": parts[2],
+                            "security": parts[3],
+                        }
+                        break
+
+                ip = subprocess.run(
+                    ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                ip_addr = ""
+                for line in ip.stdout.splitlines():
+                    if line.startswith("IP4.ADDRESS"):
+                        ip_addr = line.split(":", 1)[1].split("/")[0]
+                        break
+
+                return jsonify({
+                    "ok": True,
+                    "device": {
+                        "name": identity.player_name,
+                        "serial": identity.cpu_serial,
+                        "device_id": identity.device_id,
+                    },
+                    "time": {
+                        "iso": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    },
+                    "wifi": {
+                        "connected": current is not None,
+                        "current": current,
+                        "ip": ip_addr,
+                    },
+                })
+            except Exception as exc:
+                logger.warning("device_status failed: %s", exc)
+                return jsonify({"ok": False, "error": str(exc)}), 500
 
         @app.route("/api/wifi/scan", methods=["POST"])
         def wifi_scan() -> Response:
@@ -558,6 +672,26 @@ class RouterServer:
             except Exception as exc:
                 logger.warning("wifi_connect error: %s", exc)
                 return jsonify({"ok": False, "error": str(exc)}), 500
+
+        @app.route("/api/motor/status")
+        def motor_status() -> Response:
+            """Return motor setup status and current calibration."""
+            result, status = self._run_motor_command("status")
+            return jsonify(result), status
+
+        @app.route("/api/motor/move", methods=["POST"])
+        def motor_move() -> Response:
+            """Move the servo to open, closed, or a raw position."""
+            body = request.get_json(force=True, silent=True) or {}
+            result, status = self._run_motor_command("move", body)
+            return jsonify(result), status
+
+        @app.route("/api/motor/calibration", methods=["POST"])
+        def motor_calibration() -> Response:
+            """Persist open/closed calibration values."""
+            body = request.get_json(force=True, silent=True) or {}
+            result, status = self._run_motor_command("calibration", body)
+            return jsonify(result), status
 
         @app.route("/api/exit-settings", methods=["POST"])
         def exit_settings() -> Response:

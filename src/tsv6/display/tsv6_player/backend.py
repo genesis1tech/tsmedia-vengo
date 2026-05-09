@@ -31,6 +31,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from tsv6.display.identity import PlayerIdentity, get_player_identity
 from tsv6.display.tsv6_player.impression_builder import ImpressionTracker
@@ -289,6 +290,19 @@ class TSV6NativeBackend:
             self._renderer is None or self._renderer.is_connected
         )
         return protocol_ok and renderer_ok
+
+    def set_motor_callback(
+        self,
+        callback: "Callable[[str, dict[str, Any]], dict[str, Any]] | None",
+    ) -> bool:
+        """Install a motor setup callback on the local settings router."""
+        if self._renderer is None:
+            return False
+        setter = getattr(self._renderer, "set_motor_callback", None)
+        if not callable(setter):
+            return False
+        setter(callback)
+        return True
 
     def _on_protocol_connect(self) -> None:
         """Refresh Vengo idle after the display server connection recovers."""

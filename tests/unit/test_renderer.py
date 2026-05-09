@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -122,6 +123,22 @@ class TestRouterServerSendCommand:
             router.send_command({"action": action})
         assert router._command_queue.qsize() == 6
 
+    def test_display_state_command_cached_for_reconnect(self, router: RouterServer) -> None:
+        """Current display state should survive Chromium/EventSource reconnects."""
+        cmd = {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+
+        router.send_command(cmd)
+
+        assert router._last_display_cmd == cmd
+
+    def test_transient_command_does_not_replace_display_state(self, router: RouterServer) -> None:
+        display_cmd = {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+        router.send_command(display_cmd)
+
+        router.send_command({"action": "hide_video_zone"})
+
+        assert router._last_display_cmd == display_cmd
+
 
 # --------------------------------------------------------------------------- #
 #  RouterServer — Flask routes                                                 #
@@ -154,6 +171,32 @@ class TestRouterServerRoutes:
         """
         rules = {rule.rule for rule in router._app.url_map.iter_rules()}
         assert "/events" in rules
+
+    def test_events_replays_display_state_to_new_client(self, router: RouterServer) -> None:
+        router.send_command({"action": "show_vengo_idle", "url": "https://ads.example/player"})
+
+        with router._app.test_request_context("/events"):
+            resp = router._app.view_functions["events"]()
+            first_event = next(resp.response)
+            resp.close()
+
+        payload = json.loads(first_event[len("data: "):-2])
+        assert payload == {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+
+    def test_events_replays_ticker_before_display_state(self, router: RouterServer) -> None:
+        router.send_command({"action": "show_ticker", "enabled": True, "text": "Recycle"})
+        router.send_command({"action": "show_vengo_idle", "url": "https://ads.example/player"})
+
+        with router._app.test_request_context("/events"):
+            resp = router._app.view_functions["events"]()
+            first_event = next(resp.response)
+            second_event = next(resp.response)
+            resp.close()
+
+        first_payload = json.loads(first_event[len("data: "):-2])
+        second_payload = json.loads(second_event[len("data: "):-2])
+        assert first_payload["action"] == "show_ticker"
+        assert second_payload == {"action": "show_vengo_idle", "url": "https://ads.example/player"}
 
     def test_video_zone_rect_stores_rect(self, flask_client, router: RouterServer) -> None:
         payload = json.dumps({"rect": [10, 20, 800, 420]})
@@ -252,6 +295,16 @@ class TestChromiumKioskCommandLine:
     def test_autoplay_policy_flag(self, kiosk: ChromiumKiosk) -> None:
         assert "--autoplay-policy=no-user-gesture-required" in kiosk._build_command()
 
+    def test_gpu_acceleration_disabled_for_kiosk_stability(
+        self, kiosk: ChromiumKiosk
+    ) -> None:
+        cmd = kiosk._build_command()
+        assert "--disable-gpu" in cmd
+        assert "--disable-gpu-compositing" in cmd
+        assert "--disable-gpu-rasterization" in cmd
+        assert "--disable-accelerated-video-decode" in cmd
+        assert "--disable-zero-copy" in cmd
+
     def test_disable_infobars(self, kiosk: ChromiumKiosk) -> None:
         assert "--disable-infobars" in kiosk._build_command()
 
@@ -279,6 +332,42 @@ class TestChromiumKioskCommandLine:
             height=1080,
         )
         assert "--window-size=1920,1080" in k._build_command()
+
+
+# --------------------------------------------------------------------------- #
+#  ChromiumKiosk — process output logging                                      #
+# --------------------------------------------------------------------------- #
+
+class TestChromiumKioskOutputLogging:
+    def test_chromium_log_path_can_be_overridden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_path = tmp_path / "logs" / "chromium.log"
+        monkeypatch.setenv("TSV6_CHROMIUM_LOG_PATH", str(log_path))
+        kiosk = ChromiumKiosk(url="http://127.0.0.1:8765/", user_data_dir=tmp_path)
+
+        assert kiosk._chromium_log_path() == log_path
+
+    def test_start_captures_chromium_stdout_and_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TSV6_CHROMIUM_LOG_PATH", str(tmp_path / "chromium.log"))
+        kiosk = ChromiumKiosk(url="http://127.0.0.1:8765/", user_data_dir=tmp_path)
+        fake_process = MagicMock()
+        fake_process.pid = 123
+        fake_process.stdout = None
+        monkeypatch.setattr(kiosk, "_wait_for_cdp", lambda: True)
+
+        with patch(
+            "tsv6.display.tsv6_player.chromium.subprocess.Popen",
+            return_value=fake_process,
+        ) as popen:
+            assert kiosk.start() is True
+
+        kwargs = popen.call_args.kwargs
+        assert kwargs["stdout"] == subprocess.PIPE
+        assert kwargs["stderr"] == subprocess.STDOUT
+        assert kwargs["text"] is True
 
 
 # --------------------------------------------------------------------------- #

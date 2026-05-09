@@ -7,6 +7,7 @@ via root-owned systemd helper units using D-Bus.
 """
 
 import logging
+import subprocess
 import time
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -215,21 +216,47 @@ class SystemdRecoveryManager:
             
         except dbus.exceptions.DBusException as e:
             self.logger.error(f"D-Bus error initiating reboot: {e}")
-            
-            # Fallback: Try systemctl reboot without sudo
-            # This may work if polkit rules allow it
-            try:
-                import subprocess
-                self.logger.warning("Falling back to systemctl reboot...")
-                subprocess.run(['systemctl', 'reboot'], timeout=5, check=False)
-                return True
-            except Exception as fallback_error:
-                self.logger.error(f"Fallback reboot also failed: {fallback_error}")
-                return False
+            return self._execute_systemctl_reboot_fallback()
                 
         except Exception as e:
             self.logger.error(f"Unexpected error initiating reboot: {e}")
             return False
+
+    def _execute_systemctl_reboot_fallback(self) -> bool:
+        """
+        Try unprivileged ``systemctl reboot`` and report whether it was accepted.
+
+        ``systemctl reboot`` returns a non-zero code when polkit requires
+        interactive authentication. Treating that as success blocks the
+        caller's stronger fallback path, leaving the kiosk up after the network
+        reboot deadline has already been exceeded.
+        """
+        try:
+            self.logger.warning("Falling back to systemctl reboot...")
+            result = subprocess.run(
+                ['systemctl', 'reboot'],
+                timeout=5,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as fallback_error:
+            self.logger.error(f"Fallback reboot failed: {fallback_error}")
+            return False
+
+        if result.returncode == 0:
+            self.logger.critical("System reboot via systemctl accepted")
+            return True
+
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        detail = stderr or stdout or "no output"
+        self.logger.error(
+            "Fallback systemctl reboot failed with return code %s: %s",
+            result.returncode,
+            detail,
+        )
+        return False
     
     def get_status(self) -> Dict[str, Any]:
         """Get the status of the recovery manager"""

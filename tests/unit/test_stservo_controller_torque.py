@@ -48,6 +48,7 @@ def controller():
 
         sdk.WritePosEx.side_effect = write_pos_ex
         sdk.write1ByteTxRx.side_effect = write1byte
+        sdk.ping.return_value = (1, 0, 0)
         sdk.ReadPos.side_effect = lambda _id: (state["position"], 0, 0)
         sdk.ReadMoving.side_effect = lambda _id: (0, 0, 0)  # never report moving
 
@@ -127,3 +128,73 @@ def test_open_door_fails_loudly_when_servo_cannot_move(controller, caplog):
         or "position-write completed but servo at" in record.message
         for record in caplog.records
     ), "expected a diagnostic log when servo failed to move"
+
+
+def test_missing_adapter_does_not_simulate_success(caplog):
+    """Production default must fail loudly when the USB adapter is absent."""
+    with patch("tsv6.hardware.stservo.controller.STSERVO_AVAILABLE", True), \
+         patch("tsv6.hardware.stservo.controller.PortHandler") as MockPort:
+
+        MockPort.return_value.openPort.return_value = False
+
+        from tsv6.hardware.stservo.controller import STServoController
+
+        ctrl = STServoController(port="/dev/missing")
+
+        with caplog.at_level("ERROR"):
+            ok = ctrl.open_door(hold_time=0)
+
+    assert ok is False
+    assert ctrl.is_connected is False
+    assert any(
+        "servo adapter is not connected" in record.message
+        or "Failed to open port" in record.message
+        for record in caplog.records
+    )
+
+
+def test_reconnects_after_adapter_returns(monkeypatch):
+    """A controller created while unplugged should recover on the next command."""
+    with patch("tsv6.hardware.stservo.controller.STSERVO_AVAILABLE", True), \
+         patch("tsv6.hardware.stservo.controller.PortHandler") as MockPort, \
+         patch("tsv6.hardware.stservo.controller.sms_sts") as MockSdk:
+
+        open_attempts = {"count": 0}
+        port = MockPort.return_value
+
+        def open_port():
+            open_attempts["count"] += 1
+            return open_attempts["count"] >= 2
+
+        port.openPort.side_effect = open_port
+
+        sdk = MockSdk.return_value
+        state = {"position": 0, "torque": False}
+
+        def write_pos_ex(_id, position, _speed, _accel):
+            if state["torque"]:
+                state["position"] = position
+            return (0, 0)
+
+        sdk.ping.return_value = (1, 0, 0)
+        sdk.write1ByteTxRx.side_effect = lambda _id, _addr, value: state.update(torque=bool(value)) or (0, 0)
+        sdk.WritePosEx.side_effect = write_pos_ex
+        sdk.ReadPos.side_effect = lambda _id: (state["position"], 0, 0)
+        sdk.ReadMoving.side_effect = lambda _id: (0, 0, 0)
+
+        monkeypatch.setattr(
+            "tsv6.hardware.stservo.controller.STServoController._auto_detect_port",
+            lambda self: "/dev/ttyACM0",
+        )
+
+        from tsv6.hardware.stservo.controller import STServoController
+
+        ctrl = STServoController()
+        assert ctrl.is_connected is False
+
+        ok = ctrl.open_door(hold_time=0)
+
+    assert ok is True
+    assert ctrl.is_connected is True
+    assert state["position"] == ctrl.open_position
+    assert open_attempts["count"] == 2

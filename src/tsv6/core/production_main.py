@@ -233,7 +233,28 @@ class ProductionVideoPlayer:
             check_interval_seconds=60,
             on_deadline_exceeded=self._on_connection_deadline_exceeded,
             enable_forced_reboot=connection_deadline_force_reboot,
-            systemd_recovery_manager=self.systemd_recovery  # CRITICAL FIX: Pass recovery manager
+            systemd_recovery_manager=self.systemd_recovery,  # CRITICAL FIX: Pass recovery manager
+            connection_name="AWS IoT",
+            reboot_reason="AWS IoT connection deadline exceeded",
+        )
+
+        network_failure_reboot_minutes = env_int(
+            "TSV6_NETWORK_FAILURE_REBOOT_MINUTES",
+            8,
+            minimum=1,
+        )
+        network_failure_force_reboot = env_bool(
+            "TSV6_NETWORK_FAILURE_FORCE_REBOOT",
+            True,
+        )
+        self.network_deadline_monitor = ConnectionDeadlineMonitor(
+            disconnection_deadline_minutes=network_failure_reboot_minutes,
+            check_interval_seconds=30,
+            on_deadline_exceeded=self._on_network_deadline_exceeded,
+            enable_forced_reboot=network_failure_force_reboot,
+            systemd_recovery_manager=self.systemd_recovery,
+            connection_name="Network",
+            reboot_reason="network unreachable past configured deadline",
         )
         
         # State tracking
@@ -794,17 +815,38 @@ class ProductionVideoPlayer:
                 # Initialize STServo controller (uses USB serial, not GPIO)
                 # Configuration loaded from environment variables or defaults
                 self.servo_controller = STServoController()
-                self.logger.info("STServo controller initialized")
+                if not getattr(self.servo_controller, "simulation_mode", False) and not getattr(
+                    self.servo_controller, "is_connected", False
+                ):
+                    self.logger.error(
+                        "STServo controller initialized without a hardware connection; "
+                        "door commands will fail until the USB servo adapter is reconnected"
+                    )
+                    self.error_recovery.report_error(
+                        "servo_controller",
+                        "initialization",
+                        "servo adapter not connected",
+                        "medium",
+                    )
+                else:
+                    self.logger.info("STServo controller initialized")
 
                 # Ensure servo is at closed position on startup
                 try:
                     self.logger.info("Initializing servo to closed position...")
-                    self.servo_controller.close_door(hold_time=0.5)
-                    self.logger.info("Servo initialized to closed position")
+                    if self.servo_controller.close_door(hold_time=0.5):
+                        self.logger.info("Servo initialized to closed position")
+                        self.error_recovery.report_success("servo_controller")
+                    else:
+                        self.logger.error("Failed to initialize servo to closed position")
+                        self.error_recovery.report_error(
+                            "servo_controller",
+                            "initialization",
+                            "failed to close servo at startup",
+                            "medium",
+                        )
                 except Exception as servo_init_error:
                     self.logger.warning(f"Failed to initialize servo to closed position: {servo_init_error}")
-
-                self.error_recovery.report_success("servo_controller")
             else:
                 self.logger.warning("STServo controller not available")
 
@@ -931,6 +973,8 @@ class ProductionVideoPlayer:
 
                 self.display_backend = backend
                 self._pisignage_enabled = True
+                self._wire_settings_wake_callback()
+                self._wire_settings_motor_callback()
                 self.error_recovery.report_success("pisignage")
                 self.logger.info(
                     "TSV6NativeBackend initialized — server=%s installation=%s",
@@ -1303,10 +1347,20 @@ class ProductionVideoPlayer:
     def _on_network_disconnect(self, status):
         """Handle network disconnection — recovery is handled by NetworkManager (Layer 0)"""
         self.logger.error(f"Network disconnected: {status}")
+        try:
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.mark_disconnected()
+        except Exception as e:
+            self.logger.error(f"Error updating network deadline monitor on disconnect: {e}")
 
     def _on_network_reconnect(self, status):
         """Handle network reconnection (detected by observe-only monitor)"""
         self.logger.info(f"Network reconnected: {status}")
+        try:
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.mark_connected()
+        except Exception as e:
+            self.logger.error(f"Error updating network deadline monitor on reconnect: {e}")
         # Trigger AWS reconnection if needed
         if self.aws_manager and not self.aws_manager.connected:
             self.aws_manager.start_auto_reconnect()
@@ -2001,6 +2055,7 @@ class ProductionVideoPlayer:
 
             # Start connection deadline monitoring
             self.connection_deadline_monitor.start()
+            self.network_deadline_monitor.start()
 
             # Connect AWS manager
             if self.aws_manager:
@@ -2214,8 +2269,230 @@ class ProductionVideoPlayer:
             self.logger.exception("Long-press: CDP navigate failed")
 
     def _resume_from_settings(self) -> None:
-        """Wake callback: re-map the VLC Tk window after user exits settings."""
+        """Wake callback: restore the idle display after user exits settings."""
         self._toggle_vlc_window(hide=False)
+
+        try:
+            delay = float(os.environ.get("TSV6_SETTINGS_RESUME_DELAY_SECS", "0.75"))
+        except ValueError:
+            delay = 0.75
+
+        threading.Thread(
+            target=self._delayed_resume_from_settings,
+            args=(delay,),
+            name="SettingsResumeIdle",
+            daemon=True,
+        ).start()
+
+    def _delayed_resume_from_settings(self, delay: float) -> None:
+        """Resume idle after the browser has navigated back to the player page."""
+        try:
+            if delay > 0:
+                time.sleep(delay)
+            if self.display_backend is None:
+                self.logger.warning("Settings exit: no display backend available")
+                return
+            if not self.display_backend.show_idle():
+                self.logger.warning("Settings exit: backend.show_idle() returned false")
+            else:
+                self.logger.info("Settings exit: idle display restarted")
+        except Exception:
+            self.logger.exception("Settings exit: failed to restart idle display")
+
+    def _wire_settings_wake_callback(self) -> bool:
+        """Wire POST /api/exit-settings to restart idle/Vengo playback."""
+        renderer = getattr(self.display_backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_wake_callback"):
+            router.set_wake_callback(self._resume_from_settings)
+            self.logger.info("Settings wake callback wired")
+            return True
+
+        self.logger.warning("Settings wake callback not wired: router unavailable")
+        return False
+
+    def _wire_settings_motor_callback(self) -> bool:
+        """Wire /api/motor/* settings endpoints to the live servo controller."""
+        setter = getattr(self.display_backend, "set_motor_callback", None)
+        if callable(setter) and setter(self._handle_motor_setup_command):
+            self.logger.info("Settings motor callback wired")
+            return True
+
+        renderer = getattr(self.display_backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_motor_callback"):
+            router.set_motor_callback(self._handle_motor_setup_command)
+            self.logger.info("Settings motor callback wired via router")
+            return True
+
+        self.logger.warning("Settings motor callback not wired: router unavailable")
+        return False
+
+    def _handle_motor_setup_command(self, action: str, payload: dict) -> dict:
+        """Handle motor setup commands from the local settings UI."""
+        if self.servo_controller is None:
+            return {
+                "ok": False,
+                "available": False,
+                "error": "servo controller is not initialized",
+                "status": 503,
+            }
+
+        try:
+            if action == "status":
+                return {
+                    "ok": True,
+                    "available": True,
+                    "calibration": self._servo_calibration_snapshot(),
+                }
+
+            with self._door_sequence_lock:
+                if self._door_sequence_active:
+                    return {
+                        "ok": False,
+                        "available": True,
+                        "error": "door sequence is active",
+                        "status": 409,
+                    }
+                self._door_sequence_active = True
+
+            try:
+                if action == "move":
+                    return self._handle_motor_move(payload)
+                if action == "calibration":
+                    return self._handle_motor_calibration(payload)
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": f"unknown motor action: {action}",
+                    "status": 400,
+                }
+            finally:
+                with self._door_sequence_lock:
+                    self._door_sequence_active = False
+
+        except Exception as exc:
+            self.logger.exception("Motor setup command failed: %s", action)
+            return {
+                "ok": False,
+                "available": True,
+                "error": str(exc),
+                "status": 500,
+            }
+
+    def _servo_calibration_snapshot(self) -> dict:
+        """Return calibration data using the controller helper when available."""
+        getter = getattr(self.servo_controller, "get_calibration", None)
+        if callable(getter):
+            return getter()
+        return {
+            "open_position": getattr(self.servo_controller, "open_position", None),
+            "closed_position": getattr(self.servo_controller, "closed_position", None),
+            "current_position": self.servo_controller.get_position()
+            if hasattr(self.servo_controller, "get_position") else None,
+            "connected": bool(getattr(self.servo_controller, "is_connected", False)),
+            "simulation": bool(getattr(self.servo_controller, "simulation_mode", False)),
+        }
+
+    def _handle_motor_move(self, payload: dict) -> dict:
+        """Move the motor to open/closed or a raw position from settings."""
+        target = str(payload.get("target") or "").strip().lower()
+        ok = False
+        if target == "open":
+            ok = bool(self.servo_controller.open_door(hold_time=0))
+        elif target == "closed":
+            ok = bool(self.servo_controller.close_door(hold_time=0.2))
+        elif target == "release":
+            release = getattr(self.servo_controller, "disable_servo", None)
+            if not callable(release):
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": "servo tension release is unavailable",
+                    "status": 501,
+                }
+            ok = bool(release())
+        elif target == "position":
+            position = self._parse_servo_position(payload.get("position"))
+            enable = getattr(self.servo_controller, "_enable_torque", None)
+            if callable(enable):
+                enable(True)
+            ok = bool(self.servo_controller._set_position(position))
+            wait = getattr(self.servo_controller, "_wait_for_movement", None)
+            if callable(wait):
+                wait()
+        else:
+            return {
+                "ok": False,
+                "available": True,
+                "error": "target must be open, closed, release, or position",
+                "status": 400,
+            }
+
+        return {
+            "ok": ok,
+            "available": True,
+            "calibration": self._servo_calibration_snapshot(),
+            "error": None if ok else "servo move failed",
+            "status": 200 if ok else 500,
+        }
+
+    def _handle_motor_calibration(self, payload: dict) -> dict:
+        """Update and persist motor open/closed calibration values."""
+        updates = {}
+        use_current_for = str(payload.get("use_current_for") or "").strip().lower()
+        if use_current_for:
+            current = self.servo_controller.get_position()
+            if use_current_for == "open":
+                updates["open_position"] = current
+            elif use_current_for == "closed":
+                updates["closed_position"] = current
+            else:
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": "use_current_for must be open or closed",
+                    "status": 400,
+                }
+
+        if "open_position" in payload and payload.get("open_position") is not None:
+            updates["open_position"] = self._parse_servo_position(payload.get("open_position"))
+        if "closed_position" in payload and payload.get("closed_position") is not None:
+            updates["closed_position"] = self._parse_servo_position(payload.get("closed_position"))
+
+        if not updates:
+            return {
+                "ok": False,
+                "available": True,
+                "error": "no calibration values supplied",
+                "status": 400,
+            }
+
+        setter = getattr(self.servo_controller, "set_calibration", None)
+        if callable(setter):
+            calibration = setter(**updates, persist=True)
+        else:
+            for key, value in updates.items():
+                setattr(self.servo_controller, key, value)
+            calibration = self._servo_calibration_snapshot()
+
+        self.logger.info("Servo calibration updated from settings: %s", updates)
+        return {
+            "ok": True,
+            "available": True,
+            "calibration": calibration,
+        }
+
+    @staticmethod
+    def _parse_servo_position(value) -> int:
+        """Parse a raw servo position from settings input."""
+        try:
+            position = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("position must be an integer")
+        if position < 0 or position > 4095:
+            raise ValueError("position must be between 0 and 4095")
+        return position
 
     def _start_long_press_watcher(self) -> None:
         """Start the evdev-level long-press gesture watcher.
@@ -2244,12 +2521,8 @@ class ProductionVideoPlayer:
 
         hold_seconds = float(os.environ.get("TSV6_LONGPRESS_SECONDS", "5"))
 
-        # Wire the wake callback so POST /api/exit-settings re-maps the VLC
-        # Tk window when the user leaves the settings page.
-        renderer = getattr(self.display_backend, "_renderer", None)
-        router = getattr(renderer, "_router", None) if renderer else None
-        if router is not None and hasattr(router, "set_wake_callback"):
-            router.set_wake_callback(self._resume_from_settings)
+        # The settings wake callback is wired during native backend init so
+        # Close works even if the long-press watcher fails to start.
 
         self._long_press_watcher = LongPressWatcher(
             self._open_settings, hold_seconds=hold_seconds
@@ -2340,6 +2613,8 @@ class ProductionVideoPlayer:
             # Stop connection deadline monitoring
             if self.connection_deadline_monitor:
                 self.connection_deadline_monitor.stop()
+            if self.network_deadline_monitor:
+                self.network_deadline_monitor.stop()
             
             # Stop error recovery
             if self.error_recovery:
@@ -2404,6 +2679,12 @@ class ProductionVideoPlayer:
                 "deadline_minutes": self.connection_deadline_monitor.deadline_minutes,
                 "deadline_exceeded": self.connection_deadline_monitor.deadline_exceeded
             }
+        if self.network_deadline_monitor:
+            status["network_deadline_monitor"] = {
+                "disconnection_duration_minutes": self.network_deadline_monitor.get_disconnection_duration_minutes(),
+                "deadline_minutes": self.network_deadline_monitor.deadline_minutes,
+                "deadline_exceeded": self.network_deadline_monitor.deadline_exceeded
+            }
 
         if self.bin_level_monitor:
             status["bin_level"] = self.bin_level_monitor.get_monitor_status()
@@ -2422,6 +2703,20 @@ class ProductionVideoPlayer:
             "aws_connection",
             "deadline_exceeded",
             f"Disconnected for {downtime_minutes:.1f} minutes - forcing reboot",
+            "critical"
+        )
+
+    def _on_network_deadline_exceeded(self, downtime_minutes: float):
+        """Handle sustained network outage deadline exceeded."""
+        self.logger.critical(
+            f"Network failure deadline exceeded! Network unreachable for {downtime_minutes:.1f} minutes. "
+            f"System will cleanly reboot shortly."
+        )
+
+        self.error_recovery.report_error(
+            "network",
+            "deadline_exceeded",
+            f"Network unreachable for {downtime_minutes:.1f} minutes - clean reboot requested",
             "critical"
         )
 

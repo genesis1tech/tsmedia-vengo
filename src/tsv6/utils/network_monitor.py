@@ -8,7 +8,7 @@ application can react (e.g. update status indicator, log to AWS).
 
 It does NOT perform any recovery actions.  Recovery is handled by:
   Layer 0 — NetworkManager  (autoconnect-retries=0 = infinite)
-  Layer 2 — Shell watchdog  (tsv6-network-watchdog.sh → reboot-force)
+  Layer 2 — Shell watchdog  (tsv6-network-watchdog.sh → clean reboot)
   Layer 3 — HW watchdog     (BCM2835, RuntimeWatchdogSec=15)
 
 See docs/WIFI_HARDENING.md for the full architecture.

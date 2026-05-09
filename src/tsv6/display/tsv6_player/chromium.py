@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import signal
 import subprocess
@@ -47,6 +48,8 @@ _CDP_CONNECT_RETRIES = 20
 _CDP_CONNECT_DELAY = 0.5      # seconds between retries
 _CDP_TIMEOUT = 5.0            # seconds for a single CDP round-trip
 _SIGKILL_GRACE = 5.0          # seconds between SIGTERM and SIGKILL
+_CHROMIUM_LOG_MAX_BYTES = 5 * 1024 * 1024
+_CHROMIUM_LOG_BACKUP_COUNT = 3
 
 
 # --------------------------------------------------------------------------- #
@@ -93,10 +96,11 @@ class ChromiumKiosk:
         self._width = width
         self._height = height
 
-        self._process: subprocess.Popen[bytes] | None = None
+        self._process: subprocess.Popen[str] | None = None
         self._ws_url: str | None = None      # webSocketDebuggerUrl
         self._cdp_id = 0
         self._cdp_lock = threading.Lock()
+        self._log_thread: threading.Thread | None = None
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -116,19 +120,38 @@ class ChromiumKiosk:
         cmd = self._build_command()
         logger.info("Launching Chromium: %s", " ".join(cmd))
 
+        log_handler = self._open_chromium_log_handler()
         try:
             self._process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except FileNotFoundError:
+            log_handler.close()
             logger.error(
                 "chromium-browser not found.  Install with: "
                 "sudo apt install chromium-browser"
             )
             return False
+        except Exception:
+            log_handler.close()
+            raise
+
+        if self._process.stdout is not None:
+            self._log_thread = threading.Thread(
+                target=self._drain_chromium_output,
+                args=(self._process.stdout, log_handler),
+                name="tsv6-chromium-output",
+                daemon=True,
+            )
+            self._log_thread.start()
+        else:
+            log_handler.close()
 
         logger.info("Chromium PID %d started.", self._process.pid)
         return self._wait_for_cdp()
@@ -152,6 +175,9 @@ class ChromiumKiosk:
         finally:
             self._process = None
             self._ws_url = None
+            if self._log_thread is not None:
+                self._log_thread.join(timeout=2.0)
+                self._log_thread = None
 
     def reload(self) -> None:
         """Reload the current page via CDP ``Page.reload``."""
@@ -232,6 +258,16 @@ class ChromiumKiosk:
             "--overscroll-history-navigation=0",
             "--disable-pinch",
             "--autoplay-policy=no-user-gesture-required",
+            # Pi 5 + X11 + Chromium 147 has repeatedly hit GPU shared-image and
+            # command-buffer fatal errors while rendering the Vengo iframe. Keep
+            # kiosk rendering on the software path so a GPU context failure cannot
+            # leave the ad player visually stuck while Chromium still appears alive.
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--disable-gpu-rasterization",
+            "--disable-accelerated-2d-canvas",
+            "--disable-accelerated-video-decode",
+            "--disable-zero-copy",
             # Touch support — Goodix on Waveshare DSI only dispatches JS touch/pointer
             # events when touch-events is explicitly enabled on Linux/X11.
             "--touch-events=enabled",
@@ -275,6 +311,65 @@ class ChromiumKiosk:
             logger.debug("Patched Chromium Preferences at %s", prefs_path)
         except OSError as exc:
             logger.warning("Could not patch Chromium Preferences: %s", exc)
+
+    # ── Chromium process output ─────────────────────────────────────────────
+
+    def _chromium_log_path(self) -> Path:
+        """Return the local rotating log path for Chromium stdout/stderr."""
+        configured = os.environ.get("TSV6_CHROMIUM_LOG_PATH")
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / ".local" / "share" / "tsv6" / "logs" / "chromium.log"
+
+    def _open_chromium_log_handler(self) -> RotatingFileHandler:
+        """Create a rotating file handler for Chromium process output."""
+        path = self._chromium_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        max_bytes = int(
+            os.environ.get("TSV6_CHROMIUM_LOG_MAX_BYTES", str(_CHROMIUM_LOG_MAX_BYTES))
+        )
+        backup_count = int(
+            os.environ.get(
+                "TSV6_CHROMIUM_LOG_BACKUP_COUNT", str(_CHROMIUM_LOG_BACKUP_COUNT)
+            )
+        )
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] chromium: %(message)s")
+        )
+        logger.info("Chromium stdout/stderr logging to %s", path)
+        return handler
+
+    def _drain_chromium_output(self, stream, handler: RotatingFileHandler) -> None:
+        """Copy Chromium stdout/stderr into a rotating file until the process exits."""
+        try:
+            for line in stream:
+                message = line.rstrip()
+                if not message:
+                    continue
+                record = logging.LogRecord(
+                    name=f"{__name__}.chromium",
+                    level=logging.INFO,
+                    pathname=__file__,
+                    lineno=0,
+                    msg=message,
+                    args=(),
+                    exc_info=None,
+                )
+                handler.handle(record)
+        except Exception as exc:
+            logger.debug("Chromium output logging stopped: %s", exc)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            handler.close()
 
     # ── CDP plumbing ───────────────────────────────────────────────────────
 
