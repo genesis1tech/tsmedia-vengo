@@ -101,6 +101,29 @@ def test_web_search_support_does_not_override_structured_fields():
     assert data["dataSource"] == "openfoodfacts+web_search"
 
 
+def test_reign_brand_fallback_provides_container_fields():
+    result = score_candidates(
+        "815154026277",
+        [
+            ProductCandidate(
+                source="openfoodfacts",
+                barcode="0815154026277",
+                product_brand="REIGN",
+                product_name="Storm",
+                product_url="https://world.openfoodfacts.org/product/0815154026277",
+                product_image_original="https://images.openfoodfacts.org/images/products/081/515/402/6277/front_en.8.400.jpg",
+                source_confidence=0.8,
+                evidence=["OpenFoodFacts exact barcode match: 0815154026277"],
+            )
+        ],
+    )
+
+    data = result.to_dict()
+    assert data["cacheDecision"] == "cacheable"
+    assert data["containerType"] == "can"
+    assert data["containerConfidence"] == 0.55
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
@@ -247,6 +270,7 @@ def test_cli_no_web_outputs_json_without_aws_writes():
         (ProductCandidate(source="test", product_name="Sparkling Water", raw={"householdServingFullText": "1 can"}), "can"),
         (ProductCandidate(source="test", product_desc="Glass bottle lemonade"), "glass_bottle"),
         (ProductCandidate(source="test", product_desc="PET bottle water"), "plastic_bottle"),
+        (ProductCandidate(source="test", product_brand="REIGN", product_name="Storm"), "can"),
     ],
 )
 def test_container_inference(candidate, expected):
