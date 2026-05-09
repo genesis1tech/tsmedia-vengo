@@ -36,6 +36,7 @@ from typing import Any, Callable
 from tsv6.display.identity import PlayerIdentity, get_player_identity
 from tsv6.display.tsv6_player.impression_builder import ImpressionTracker
 from tsv6.display.tsv6_player.impressions import JSONLImpressionRecorder
+from tsv6.display.tsv6_player.product_image_cache import ProductImageCache
 from tsv6.display.tsv6_player.protocol import PlayerProtocolClient
 from tsv6.display.tsv6_player.sync import AssetSyncer
 
@@ -48,6 +49,19 @@ logger = logging.getLogger(__name__)
 
 # Playlist name that is treated as the idle/attract loop.
 _IDLE_PLAYLIST = "tsv6_idle_loop"
+
+
+def _product_image_cache_size_mb() -> float:
+    raw = os.environ.get("TSV6_PRODUCT_IMAGE_CACHE_MB", "100")
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid TSV6_PRODUCT_IMAGE_CACHE_MB=%r; using 100", raw)
+        return 100
+    if value < 0:
+        logger.warning("Invalid negative TSV6_PRODUCT_IMAGE_CACHE_MB=%r; using 100", raw)
+        return 100
+    return value
 
 
 def _import_renderer():  # type: ignore[return]
@@ -115,6 +129,10 @@ class TSV6NativeBackend:
         self._venue_id = venue_id
         self._impression_output_dir = impression_output_dir
         self._identity_override = identity_override
+        self._product_image_cache = ProductImageCache(
+            cache_dir=self._cache_dir,
+            max_cache_size_mb=_product_image_cache_size_mb(),
+        )
 
         # These are set in connect().
         self._identity: PlayerIdentity | None = None
@@ -453,7 +471,7 @@ class TSV6NativeBackend:
         if not product_image_path or product_image_path in ("None", "null"):
             image_arg: "Path | str | None" = None
         elif "://" in product_image_path:
-            image_arg = product_image_path
+            image_arg = self._product_image_cache.resolve_for_display(product_image_path)
         else:
             image_arg = Path(product_image_path)
         logger.info(

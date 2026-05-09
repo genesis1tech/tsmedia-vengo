@@ -374,6 +374,25 @@ class TestGarbageCollection:
         # b.jpg gone
         assert not (tmp_path / "b.jpg").exists()
 
+    def test_gc_preserves_hidden_product_image_cache_files(self, tmp_path: Path) -> None:
+        """Hidden product image cache files must survive playlist asset sync."""
+        syncer = _make_syncer(tmp_path)
+
+        (tmp_path / "a.jpg").write_bytes(b"a")
+        syncer._save_state_entry(
+            "a.jpg",
+            AssetSyncState(filename="a.jpg", etag=None, last_modified=None, size=1),
+        )
+        product_cache = tmp_path / ".product_abc.webp"
+        product_cache.write_bytes(b"webp")
+
+        resp = _make_response(304)
+        with patch("requests.get", return_value=resp):
+            result = syncer.sync(["a.jpg"])
+
+        assert result.deleted == 0
+        assert product_cache.exists()
+
     def test_gc_count_in_sync_result(self, tmp_path: Path) -> None:
         syncer = _make_syncer(tmp_path)
 
