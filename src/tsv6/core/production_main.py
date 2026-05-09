@@ -2385,6 +2385,16 @@ class ProductionVideoPlayer:
             ok = bool(self.servo_controller.open_door(hold_time=0))
         elif target == "closed":
             ok = bool(self.servo_controller.close_door(hold_time=0.2))
+        elif target == "release":
+            release = getattr(self.servo_controller, "disable_servo", None)
+            if not callable(release):
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": "servo tension release is unavailable",
+                    "status": 501,
+                }
+            ok = bool(release())
         elif target == "position":
             position = self._parse_servo_position(payload.get("position"))
             enable = getattr(self.servo_controller, "_enable_torque", None)
@@ -2398,7 +2408,7 @@ class ProductionVideoPlayer:
             return {
                 "ok": False,
                 "available": True,
-                "error": "target must be open, closed, or position",
+                "error": "target must be open, closed, release, or position",
                 "status": 400,
             }
 

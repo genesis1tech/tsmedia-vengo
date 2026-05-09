@@ -176,6 +176,10 @@ class _FakeServo:
         self.current_position = self.closed_position
         return True
 
+    def disable_servo(self):
+        self.moves.append(("release", 0))
+        return True
+
     def set_calibration(self, open_position=None, closed_position=None, persist=True):
         if open_position is not None:
             self.open_position = open_position
@@ -207,9 +211,11 @@ def test_motor_setup_calibration_and_move_commands():
         {"open_position": 3000, "closed_position": 3900},
     )
     moved = player._handle_motor_setup_command("move", {"target": "open"})
+    released = player._handle_motor_setup_command("move", {"target": "release"})
 
     assert saved["ok"] is True
     assert saved["calibration"]["open_position"] == 3000
     assert saved["calibration"]["closed_position"] == 3900
     assert moved["ok"] is True
-    assert player.servo_controller.moves == [("open", 0)]
+    assert released["ok"] is True
+    assert player.servo_controller.moves == [("open", 0), ("release", 0)]

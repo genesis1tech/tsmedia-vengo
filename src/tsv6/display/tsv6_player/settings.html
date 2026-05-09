@@ -346,6 +346,9 @@
           <button class="btn secondary" id="motorCloseBtn" type="button">Close</button>
           <button class="btn secondary" id="motorReadBtn" type="button">Read</button>
         </div>
+        <div class="motor-actions">
+          <button class="btn secondary" id="motorReleaseBtn" type="button">Release Motor Tension</button>
+        </div>
       </div>
 
       <div class="motor-panel">
@@ -592,7 +595,7 @@
 
   function setMotorBusy(busy) {
     [
-      "motorOpenBtn", "motorCloseBtn", "motorReadBtn", "setOpenCurrentBtn",
+      "motorOpenBtn", "motorCloseBtn", "motorReadBtn", "motorReleaseBtn", "setOpenCurrentBtn",
       "setClosedCurrentBtn", "saveMotorBtn", "testSavedBtn", "motorRefreshBtn"
     ].forEach(function (id) {
       var el = $(id);
@@ -646,10 +649,15 @@
     });
   }
 
-  function moveMotor(target, position) {
+  function moveMotor(target, position, busyText, okText) {
     var body = { target: target };
     if (target === "position") body.position = position;
-    return motorRequest("/api/motor/move", body, "Moving motor…", "Motor moved");
+    return motorRequest(
+      "/api/motor/move",
+      body,
+      busyText || "Moving motor…",
+      okText || "Motor moved"
+    );
   }
 
   function saveMotor(body, label) {
@@ -815,6 +823,9 @@
   $("motorReadBtn").addEventListener("click", refreshMotor);
   $("motorOpenBtn").addEventListener("click", function () { moveMotor("open"); });
   $("motorCloseBtn").addEventListener("click", function () { moveMotor("closed"); });
+  $("motorReleaseBtn").addEventListener("click", function () {
+    moveMotor("release", null, "Releasing motor tension…", "Motor tension released");
+  });
   $("setOpenCurrentBtn").addEventListener("click", function () {
     saveMotor({ use_current_for: "open" }, "Open position saved");
   });

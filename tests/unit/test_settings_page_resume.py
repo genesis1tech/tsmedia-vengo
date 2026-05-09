@@ -41,5 +41,6 @@ def test_settings_page_defaults_to_status_with_wifi_and_servo_tabs():
     assert 'id="motorView" class="view"' in html
     assert 'id="wifiTab"' in html
     assert 'id="motorTab"' in html
+    assert "Release Motor Tension" in html
     assert 'fetch("/api/device/status")' in html
     assert 'fetch("/api/motor/status")' in html
