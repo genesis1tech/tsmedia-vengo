@@ -138,3 +138,70 @@ def test_wifi_connect_failure_returns_clear_error(monkeypatch, tmp_path):
     body = response.get_json()
     assert body["ok"] is False
     assert body["message"] == "activation failed"
+
+
+def test_device_status_reports_identity_and_wifi(monkeypatch, tmp_path):
+    server = _server(tmp_path)
+
+    monkeypatch.setattr(
+        router_module,
+        "get_player_identity",
+        lambda: SimpleNamespace(
+            player_name="TS_EFFC94AA",
+            cpu_serial="00000000effc94aa",
+            device_id="EFFC94AA",
+        ),
+    )
+
+    def fake_run(cmd, **_kwargs):
+        if cmd[:4] == ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY"]:
+            return _completed(stdout="yes:G1:82:WPA2\n")
+        if cmd[:4] == ["nmcli", "-t", "-f", "IP4.ADDRESS"]:
+            return _completed(stdout="IP4.ADDRESS[1]:192.168.1.137/24\n")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(router_module.subprocess, "run", fake_run)
+
+    response = server._app.test_client().get("/api/device/status")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["ok"] is True
+    assert body["device"]["name"] == "TS_EFFC94AA"
+    assert body["wifi"]["connected"] is True
+    assert body["wifi"]["current"]["ssid"] == "G1"
+    assert body["wifi"]["ip"] == "192.168.1.137"
+
+
+def test_motor_routes_delegate_to_callback(tmp_path):
+    server = _server(tmp_path)
+    calls = []
+
+    def callback(action, payload):
+        calls.append((action, payload))
+        return {
+            "ok": True,
+            "available": True,
+            "calibration": {"open_position": 2800, "closed_position": 4070},
+        }
+
+    server.set_motor_callback(callback)
+    client = server._app.test_client()
+
+    status = client.get("/api/motor/status")
+    move = client.post("/api/motor/move", json={"target": "open"})
+
+    assert status.status_code == 200
+    assert move.status_code == 200
+    assert calls == [("status", {}), ("move", {"target": "open"})]
+
+
+def test_motor_routes_return_unavailable_without_callback(tmp_path):
+    server = _server(tmp_path)
+
+    response = server._app.test_client().get("/api/motor/status")
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["ok"] is False
+    assert body["available"] is False

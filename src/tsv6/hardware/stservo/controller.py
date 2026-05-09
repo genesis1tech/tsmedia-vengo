@@ -83,8 +83,15 @@ class STServoController:
         self.port = self._explicit_port or self._auto_detect_port()
         self.baudrate = int(os.environ.get('TSV6_SERVO_BAUD', baudrate))
         self.servo_id = int(os.environ.get('TSV6_SERVO_ID', servo_id))
-        self.open_position = int(os.environ.get('TSV6_SERVO_OPEN_POS', open_position))
-        self.closed_position = int(os.environ.get('TSV6_SERVO_CLOSED_POS', closed_position))
+        calibration = self._read_calibration_file()
+        self.open_position = int(os.environ.get(
+            'TSV6_SERVO_OPEN_POS',
+            calibration.get('TSV6_SERVO_OPEN_POS', open_position),
+        ))
+        self.closed_position = int(os.environ.get(
+            'TSV6_SERVO_CLOSED_POS',
+            calibration.get('TSV6_SERVO_CLOSED_POS', closed_position),
+        ))
         self.moving_speed = int(os.environ.get('TSV6_SERVO_SPEED', moving_speed))
         self.acceleration = acceleration
         self.timeout = timeout
@@ -105,6 +112,87 @@ class STServoController:
             return
 
         self._connect()
+
+    @staticmethod
+    def _calibration_file_path() -> Path:
+        """Return the persistent servo calibration file path."""
+        return Path(
+            os.environ.get(
+                "TSV6_SERVO_CALIBRATION_FILE",
+                str(Path.home() / ".config" / "tsv6" / "servo-calibration.env"),
+            )
+        )
+
+    @classmethod
+    def _read_calibration_file(cls) -> dict[str, int]:
+        """Read persisted servo positions from a simple KEY=VALUE env file."""
+        path = cls._calibration_file_path()
+        if not path.exists():
+            return {}
+
+        values: dict[str, int] = {}
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, raw_value = line.split("=", 1)
+                key = key.strip()
+                raw_value = raw_value.strip().strip('"').strip("'")
+                if key in ("TSV6_SERVO_OPEN_POS", "TSV6_SERVO_CLOSED_POS"):
+                    values[key] = cls._validate_position(raw_value)
+        except Exception as exc:
+            logger.warning("Failed to read servo calibration file %s: %s", path, exc)
+        return values
+
+    @staticmethod
+    def _validate_position(value) -> int:
+        """Validate and clamp a raw servo position to the supported range."""
+        position = int(value)
+        return max(0, min(4095, position))
+
+    def get_calibration(self) -> dict:
+        """Return current calibration and live servo status."""
+        return {
+            "open_position": int(self.open_position),
+            "closed_position": int(self.closed_position),
+            "current_position": int(self.get_position()),
+            "connected": bool(self.is_connected),
+            "simulation": bool(self.simulation_mode),
+            "port": self.port,
+            "servo_id": self.servo_id,
+            "calibration_file": str(self._calibration_file_path()),
+        }
+
+    def set_calibration(
+        self,
+        open_position: Optional[int] = None,
+        closed_position: Optional[int] = None,
+        persist: bool = True,
+    ) -> dict:
+        """Update open/closed positions and optionally persist them."""
+        if open_position is not None:
+            self.open_position = self._validate_position(open_position)
+        if closed_position is not None:
+            self.closed_position = self._validate_position(closed_position)
+        if persist:
+            self._write_calibration_file()
+        return self.get_calibration()
+
+    def _write_calibration_file(self) -> None:
+        """Persist the current calibration for future service restarts."""
+        path = self._calibration_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(
+                [
+                    "# TSV6 servo calibration. Environment variables still override these values.",
+                    f"TSV6_SERVO_OPEN_POS={int(self.open_position)}",
+                    f"TSV6_SERVO_CLOSED_POS={int(self.closed_position)}",
+                    "",
+                ]
+            )
+        )
 
     def _auto_detect_port(self) -> str:
         """Auto-detect the serial port for the USB adapter."""

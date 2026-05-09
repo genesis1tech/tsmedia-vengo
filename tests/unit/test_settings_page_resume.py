@@ -31,3 +31,15 @@ def test_close_button_reuses_unload_resume_path():
     assert "function postExitSettings()" in html
     assert "postExitSettings().then(goHome);" in html
     assert "setTimeout(goHome, 1500);" in html
+
+
+def test_settings_page_defaults_to_status_with_wifi_and_servo_tabs():
+    html = _settings_html()
+
+    assert 'id="statusView" class="view active"' in html
+    assert 'id="wifiView" class="view"' in html
+    assert 'id="motorView" class="view"' in html
+    assert 'id="wifiTab"' in html
+    assert 'id="motorTab"' in html
+    assert 'fetch("/api/device/status")' in html
+    assert 'fetch("/api/motor/status")' in html

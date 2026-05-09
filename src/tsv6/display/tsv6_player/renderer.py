@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from tsv6.display.tsv6_player.chromium import ChromiumKiosk
 from tsv6.display.tsv6_player.router import RouterServer
@@ -216,6 +217,13 @@ class TSV6Renderer:
         """Hide the Vengo iframe."""
         self._router.send_command({"action": "hide_vengo_idle"})
         return True
+
+    def set_motor_callback(
+        self,
+        callback: "Callable[[str, dict[str, Any]], dict[str, Any]] | None",
+    ) -> None:
+        """Expose motor setup callbacks to the local settings router."""
+        self._router.set_motor_callback(callback)
 
     def show_idle(self, mp4_paths: list[Path]) -> bool:
         """Play the idle attract loop. Thin wrapper over ``play_video_loop``."""

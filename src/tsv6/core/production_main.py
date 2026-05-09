@@ -974,6 +974,7 @@ class ProductionVideoPlayer:
                 self.display_backend = backend
                 self._pisignage_enabled = True
                 self._wire_settings_wake_callback()
+                self._wire_settings_motor_callback()
                 self.error_recovery.report_success("pisignage")
                 self.logger.info(
                     "TSV6NativeBackend initialized — server=%s installation=%s",
@@ -2292,6 +2293,179 @@ class ProductionVideoPlayer:
 
         self.logger.warning("Settings wake callback not wired: router unavailable")
         return False
+
+    def _wire_settings_motor_callback(self) -> bool:
+        """Wire /api/motor/* settings endpoints to the live servo controller."""
+        setter = getattr(self.display_backend, "set_motor_callback", None)
+        if callable(setter) and setter(self._handle_motor_setup_command):
+            self.logger.info("Settings motor callback wired")
+            return True
+
+        renderer = getattr(self.display_backend, "_renderer", None)
+        router = getattr(renderer, "_router", None) if renderer else None
+        if router is not None and hasattr(router, "set_motor_callback"):
+            router.set_motor_callback(self._handle_motor_setup_command)
+            self.logger.info("Settings motor callback wired via router")
+            return True
+
+        self.logger.warning("Settings motor callback not wired: router unavailable")
+        return False
+
+    def _handle_motor_setup_command(self, action: str, payload: dict) -> dict:
+        """Handle motor setup commands from the local settings UI."""
+        if self.servo_controller is None:
+            return {
+                "ok": False,
+                "available": False,
+                "error": "servo controller is not initialized",
+                "status": 503,
+            }
+
+        try:
+            if action == "status":
+                return {
+                    "ok": True,
+                    "available": True,
+                    "calibration": self._servo_calibration_snapshot(),
+                }
+
+            with self._door_sequence_lock:
+                if self._door_sequence_active:
+                    return {
+                        "ok": False,
+                        "available": True,
+                        "error": "door sequence is active",
+                        "status": 409,
+                    }
+                self._door_sequence_active = True
+
+            try:
+                if action == "move":
+                    return self._handle_motor_move(payload)
+                if action == "calibration":
+                    return self._handle_motor_calibration(payload)
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": f"unknown motor action: {action}",
+                    "status": 400,
+                }
+            finally:
+                with self._door_sequence_lock:
+                    self._door_sequence_active = False
+
+        except Exception as exc:
+            self.logger.exception("Motor setup command failed: %s", action)
+            return {
+                "ok": False,
+                "available": True,
+                "error": str(exc),
+                "status": 500,
+            }
+
+    def _servo_calibration_snapshot(self) -> dict:
+        """Return calibration data using the controller helper when available."""
+        getter = getattr(self.servo_controller, "get_calibration", None)
+        if callable(getter):
+            return getter()
+        return {
+            "open_position": getattr(self.servo_controller, "open_position", None),
+            "closed_position": getattr(self.servo_controller, "closed_position", None),
+            "current_position": self.servo_controller.get_position()
+            if hasattr(self.servo_controller, "get_position") else None,
+            "connected": bool(getattr(self.servo_controller, "is_connected", False)),
+            "simulation": bool(getattr(self.servo_controller, "simulation_mode", False)),
+        }
+
+    def _handle_motor_move(self, payload: dict) -> dict:
+        """Move the motor to open/closed or a raw position from settings."""
+        target = str(payload.get("target") or "").strip().lower()
+        ok = False
+        if target == "open":
+            ok = bool(self.servo_controller.open_door(hold_time=0))
+        elif target == "closed":
+            ok = bool(self.servo_controller.close_door(hold_time=0.2))
+        elif target == "position":
+            position = self._parse_servo_position(payload.get("position"))
+            enable = getattr(self.servo_controller, "_enable_torque", None)
+            if callable(enable):
+                enable(True)
+            ok = bool(self.servo_controller._set_position(position))
+            wait = getattr(self.servo_controller, "_wait_for_movement", None)
+            if callable(wait):
+                wait()
+        else:
+            return {
+                "ok": False,
+                "available": True,
+                "error": "target must be open, closed, or position",
+                "status": 400,
+            }
+
+        return {
+            "ok": ok,
+            "available": True,
+            "calibration": self._servo_calibration_snapshot(),
+            "error": None if ok else "servo move failed",
+            "status": 200 if ok else 500,
+        }
+
+    def _handle_motor_calibration(self, payload: dict) -> dict:
+        """Update and persist motor open/closed calibration values."""
+        updates = {}
+        use_current_for = str(payload.get("use_current_for") or "").strip().lower()
+        if use_current_for:
+            current = self.servo_controller.get_position()
+            if use_current_for == "open":
+                updates["open_position"] = current
+            elif use_current_for == "closed":
+                updates["closed_position"] = current
+            else:
+                return {
+                    "ok": False,
+                    "available": True,
+                    "error": "use_current_for must be open or closed",
+                    "status": 400,
+                }
+
+        if "open_position" in payload and payload.get("open_position") is not None:
+            updates["open_position"] = self._parse_servo_position(payload.get("open_position"))
+        if "closed_position" in payload and payload.get("closed_position") is not None:
+            updates["closed_position"] = self._parse_servo_position(payload.get("closed_position"))
+
+        if not updates:
+            return {
+                "ok": False,
+                "available": True,
+                "error": "no calibration values supplied",
+                "status": 400,
+            }
+
+        setter = getattr(self.servo_controller, "set_calibration", None)
+        if callable(setter):
+            calibration = setter(**updates, persist=True)
+        else:
+            for key, value in updates.items():
+                setattr(self.servo_controller, key, value)
+            calibration = self._servo_calibration_snapshot()
+
+        self.logger.info("Servo calibration updated from settings: %s", updates)
+        return {
+            "ok": True,
+            "available": True,
+            "calibration": calibration,
+        }
+
+    @staticmethod
+    def _parse_servo_position(value) -> int:
+        """Parse a raw servo position from settings input."""
+        try:
+            position = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("position must be an integer")
+        if position < 0 or position > 4095:
+            raise ValueError("position must be between 0 and 4095")
+        return position
 
     def _start_long_press_watcher(self) -> None:
         """Start the evdev-level long-press gesture watcher.

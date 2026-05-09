@@ -55,11 +55,39 @@
   button.btn:active { background: var(--accent-dim); }
   button.btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
   button.btn.danger { background: var(--err); }
+  button.btn:disabled {
+    opacity: .45;
+    cursor: default;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    padding: 10px 14px 0;
+    background: var(--bg);
+  }
+  .tab {
+    min-height: 48px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    border-radius: 8px;
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
 
   main {
     flex: 1; overflow-y: auto;
     padding: 12px 14px;
   }
+  .view { display: none; }
+  .view.active { display: block; }
   .section-title {
     display: flex; justify-content: space-between; align-items: center;
     margin: 8px 4px 10px;
@@ -96,6 +124,88 @@
   .empty, .loading {
     padding: 40px 14px; text-align: center; color: var(--muted);
   }
+
+  .status-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .status-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    min-height: 104px;
+  }
+  .status-card.wide { grid-column: 1 / -1; }
+  .status-label {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .status-value {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+  .status-detail {
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.4;
+    margin-top: 6px;
+  }
+
+  .motor-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .motor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .motor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .motor-field label {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .motor-field input {
+    min-height: 54px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: 22px;
+    padding: 10px 12px;
+  }
+  .motor-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .motor-actions.three { grid-template-columns: 1fr 1fr 1fr; }
+  .motor-status {
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.45;
+    min-height: 44px;
+  }
+  .motor-status strong { color: var(--text); }
 
   /* Connect form */
   .connect-panel {
@@ -176,13 +286,88 @@
     <button class="btn secondary" id="closeBtn">Close</button>
   </header>
 
+  <div class="tabs">
+    <button class="tab active" id="statusTab" type="button">Status</button>
+    <button class="tab" id="wifiTab" type="button">Wi-Fi</button>
+    <button class="tab" id="motorTab" type="button">Servo</button>
+  </div>
+
   <main>
-    <div class="section-title">
-      <h2>Wi-Fi Networks</h2>
-      <button class="btn secondary" id="rescanBtn">Rescan</button>
+    <div id="statusView" class="view active">
+      <div class="section-title">
+        <h2>Device Status</h2>
+        <button class="btn secondary" id="statusRefreshBtn">Refresh</button>
+      </div>
+      <div class="status-grid">
+        <div class="status-card wide">
+          <div class="status-label">Device</div>
+          <div id="deviceName" class="status-value">Loading…</div>
+          <div id="deviceSerial" class="status-detail"></div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">Wi-Fi</div>
+          <div id="statusWifiName" class="status-value">Loading…</div>
+          <div id="statusWifiDetail" class="status-detail"></div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">Date and Time</div>
+          <div id="deviceTime" class="status-value">Loading…</div>
+          <div id="deviceDate" class="status-detail"></div>
+        </div>
+        <div class="status-card wide">
+          <div class="status-label">Wi-Fi Help</div>
+          <div class="status-detail">
+            Select the Wi-Fi tab to scan networks, choose a saved or nearby network, and connect with the on-screen keyboard.
+          </div>
+        </div>
+      </div>
     </div>
-    <div id="networks" class="network-list">
-      <div class="loading">Scanning…</div>
+
+    <div id="wifiView" class="view">
+      <div class="section-title">
+        <h2>Wi-Fi Configuration</h2>
+        <button class="btn secondary" id="rescanBtn">Rescan</button>
+      </div>
+      <div id="networks" class="network-list">
+        <div class="loading">Scanning…</div>
+      </div>
+    </div>
+
+    <div id="motorView" class="view">
+      <div class="section-title">
+        <h2>Servo Configuration</h2>
+        <button class="btn secondary" id="motorRefreshBtn">Refresh</button>
+      </div>
+
+      <div class="motor-panel">
+        <div id="motorStatus" class="motor-status">Loading motor status…</div>
+        <div class="motor-actions three">
+          <button class="btn secondary" id="motorOpenBtn" type="button">Open</button>
+          <button class="btn secondary" id="motorCloseBtn" type="button">Close</button>
+          <button class="btn secondary" id="motorReadBtn" type="button">Read</button>
+        </div>
+      </div>
+
+      <div class="motor-panel">
+        <div class="motor-grid">
+          <div class="motor-field">
+            <label for="openPos">Open Position</label>
+            <input id="openPos" type="number" min="0" max="4095" step="1" inputmode="numeric"/>
+          </div>
+          <div class="motor-field">
+            <label for="closedPos">Closed Position</label>
+            <input id="closedPos" type="number" min="0" max="4095" step="1" inputmode="numeric"/>
+          </div>
+        </div>
+        <div class="motor-actions">
+          <button class="btn secondary" id="setOpenCurrentBtn" type="button">Set Open Here</button>
+          <button class="btn secondary" id="setClosedCurrentBtn" type="button">Set Closed Here</button>
+        </div>
+        <div class="motor-actions">
+          <button class="btn" id="saveMotorBtn" type="button">Save Positions</button>
+          <button class="btn secondary" id="testSavedBtn" type="button">Test Saved</button>
+        </div>
+      </div>
     </div>
   </main>
 </div>
@@ -210,6 +395,8 @@
   var connectPanel = $("connect"), selSsidEl = $("selSsid");
   var pwDisplay = $("pwDisplay"), togglePw = $("togglePw"), kbEl = $("kb");
   var pwHint = $("pwHint");
+  var motorStatus = $("motorStatus"), openPos = $("openPos"), closedPos = $("closedPos");
+  var wifiScanned = false;
 
   var selectedSsid = null;
   var selectedSecurity = "";
@@ -267,6 +454,22 @@
     setTimeout(function () { toastEl.className = "toast"; }, ms || 2500);
   }
 
+  function setTab(tab) {
+    var status = tab === "status";
+    var wifi = tab === "wifi";
+    var motor = tab === "motor";
+    $("statusTab").classList.toggle("active", status);
+    $("wifiTab").classList.toggle("active", wifi);
+    $("motorTab").classList.toggle("active", motor);
+    $("statusView").classList.toggle("active", status);
+    $("wifiView").classList.toggle("active", wifi);
+    $("motorView").classList.toggle("active", motor);
+    connectPanel.classList.remove("open");
+    if (status) refreshDeviceStatus();
+    if (wifi && !wifiScanned) scan();
+    if (motor) refreshMotor();
+  }
+
   function bars(sig) {
     var n = Math.min(4, Math.max(0, Math.round((Number(sig) || 0) / 25)));
     return "▂▄▆█".slice(0, n).padEnd(4, "·");
@@ -282,6 +485,48 @@
         statusEl.classList.remove("connected");
       }
     }).catch(function () { statusEl.textContent = "(status unavailable)"; });
+  }
+
+  function formatDeviceTime(iso) {
+    if (!iso) return { time: "Unknown", date: "" };
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return { time: iso, date: "" };
+    return {
+      time: d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+      date: d.toLocaleDateString([], {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    };
+  }
+
+  function refreshDeviceStatus() {
+    fetch("/api/device/status").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || "status unavailable");
+      var device = d.device || {};
+      var wifi = d.wifi || {};
+      var current = wifi.current || {};
+      var time = formatDeviceTime((d.time || {}).iso);
+
+      $("deviceName").textContent = device.name || "TS_UNKNOWN";
+      $("deviceSerial").textContent = device.serial ? "Serial " + device.serial : "";
+      $("statusWifiName").textContent = wifi.connected && current.ssid ? current.ssid : "Not connected";
+      $("statusWifiDetail").textContent = wifi.connected
+        ? ((wifi.ip ? "IP " + wifi.ip : "No IP address") +
+          (current.signal ? " · Signal " + current.signal + "%" : ""))
+        : "Select Wi-Fi Configuration to connect.";
+      $("deviceTime").textContent = time.time;
+      $("deviceDate").textContent = time.date;
+    }).catch(function (e) {
+      $("deviceName").textContent = "Status unavailable";
+      $("deviceSerial").textContent = e.message;
+      $("statusWifiName").textContent = "Unknown";
+      $("statusWifiDetail").textContent = "";
+      $("deviceTime").textContent = "Unknown";
+      $("deviceDate").textContent = "";
+    });
   }
 
   function renderNetworks(list) {
@@ -337,11 +582,86 @@
   }
 
   function scan() {
+    wifiScanned = true;
     netsEl.innerHTML = '<div class="loading">Scanning…</div>';
     fetch("/api/wifi/scan", { method: "POST" })
       .then(function (r) { return r.json(); })
       .then(function (d) { renderNetworks(d.networks || []); })
       .catch(function (e) { netsEl.innerHTML = '<div class="empty">Scan failed: ' + escapeHtml(e.message) + '</div>'; });
+  }
+
+  function setMotorBusy(busy) {
+    [
+      "motorOpenBtn", "motorCloseBtn", "motorReadBtn", "setOpenCurrentBtn",
+      "setClosedCurrentBtn", "saveMotorBtn", "testSavedBtn", "motorRefreshBtn"
+    ].forEach(function (id) {
+      var el = $(id);
+      if (el) el.disabled = busy;
+    });
+  }
+
+  function renderMotor(d) {
+    if (!d || !d.ok || !d.available) {
+      motorStatus.textContent = (d && (d.error || d.message)) || "Motor setup unavailable";
+      return;
+    }
+    var c = d.calibration || {};
+    openPos.value = c.open_position == null ? "" : c.open_position;
+    closedPos.value = c.closed_position == null ? "" : c.closed_position;
+    motorStatus.innerHTML =
+      "Current: <strong>" + escapeHtml(c.current_position == null ? "unknown" : c.current_position) + "</strong>" +
+      " · Open: <strong>" + escapeHtml(c.open_position == null ? "unset" : c.open_position) + "</strong>" +
+      " · Closed: <strong>" + escapeHtml(c.closed_position == null ? "unset" : c.closed_position) + "</strong><br>" +
+      "Port: " + escapeHtml(c.port || "unknown") +
+      " · " + (c.connected ? "connected" : "not connected") +
+      (c.simulation ? " · simulation" : "");
+  }
+
+  function refreshMotor() {
+    motorStatus.textContent = "Loading motor status…";
+    fetch("/api/motor/status")
+      .then(function (r) { return r.json(); })
+      .then(renderMotor)
+      .catch(function (e) { motorStatus.textContent = "Motor status failed: " + e.message; });
+  }
+
+  function motorRequest(path, body, busyText, okText) {
+    setMotorBusy(true);
+    if (busyText) toast(busyText, "", 60000);
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok || !d.ok) throw new Error(d.error || d.message || "motor command failed");
+        renderMotor(d);
+        if (okText) toast(okText, "ok", 2200);
+        return d;
+      });
+    }).catch(function (e) {
+      toast("Motor error: " + e.message, "err", 5000);
+    }).finally(function () {
+      setMotorBusy(false);
+    });
+  }
+
+  function moveMotor(target, position) {
+    var body = { target: target };
+    if (target === "position") body.position = position;
+    return motorRequest("/api/motor/move", body, "Moving motor…", "Motor moved");
+  }
+
+  function saveMotor(body, label) {
+    return motorRequest("/api/motor/calibration", body, "Saving positions…", label || "Positions saved");
+  }
+
+  function numericPosition(el) {
+    var n = Number(el.value);
+    if (!Number.isInteger(n) || n < 0 || n > 4095) {
+      throw new Error("Position must be 0-4095");
+    }
+    return n;
   }
 
   function selectNetwork(n) {
@@ -479,6 +799,10 @@
     }).catch(function (e) { toast("Error: " + e.message, "err", 5000); });
   }
 
+  $("statusTab").addEventListener("click", function () { setTab("status"); });
+  $("wifiTab").addEventListener("click", function () { setTab("wifi"); });
+  $("motorTab").addEventListener("click", function () { setTab("motor"); });
+  $("statusRefreshBtn").addEventListener("click", refreshDeviceStatus);
   $("rescanBtn").addEventListener("click", scan);
   $("closeBtn").addEventListener("click", function () { exitSettings(); });
   $("cancelBtn").addEventListener("click", function () {
@@ -487,6 +811,42 @@
     renderPassword();
   });
   $("connectBtn").addEventListener("click", doConnect);
+  $("motorRefreshBtn").addEventListener("click", refreshMotor);
+  $("motorReadBtn").addEventListener("click", refreshMotor);
+  $("motorOpenBtn").addEventListener("click", function () { moveMotor("open"); });
+  $("motorCloseBtn").addEventListener("click", function () { moveMotor("closed"); });
+  $("setOpenCurrentBtn").addEventListener("click", function () {
+    saveMotor({ use_current_for: "open" }, "Open position saved");
+  });
+  $("setClosedCurrentBtn").addEventListener("click", function () {
+    saveMotor({ use_current_for: "closed" }, "Closed position saved");
+  });
+  $("saveMotorBtn").addEventListener("click", function () {
+    try {
+      saveMotor({
+        open_position: numericPosition(openPos),
+        closed_position: numericPosition(closedPos),
+      });
+    } catch (e) {
+      toast(e.message, "err", 3500);
+    }
+  });
+  $("testSavedBtn").addEventListener("click", function () {
+    try {
+      saveMotor({
+        open_position: numericPosition(openPos),
+        closed_position: numericPosition(closedPos),
+      }).then(function (d) {
+        if (d == null) return null;
+        return moveMotor("open");
+      }).then(function (d) {
+        if (d == null) return;
+        setTimeout(function () { moveMotor("closed"); }, 1000);
+      });
+    } catch (e) {
+      toast(e.message, "err", 3500);
+    }
+  });
   togglePw.addEventListener("click", function () {
     pwVisible = !pwVisible;
     togglePw.textContent = pwVisible ? "Hide" : "Show";
@@ -494,9 +854,12 @@
   });
 
   buildKeyboard();
+  refreshDeviceStatus();
   refreshStatus();
-  scan();
   setInterval(refreshStatus, 10000);
+  setInterval(function () {
+    if ($("statusView").classList.contains("active")) refreshDeviceStatus();
+  }, 10000);
   window.addEventListener("pagehide", beaconExitSettings);
   window.addEventListener("beforeunload", beaconExitSettings);
 }());
