@@ -19,6 +19,9 @@ def infer_container(candidate: ProductCandidate) -> tuple[str, float]:
             str(candidate.raw.get("packagings") or ""),
             str(candidate.raw.get("categories_tags") or ""),
             str(candidate.raw.get("_keywords") or ""),
+            str(candidate.raw.get("title") or ""),
+            str(candidate.raw.get("content") or ""),
+            str(candidate.raw.get("url") or ""),
         )
         if value
     ).lower()

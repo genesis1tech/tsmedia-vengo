@@ -80,7 +80,7 @@ def _select_primary_group(candidates: list[ProductCandidate]) -> tuple[list[Prod
     conflicts = []
     for candidate in candidates[1:]:
         similarity = _identity_similarity(primary, candidate)
-        if similarity >= 0.38 or _brand_matches(primary, candidate):
+        if similarity >= 0.38 or _brand_matches(primary, candidate) or _web_supports_primary(primary, candidate):
             group.append(candidate)
         else:
             conflicts.append(
@@ -99,11 +99,13 @@ def _select_primary_group(candidates: list[ProductCandidate]) -> tuple[list[Prod
 def _merge_group(group: list[ProductCandidate]) -> ProductCandidate:
     primary = group[0]
     authoritative = [candidate for candidate in group if candidate.source != "web_search"] or group
+    product_brand = _best_text([candidate.product_brand for candidate in authoritative]) or primary.product_brand
+    product_name = _best_text([candidate.product_name for candidate in authoritative]) or primary.product_name
     return ProductCandidate(
         source=primary.source,
         barcode=primary.barcode,
-        product_brand=_best_text([candidate.product_brand for candidate in authoritative]) or primary.product_brand,
-        product_name=_best_text([candidate.product_name for candidate in authoritative]) or primary.product_name,
+        product_brand=product_brand,
+        product_name=_enrich_generic_name(product_brand, product_name, group),
         product_url=_first([candidate.product_url for candidate in authoritative]) or _first([candidate.product_url for candidate in group]),
         product_desc=_best_text([candidate.product_desc for candidate in authoritative]) or primary.product_desc,
         product_category=_best_text([candidate.product_category for candidate in authoritative]) or primary.product_category,
@@ -157,3 +159,96 @@ def _brand_matches(a: ProductCandidate, b: ProductCandidate) -> bool:
     if not a.product_brand or not b.product_brand:
         return False
     return a.product_brand.strip().lower() == b.product_brand.strip().lower()
+
+
+def _web_supports_primary(primary: ProductCandidate, candidate: ProductCandidate) -> bool:
+    if candidate.source != "web_search":
+        return False
+    evidence_text = " ".join(candidate.evidence).lower()
+    if "includes exact barcode" not in evidence_text:
+        return False
+    haystack = " ".join(
+        value or ""
+        for value in (
+            candidate.product_name,
+            candidate.product_desc,
+            candidate.product_url,
+            evidence_text,
+        )
+    ).lower()
+    primary_terms = [
+        term
+        for value in (primary.product_brand, primary.product_name)
+        for term in (value or "").lower().replace("-", " ").split()
+        if len(term) >= 4
+    ]
+    return any(term in haystack for term in primary_terms)
+
+
+def _enrich_generic_name(brand: str | None, name: str | None, group: list[ProductCandidate]) -> str | None:
+    if not name:
+        return name
+    name_tokens = name.replace("-", " ").split()
+    if len(name_tokens) > 2:
+        return name
+
+    flavor = _extract_flavor_token(group)
+    if not flavor:
+        return name
+
+    parts = []
+    if brand:
+        parts.extend(brand.split())
+    parts.extend(name.split())
+    if flavor.lower() not in {part.lower() for part in parts}:
+        parts.append(flavor.title())
+    return " ".join(parts)
+
+
+def _extract_flavor_token(group: list[ProductCandidate]) -> str | None:
+    for candidate in group:
+        if candidate.source != "web_search":
+            continue
+        text = " ".join(
+            value or ""
+            for value in (
+                candidate.product_name,
+                candidate.product_desc,
+                candidate.product_url,
+            )
+        )
+        tokens = [
+            token.strip(":/?&=._-#%()[]{}|").lower()
+            for token in text.replace("-", " ").replace(",", " ").split()
+        ]
+        for token in tokens:
+            if token in _FLAVOR_TOKENS:
+                return token
+    return None
+
+
+_FLAVOR_TOKENS = {
+    "apple",
+    "apricot",
+    "berry",
+    "blackberry",
+    "blueberry",
+    "cherry",
+    "citrus",
+    "coconut",
+    "grape",
+    "grapefruit",
+    "guava",
+    "lemon",
+    "lime",
+    "limeade",
+    "mango",
+    "melon",
+    "orange",
+    "peach",
+    "pineapple",
+    "raspberry",
+    "strawberry",
+    "tropical",
+    "watermelon",
+}

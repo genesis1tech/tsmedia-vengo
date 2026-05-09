@@ -124,6 +124,45 @@ def test_reign_brand_fallback_provides_container_fields():
     assert data["containerConfidence"] == 0.55
 
 
+def test_exact_barcode_web_result_enriches_generic_reign_name():
+    result = score_candidates(
+        "815154026277",
+        [
+            ProductCandidate(
+                source="openfoodfacts",
+                barcode="0815154026277",
+                product_brand="REIGN",
+                product_name="Storm",
+                product_url="https://world.openfoodfacts.org/product/0815154026277",
+                product_image_original="https://images.openfoodfacts.org/images/products/081/515/402/6277/front_en.8.400.jpg",
+                source_confidence=0.8,
+                evidence=["OpenFoodFacts exact barcode match: 0815154026277"],
+            ),
+            ProductCandidate(
+                source="web_search",
+                barcode="815154026277",
+                product_name="815154026277 Energy Drink, Liquid, Mango, 12 fl-oz Can",
+                product_url="https://www.mccoys.com/shop/p/35015036/reign-storm-815154026277-energy-drink-liquid-mango-12-fl-oz-can",
+                product_desc="Energy Drink, Liquid, Mango, 12 fl-oz Can",
+                source_confidence=0.58,
+                evidence=["Tavily result includes exact barcode: https://www.mccoys.com/shop/p/35015036/reign-storm-815154026277-energy-drink-liquid-mango-12-fl-oz-can"],
+                raw={
+                    "title": "815154026277 Energy Drink, Liquid, Mango, 12 fl-oz Can",
+                    "url": "https://www.mccoys.com/shop/p/35015036/reign-storm-815154026277-energy-drink-liquid-mango-12-fl-oz-can",
+                },
+            ),
+        ],
+    )
+
+    data = result.to_dict()
+    assert data["cacheDecision"] == "cacheable"
+    assert data["productName"] == "REIGN Storm Mango"
+    assert data["dataSource"] == "openfoodfacts+web_search"
+    assert data["containerType"] == "can"
+    assert data["containerConfidence"] == 0.9
+    assert data["conflicts"] == []
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
