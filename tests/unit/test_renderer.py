@@ -123,6 +123,22 @@ class TestRouterServerSendCommand:
             router.send_command({"action": action})
         assert router._command_queue.qsize() == 6
 
+    def test_display_state_command_cached_for_reconnect(self, router: RouterServer) -> None:
+        """Current display state should survive Chromium/EventSource reconnects."""
+        cmd = {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+
+        router.send_command(cmd)
+
+        assert router._last_display_cmd == cmd
+
+    def test_transient_command_does_not_replace_display_state(self, router: RouterServer) -> None:
+        display_cmd = {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+        router.send_command(display_cmd)
+
+        router.send_command({"action": "hide_video_zone"})
+
+        assert router._last_display_cmd == display_cmd
+
 
 # --------------------------------------------------------------------------- #
 #  RouterServer — Flask routes                                                 #
@@ -155,6 +171,32 @@ class TestRouterServerRoutes:
         """
         rules = {rule.rule for rule in router._app.url_map.iter_rules()}
         assert "/events" in rules
+
+    def test_events_replays_display_state_to_new_client(self, router: RouterServer) -> None:
+        router.send_command({"action": "show_vengo_idle", "url": "https://ads.example/player"})
+
+        with router._app.test_request_context("/events"):
+            resp = router._app.view_functions["events"]()
+            first_event = next(resp.response)
+            resp.close()
+
+        payload = json.loads(first_event[len("data: "):-2])
+        assert payload == {"action": "show_vengo_idle", "url": "https://ads.example/player"}
+
+    def test_events_replays_ticker_before_display_state(self, router: RouterServer) -> None:
+        router.send_command({"action": "show_ticker", "enabled": True, "text": "Recycle"})
+        router.send_command({"action": "show_vengo_idle", "url": "https://ads.example/player"})
+
+        with router._app.test_request_context("/events"):
+            resp = router._app.view_functions["events"]()
+            first_event = next(resp.response)
+            second_event = next(resp.response)
+            resp.close()
+
+        first_payload = json.loads(first_event[len("data: "):-2])
+        second_payload = json.loads(second_event[len("data: "):-2])
+        assert first_payload["action"] == "show_ticker"
+        assert second_payload == {"action": "show_vengo_idle", "url": "https://ads.example/player"}
 
     def test_video_zone_rect_stores_rect(self, flask_client, router: RouterServer) -> None:
         payload = json.dumps({"rect": [10, 20, 800, 420]})

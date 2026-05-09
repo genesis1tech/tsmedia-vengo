@@ -57,6 +57,15 @@ _SSE_POLL_INTERVAL: float = 0.05
 # How often a keep-alive comment is sent to prevent proxy timeouts (seconds).
 _SSE_KEEPALIVE_INTERVAL: float = 15.0
 
+_DISPLAY_STATE_ACTIONS: set[str] = {
+    "show_html",
+    "show_image",
+    "show_product",
+    "show_video_zone",
+    "show_idle",
+    "show_vengo_idle",
+}
+
 
 def _sse_event(data: dict) -> str:
     """Serialise *data* as a single SSE ``data:`` line followed by ``\\n\\n``."""
@@ -101,6 +110,12 @@ class RouterServer:
         # config event is lost-forever and the page shows an empty ticker.
         self._last_ticker_cmd: dict | None = None
         self._ticker_lock = threading.Lock()
+
+        # Last display-state command, cached for newly-connected SSE clients.
+        # Settings navigation and Chromium/EventSource reconnects can otherwise
+        # miss a one-shot idle command and remain on the page's ready placeholder.
+        self._last_display_cmd: dict | None = None
+        self._display_lock = threading.Lock()
 
         # Last known pixel rect of the #main zone, set by POST /video_zone_rect
         self._video_zone_rect: tuple[int, int, int, int] | None = None
@@ -175,6 +190,9 @@ class RouterServer:
         if command.get("action") == "show_ticker":
             with self._ticker_lock:
                 self._last_ticker_cmd = dict(command)
+        if command.get("action") in _DISPLAY_STATE_ACTIONS:
+            with self._display_lock:
+                self._last_display_cmd = dict(command)
         self._command_queue.put(command)
         logger.debug("Command enqueued: %s", command.get("action"))
 
@@ -426,6 +444,17 @@ class RouterServer:
                     )
                 if last_ticker is not None:
                     yield _sse_event(last_ticker)
+
+                # Replay the current display state after ticker replay so
+                # reconnecting clients leave the built-in ready placeholder.
+                with server_self._display_lock:
+                    last_display = (
+                        dict(server_self._last_display_cmd)
+                        if server_self._last_display_cmd is not None
+                        else None
+                    )
+                if last_display is not None:
+                    yield _sse_event(last_display)
 
                 last_keepalive = time.monotonic()
                 while True:
