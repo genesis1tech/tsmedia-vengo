@@ -66,6 +66,41 @@ def test_clear_american_conflict_scores_cacheable():
     assert data["conflicts"][0]["source"] == "upcitemdb"
 
 
+def test_web_search_support_does_not_override_structured_fields():
+    result = score_candidates(
+        "070847898146",
+        [
+            ProductCandidate(
+                source="openfoodfacts",
+                barcode="0070847898146",
+                product_brand="Monster",
+                product_name="Ultra Vice Guava",
+                product_url="https://world.openfoodfacts.org/product/0070847898146",
+                product_image_original="https://images.openfoodfacts.org/images/products/007/084/789/8146/front_en.54.400.jpg",
+                product_category="energy-drinks",
+                source_confidence=0.8,
+                evidence=["OpenFoodFacts exact barcode match: 0070847898146"],
+            ),
+            ProductCandidate(
+                source="web_search",
+                barcode="070847898146",
+                product_name="Monster Energy Ultra Vice Guava Energy Drink - 16 fl oz Can : Target",
+                product_url="https://www.target.com/p/monster-energy-ultra-vice-guava-energy-drink-16-fl-oz-can/-/A-93326726",
+                product_desc="Long noisy retail navigation content " * 20,
+                source_confidence=0.58,
+                evidence=["Tavily result matches structured product context"],
+            ),
+        ],
+    )
+
+    data = result.to_dict()
+    assert data["cacheDecision"] == "cacheable"
+    assert data["productName"] == "Ultra Vice Guava"
+    assert data["productUrl"] == "https://world.openfoodfacts.org/product/0070847898146"
+    assert data["productImageOriginal"].startswith("https://images.openfoodfacts.org/")
+    assert data["dataSource"] == "openfoodfacts+web_search"
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
@@ -81,10 +116,16 @@ class FakeSession:
         self.payload = payload
         self.last_url = None
         self.last_params = None
+        self.last_json = None
 
     def get(self, url, params=None, timeout=None, headers=None):
         self.last_url = url
         self.last_params = params
+        return FakeResponse(self.payload)
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.last_url = url
+        self.last_json = json
         return FakeResponse(self.payload)
 
 
@@ -137,6 +178,44 @@ def test_usda_normalizer_extracts_container_evidence():
     assert candidate.product_category == "Water"
     assert candidate.source_confidence == 0.88
     assert "USDA serving: 1 can" in candidate.evidence
+
+
+def test_tavily_uses_structured_context_for_enrichment(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    session = FakeSession(
+        {
+            "images": ["https://example.test/monster.jpg"],
+            "results": [
+                {
+                    "title": "Monster Ultra Vice Guava Energy Drink",
+                    "url": "https://example.test/monster-vice-guava",
+                    "content": "Monster Ultra Vice Guava is a zero sugar energy drink in a 16 fl oz can.",
+                },
+                {
+                    "title": "UPC barcode standards",
+                    "url": "https://example.test/upc",
+                    "content": "General barcode documentation.",
+                },
+            ],
+        }
+    )
+    providers = ProductLookupProviders(session=session)
+
+    candidates = providers.tavily(
+        "070847898146",
+        context=[
+            ProductCandidate(
+                source="openfoodfacts",
+                product_brand="Monster",
+                product_name="Ultra Vice Guava",
+            )
+        ],
+    )
+
+    assert "Ultra Vice Guava" in session.last_json["query"]
+    assert len(candidates) == 1
+    assert candidates[0].product_url == "https://example.test/monster-vice-guava"
+    assert "matches structured product context" in candidates[0].evidence[0]
 
 
 def test_cli_no_web_outputs_json_without_aws_writes():

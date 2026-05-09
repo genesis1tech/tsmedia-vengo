@@ -32,7 +32,7 @@ class ProductLookupResolver:
 
         if use_web:
             try:
-                candidates.extend(self.providers.tavily(barcode))
+                candidates.extend(self.providers.tavily(barcode, context=candidates))
             except Exception as exc:  # noqa: BLE001
                 errors.append(
                     ProductCandidate(

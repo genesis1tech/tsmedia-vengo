@@ -49,7 +49,7 @@ def score_candidates(barcode: str, candidates: list[ProductCandidate]) -> Lookup
     else:
         decision = "no_match"
 
-    data_sources = "+".join(candidate.source for candidate in primary_group)
+    data_sources = "+".join(dict.fromkeys(candidate.source for candidate in primary_group))
     evidence = []
     for candidate in primary_group:
         evidence.extend(candidate.evidence)
@@ -98,17 +98,19 @@ def _select_primary_group(candidates: list[ProductCandidate]) -> tuple[list[Prod
 
 def _merge_group(group: list[ProductCandidate]) -> ProductCandidate:
     primary = group[0]
+    authoritative = [candidate for candidate in group if candidate.source != "web_search"] or group
     return ProductCandidate(
         source=primary.source,
         barcode=primary.barcode,
-        product_brand=_best_text([candidate.product_brand for candidate in group]) or primary.product_brand,
-        product_name=_best_text([candidate.product_name for candidate in group]) or primary.product_name,
-        product_url=_first([candidate.product_url for candidate in group]),
-        product_desc=_best_text([candidate.product_desc for candidate in group]) or primary.product_desc,
-        product_category=_best_text([candidate.product_category for candidate in group]) or primary.product_category,
-        product_image_original=_first([candidate.product_image_original for candidate in group]),
-        container_type=_first([candidate.container_type for candidate in group]),
-        container_confidence=_first([candidate.container_confidence for candidate in group]),
+        product_brand=_best_text([candidate.product_brand for candidate in authoritative]) or primary.product_brand,
+        product_name=_best_text([candidate.product_name for candidate in authoritative]) or primary.product_name,
+        product_url=_first([candidate.product_url for candidate in authoritative]) or _first([candidate.product_url for candidate in group]),
+        product_desc=_best_text([candidate.product_desc for candidate in authoritative]) or primary.product_desc,
+        product_category=_best_text([candidate.product_category for candidate in authoritative]) or primary.product_category,
+        product_image_original=_first([candidate.product_image_original for candidate in authoritative])
+        or _first([candidate.product_image_original for candidate in group]),
+        container_type=_first([candidate.container_type for candidate in authoritative]),
+        container_confidence=_first([candidate.container_confidence for candidate in authoritative]),
         source_confidence=primary.source_confidence,
         evidence=[],
         raw=_merge_raw(group),

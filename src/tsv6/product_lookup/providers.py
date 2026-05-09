@@ -157,13 +157,14 @@ class ProductLookupProviders:
             raw=best,
         )
 
-    def tavily(self, barcode: str) -> list[ProductCandidate]:
+    def tavily(self, barcode: str, context: list[ProductCandidate] | None = None) -> list[ProductCandidate]:
         api_key = os.environ.get("TAVILY_API_KEY")
         if not api_key:
             return []
 
         normalized = normalize_barcode(barcode)
-        query = f'"{normalized["upc12"] or normalized["digits"]}" product UPC GTIN brand beverage container'
+        query = _build_tavily_query(barcode, context or [])
+        accepted_terms = _accepted_web_terms(barcode, context or [])
         response = self.session.post(
             "https://api.tavily.com/search",
             headers={
@@ -190,10 +191,20 @@ class ProductLookupProviders:
                 str(result.get(key) or "")
                 for key in ("title", "content", "raw_content", "url")
             )
-            if not any(variant in text for variant in barcode_variants(barcode)):
+            text_lower = text.lower()
+            has_barcode = any(variant in text for variant in barcode_variants(barcode))
+            has_context = any(term in text_lower for term in accepted_terms)
+            if not has_barcode and not has_context:
                 continue
             title = _clean(result.get("title"))
             content = _clean(result.get("content"))
+            evidence = []
+            confidence = 0.58
+            if has_barcode:
+                evidence.append(f"Tavily result includes exact barcode: {result.get('url')}")
+            if has_context:
+                evidence.append(f"Tavily result matches structured product context: {result.get('url')}")
+                confidence = max(confidence, 0.5)
             candidates.append(
                 ProductCandidate(
                     source="web_search",
@@ -202,8 +213,8 @@ class ProductLookupProviders:
                     product_url=result.get("url"),
                     product_desc=content,
                     product_image_original=images[0] if images else None,
-                    source_confidence=0.58,
-                    evidence=[f"Tavily result includes exact barcode: {result.get('url')}"],
+                    source_confidence=confidence,
+                    evidence=evidence,
                     raw=result,
                 )
             )
@@ -244,3 +255,34 @@ def _clean(value: Any) -> str | None:
         return None
     text = " ".join(str(value).split())
     return text or None
+
+
+def _build_tavily_query(barcode: str, context: list[ProductCandidate]) -> str:
+    normalized = normalize_barcode(barcode)
+    barcode_query = normalized["upc12"] or normalized["digits"]
+    best = next((candidate for candidate in context if candidate.product_name or candidate.product_brand), None)
+    if not best:
+        return f'"{barcode_query}" product UPC GTIN brand beverage container'
+
+    parts = [f'"{barcode_query}"']
+    if best.product_brand:
+        parts.append(f'"{best.product_brand}"')
+    if best.product_name:
+        parts.append(f'"{best.product_name}"')
+    parts.append("product beverage container")
+    return " ".join(parts)
+
+
+def _accepted_web_terms(barcode: str, context: list[ProductCandidate]) -> set[str]:
+    terms = {variant.lower() for variant in barcode_variants(barcode)}
+    for candidate in context:
+        for value in (candidate.product_brand, candidate.product_name):
+            if not value:
+                continue
+            cleaned = value.lower()
+            if len(cleaned) >= 5:
+                terms.add(cleaned)
+            for token in cleaned.replace("-", " ").replace(",", " ").split():
+                if len(token) >= 5:
+                    terms.add(token)
+    return terms
