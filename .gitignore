@@ -89,3 +89,4 @@ assets/certs/provisioning-report.json
 !docs/NFC_QR_REPLICATION_GUIDE.md
 !docs/V2_BRAND_PLAYLISTS.md
 !docs/superpowers/**/*.md
+.gstack/

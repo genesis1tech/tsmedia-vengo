@@ -16,6 +16,7 @@ DEFAULT_NO_ITEM        = "tsv6_no_item_detected"
 DEFAULT_NO_MATCH       = "tsv6_no_match"
 DEFAULT_DEPOSIT        = "tsv6_processing"
 DEFAULT_PRODUCT        = "tsv6_product_display"
+DEFAULT_CONTAINER_CONFIDENCE = 0.35
 
 dynamodb = boto3.resource("dynamodb")
 iot      = boto3.client("iot-data")
@@ -97,7 +98,8 @@ def _fetch_goupc(barcode):
     p = data.get("product") or {}
     if not (p.get("name") or p.get("brand")): return None
     return {"name": p.get("name"), "brand": p.get("brand"),
-            "category": p.get("category"), "imageUrl": p.get("imageUrl")}
+            "category": p.get("category"), "description": p.get("description"),
+            "imageUrl": p.get("imageUrl")}
 
 
 def _fetch_upcitemdb(barcode):
@@ -118,7 +120,8 @@ def _fetch_upcitemdb(barcode):
     image_url = images[0] if images else None
     if not (item.get("title") or item.get("brand")): return None
     return {"name": item.get("title"), "brand": item.get("brand"),
-            "category": item.get("category"), "imageUrl": image_url}
+            "category": item.get("category"), "description": item.get("description"),
+            "imageUrl": image_url}
 
 
 def _fetch_openfoodfacts(barcode):
@@ -141,7 +144,12 @@ def _fetch_openfoodfacts(barcode):
     brand = product.get("brands")
     if not (name or brand): return None
     return {"name": name, "brand": brand,
-            "category": product.get("categories"), "imageUrl": image_url}
+            "category": product.get("categories"),
+            "description": product.get("generic_name"),
+            "packaging": product.get("packaging"),
+            "packagings": product.get("packagings"),
+            "keywords": product.get("_keywords"),
+            "imageUrl": image_url}
 
 
 def _fetch_usda(barcode):
@@ -176,7 +184,47 @@ def _fetch_usda(barcode):
     brand = best.get("brandOwner") or best.get("brandName")
     if not (name or brand): return None
     return {"name": name, "brand": brand,
-            "category": best.get("foodCategory"), "imageUrl": None}
+            "category": best.get("foodCategory"),
+            "description": best.get("description"),
+            "packageWeight": best.get("packageWeight"),
+            "householdServingFullText": best.get("householdServingFullText"),
+            "imageUrl": None}
+
+
+def _infer_container(result):
+    text = " ".join(str(result.get(k) or "") for k in (
+        "name", "brand", "category", "description", "packaging", "packagings",
+        "keywords", "packageWeight", "householdServingFullText",
+    )).lower()
+
+    if "glass bottle" in text or "glass-bottle" in text or "glass" in text:
+        return "glass_bottle", 0.95
+    if "plastic bottle" in text or "pet bottle" in text or "pet-bottle" in text:
+        return "plastic_bottle", 0.9
+    if " aluminum can" in f" {text}" or "aluminum-can" in text:
+        return "can", 0.9
+    if " can" in f" {text}" or text.endswith("can"):
+        return "can", 0.85
+    if "carton" in text or "tetra" in text:
+        return "carton", 0.75
+    if ("seven select" in text or "7-select" in text or "7 select" in text) and "cold pressed juice" in text:
+        return "glass_bottle", 0.9
+    if "cold pressed juice" in text:
+        return "glass_bottle", 0.7
+    if "energy drink" in text or "sparkling water" in text or "soda" in text:
+        return "can", 0.65
+    if "water" in text or "juice" in text or "beverage" in text or "drink" in text:
+        return "plastic_bottle", DEFAULT_CONTAINER_CONFIDENCE
+    return "unknown", 0.0
+
+
+def _is_supported_container(container_type):
+    normalized = str(container_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized in {"can", "aluminum", "aluminum_can", "plastic", "plastic_bottle", "pet", "pet_bottle"}
+
+
+def _unsupported_container_reason(container_type):
+    return f"unsupported_container:{container_type or 'unknown'}"
 
 
 def _convert_and_upload_webp(barcode, source_url):
@@ -198,14 +246,24 @@ def _convert_and_upload_webp(barcode, source_url):
         return None
 
 
-def _publish_no_match(thing, txid, barcode, reason, started):
+def _publish_no_match(thing, txid, barcode, reason, started, product=None):
     payload = {"statusCode":200,"returnAction":"noMatch","thingName":thing,
                "transactionId":txid,"barcode":barcode,"reason":reason,
                "noMatchPlaylist":DEFAULT_NO_MATCH}
     _publish(f"{thing}/noMatch", payload)
+    event_type = "upc_nomatch" if reason == "upc_nomatch" else (
+        "unsupported_container" if str(reason).startswith("unsupported_container") else "upc_error"
+    )
     _firehose_put(_row(txid=txid, thing=thing, barcode=barcode,
-                       event_type=("upc_nomatch" if reason=="upc_nomatch" else "upc_error"),
+                       event_type=event_type,
                        return_action="noMatch", reason=reason,
+                       product_name=(product or {}).get("name"),
+                       product_brand=(product or {}).get("brand"),
+                       product_category=(product or {}).get("category"),
+                       product_desc=(product or {}).get("description"),
+                       product_image_original=(product or {}).get("imageUrl"),
+                       container_type=(product or {}).get("containerType"),
+                       container_confidence=(product or {}).get("containerConfidence"),
                        no_match_playlist=DEFAULT_NO_MATCH,
                        latency_ms=int((time.time()-started)*1000)))
     return payload
@@ -236,6 +294,16 @@ def lambda_handler(event, _ctx):
                 "source": "upc_nomatch"})
             return _publish_no_match(thing, txid, barcode, "upc_nomatch", started)
 
+        container_type, container_confidence = _infer_container(result)
+        result["containerType"] = container_type
+        result["containerConfidence"] = container_confidence
+        if not _is_supported_container(container_type):
+            reason = _unsupported_container_reason(container_type)
+            negative_table.put_item(Item={"barcode": barcode,
+                "expires_at": (datetime.now(timezone.utc)+timedelta(days=NEGATIVE_TTL_DAYS)).isoformat().replace("+00:00","Z"),
+                "source": reason})
+            return _publish_no_match(thing, txid, barcode, reason, started, product=result)
+
         deposit_pl, product_pl = _resolve_brand_playlists(result.get("brand"))
         qr_url = f"https://tsrewards--test.expo.app/hook?scanid={txid}&barcode={barcode}"
         payload = {
@@ -244,11 +312,11 @@ def lambda_handler(event, _ctx):
             "productName":     result.get("name"),
             "productBrand":    result.get("brand"),
             "productCategory": result.get("category"),
-            "productDesc":     None,
+            "productDesc":     result.get("description"),
             "productImage":    None,                       # first scan = text only
             "productImageOriginal": result.get("imageUrl"),
-            "containerType":   None,
-            "containerConfidence": None,
+            "containerType":   container_type,
+            "containerConfidence": container_confidence,
             "qrUrl": qr_url,
             "depositPlaylist": deposit_pl,
             "productPlaylist": product_pl,
@@ -259,8 +327,9 @@ def lambda_handler(event, _ctx):
         _firehose_put(_row(txid=txid, thing=thing, barcode=barcode,
             event_type="upc_resolved", return_action="openDoor",
             product_name=payload["productName"], product_brand=payload["productBrand"],
-            product_category=payload["productCategory"],
+            product_category=payload["productCategory"], product_desc=payload["productDesc"],
             product_image=None, product_image_original=payload["productImageOriginal"],
+            container_type=payload["containerType"], container_confidence=payload["containerConfidence"],
             data_source=data_source, qr_url=qr_url,
             deposit_playlist=deposit_pl, product_playlist=product_pl,
             no_item_playlist=DEFAULT_NO_ITEM,
@@ -273,6 +342,8 @@ def lambda_handler(event, _ctx):
             "productCategory": payload["productCategory"], "productDesc": payload["productDesc"],
             "productImage":    payload["productImageOriginal"],   # JPEG/PNG for V1 reads
             "productImageOriginal": payload["productImageOriginal"],
+            "containerType": payload["containerType"],
+            "containerConfidence": Decimal(str(payload["containerConfidence"])),
         }
         if webp_url: master_item["productImageWebp"] = webp_url
         master_table.put_item(Item=master_item)

@@ -82,6 +82,15 @@ def _resolve_brand_playlists(brand):
     )
 
 
+def _is_supported_container(container_type):
+    normalized = str(container_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized in {"can", "aluminum", "aluminum_can", "plastic", "plastic_bottle", "pet", "pet_bottle"}
+
+
+def _unsupported_container_reason(container_type):
+    return f"unsupported_container:{container_type or 'unknown'}"
+
+
 def _process(event, started, barcode, thing, txid):
     if "http://" in barcode or "https://" in barcode:
         payload = {
@@ -100,6 +109,30 @@ def _process(event, started, barcode, thing, txid):
 
     item = master_table.get_item(Key={"barcode": barcode}).get("Item")
     if item:
+        container_type = item.get("containerType")
+        container_confidence = float(item.get("containerConfidence", 0) or 0)
+        if not _is_supported_container(container_type):
+            payload = {
+                "statusCode": 200, "returnAction": "noMatch",
+                "thingName": thing, "transactionId": txid, "barcode": barcode,
+                "reason": _unsupported_container_reason(container_type),
+                "noMatchPlaylist": DEFAULT_NO_MATCH,
+            }
+            _publish(f"{thing}/noMatch", payload)
+            _firehose_put(_row(
+                txid=txid, thing=thing, barcode=barcode,
+                event_type="unsupported_container", return_action="noMatch",
+                product_name=item.get("productName"), product_brand=item.get("productBrand"),
+                product_category=item.get("productCategory"), product_desc=item.get("productDesc"),
+                product_image=item.get("productImageWebp") or item.get("productImage"),
+                product_image_original=item.get("productImageOriginal") or item.get("productImage"),
+                container_type=container_type, container_confidence=container_confidence,
+                data_source="master", no_match_playlist=DEFAULT_NO_MATCH,
+                reason=payload["reason"],
+                latency_ms=int((time.time() - started) * 1000),
+            ))
+            return payload
+
         deposit_pl, product_pl = _resolve_brand_playlists(item.get("productBrand"))
         wire_image = item.get("productImageWebp") or item.get("productImage")
         qr_url = f"https://tsrewards--test.expo.app/hook?scanid={txid}&barcode={barcode}"
@@ -112,8 +145,8 @@ def _process(event, started, barcode, thing, txid):
             "productDesc":     item.get("productDesc"),
             "productImage":    wire_image,
             "productImageOriginal": item.get("productImageOriginal") or item.get("productImage"),
-            "containerType":   item.get("containerType"),
-            "containerConfidence": float(item.get("containerConfidence", 0) or 0),
+            "containerType":   container_type,
+            "containerConfidence": container_confidence,
             "qrUrl": qr_url,
             "depositPlaylist": deposit_pl,
             "productPlaylist": product_pl,
@@ -145,17 +178,20 @@ def _process(event, started, barcode, thing, txid):
             except Exception:
                 valid = True
         if valid:
+            source = neg.get("source") or "cached_nomatch"
+            reason = source if str(source).startswith("unsupported_container") else "cached_nomatch"
+            event_type = "unsupported_container_cached" if reason.startswith("unsupported_container") else "nomatch_cached"
             payload = {
                 "statusCode": 200, "returnAction": "noMatch",
                 "thingName": thing, "transactionId": txid, "barcode": barcode,
-                "reason": "cached_nomatch",
+                "reason": reason,
                 "noMatchPlaylist": DEFAULT_NO_MATCH,
             }
             _publish(f"{thing}/noMatch", payload)
             _firehose_put(_row(
                 txid=txid, thing=thing, barcode=barcode,
-                event_type="nomatch_cached", return_action="noMatch",
-                no_match_playlist=DEFAULT_NO_MATCH, reason="cached_nomatch",
+                event_type=event_type, return_action="noMatch",
+                no_match_playlist=DEFAULT_NO_MATCH, reason=reason,
                 latency_ms=int((time.time() - started) * 1000),
             ))
             return payload

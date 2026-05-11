@@ -1,4 +1,4 @@
-import os, sys, pathlib
+import os, sys, pathlib, types
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from decimal import Decimal
@@ -28,6 +28,7 @@ def _aws_clients(monkeypatch):
     def fake_client(name, **_):
         return {"iot-data": fake_iot, "lambda": fake_lambda, "firehose": fake_firehose}[name]
 
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(resource=None, client=None))
     monkeypatch.setattr("boto3.resource", fake_resource)
     monkeypatch.setattr("boto3.client",   fake_client)
 
@@ -107,6 +108,57 @@ def test_negative_cache_hit_publishes_noMatch(_aws_clients):
     body = __import__("json").loads(pub[1]["payload"])
     assert body["reason"] == "cached_nomatch"
     assert body["noMatchPlaylist"] == "tsv6_no_match"
+
+def test_master_hit_glass_container_publishes_noMatch(_aws_clients):
+    _aws_clients["master"].get_item.return_value = {"Item": {
+        "barcode": "052548613136",
+        "productName": "Organic Cold Pressed Juice",
+        "productBrand": "7 Select",
+        "productCategory": "Beverages",
+        "productDesc": "Organic cold pressed juice",
+        "productImage": "https://example.com/juice.jpg",
+        "containerType": "glass_bottle",
+        "containerConfidence": Decimal("0.95"),
+    }}
+    lf = _import()
+    resp = lf.lambda_handler({"thingName":"TS_X","barcode":"052548613136","transactionId":"tx-glass"}, None)
+
+    assert resp["returnAction"] == "noMatch"
+    assert resp["reason"] == "unsupported_container:glass_bottle"
+    pub = _aws_clients["iot"].publish.call_args
+    assert pub[1]["topic"] == "TS_X/noMatch"
+    body = __import__("json").loads(pub[1]["payload"])
+    assert body["reason"] == "unsupported_container:glass_bottle"
+    fh = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
+    assert fh["eventtype"] == "unsupported_container"
+    assert fh["returnaction"] == "noMatch"
+    assert fh["productname"] == "Organic Cold Pressed Juice"
+    assert fh["productbrand"] == "7 Select"
+    assert fh["containertype"] == "glass_bottle"
+    assert fh["containerconfidence"] == 0.95
+    assert fh["datasource"] == "master"
+
+def test_unsupported_container_negative_cache_preserves_reason(_aws_clients):
+    from datetime import datetime, timedelta, timezone
+    _aws_clients["master"].get_item.return_value = {}
+    future = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+    _aws_clients["negative"].get_item.return_value = {"Item": {
+        "barcode": "052548613136",
+        "expires_at": future,
+        "source": "unsupported_container:glass_bottle",
+    }}
+    lf = _import()
+    resp = lf.lambda_handler({"thingName":"TS_X","barcode":"052548613136","transactionId":"tx-cached-glass"}, None)
+
+    assert resp["returnAction"] == "noMatch"
+    assert resp["reason"] == "unsupported_container:glass_bottle"
+    pub = _aws_clients["iot"].publish.call_args
+    assert pub[1]["topic"] == "TS_X/noMatch"
+    body = __import__("json").loads(pub[1]["payload"])
+    assert body["reason"] == "unsupported_container:glass_bottle"
+    fh = __import__("json").loads(_aws_clients["firehose"].put_record.call_args[1]["Record"]["Data"])
+    assert fh["eventtype"] == "unsupported_container_cached"
+    assert fh["reason"] == "unsupported_container:glass_bottle"
 
 def test_full_miss_invokes_upc_lambda(_aws_clients):
     _aws_clients["master"].get_item.return_value   = {}
