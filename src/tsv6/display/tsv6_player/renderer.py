@@ -131,9 +131,15 @@ class TSV6Renderer:
 
         # 2. Launch Chromium.
         if not self._chromium.start():
-            logger.error("Chromium failed to start.")
-            self._router.stop()
-            return False
+            if self._chromium.is_running():
+                logger.warning(
+                    "Chromium process is running but CDP is unavailable; "
+                    "continuing with browser-reported/default geometry."
+                )
+            else:
+                logger.error("Chromium failed to start.")
+                self._router.stop()
+                return False
 
         # 3. Give the page a moment to render, then query the #main rect.
         time.sleep(_RECT_QUERY_DELAY)

@@ -630,6 +630,37 @@ class TestTSV6RendererShowMethods:
         renderer._vlc = mock
         return mock
 
+    def test_start_continues_when_chromium_runs_without_cdp(
+        self,
+        renderer: TSV6Renderer,
+        mock_router: MagicMock,
+        mock_chromium: MagicMock,
+        mock_vlc: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_chromium.start.return_value = False
+        mock_chromium.is_running.return_value = True
+        mock_chromium.get_zone_rect.return_value = None
+        monkeypatch.setattr(time, "sleep", lambda _: None)
+
+        assert renderer.start() is True
+        assert renderer._started is True
+        assert renderer._state == "idle"
+        mock_router.stop.assert_not_called()
+
+    def test_start_stops_router_when_chromium_process_dies(
+        self,
+        renderer: TSV6Renderer,
+        mock_router: MagicMock,
+        mock_chromium: MagicMock,
+        mock_vlc: MagicMock,
+    ) -> None:
+        mock_chromium.start.return_value = False
+        mock_chromium.is_running.return_value = False
+
+        assert renderer.start() is False
+        mock_router.stop.assert_called_once()
+
     def _first_command(self, mock_router: MagicMock) -> dict:
         """Return the first ``action`` argument passed to send_command."""
         assert mock_router.send_command.called

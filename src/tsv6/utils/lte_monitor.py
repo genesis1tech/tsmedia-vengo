@@ -58,6 +58,8 @@ class LTEMonitorConfig:
     ping_target: str = "8.8.8.8"
     ping_timeout_secs: int = 5
     wwan_interface: str = "wwan0"  # Network interface for LTE
+    fallback_interfaces: Tuple[str, ...] = ("usb0", "wwan0", "ppp0")
+    nm_connection: str = "hologram-lte"
 
     # Recovery thresholds (number of consecutive failures before action)
     soft_recovery_threshold: int = 2      # 60s to first recovery (2 * 30s)
@@ -152,6 +154,17 @@ class LTEMonitor:
 
         logger.info(f"LTE Monitor initialized (check interval: {self.cfg.check_interval_secs}s)")
 
+    def _lte_interfaces(self) -> Tuple[str, ...]:
+        """Return LTE network interface candidates with configured interface first."""
+        candidates = [self.cfg.wwan_interface, *self.cfg.fallback_interfaces]
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for iface in candidates:
+            if iface and iface not in seen:
+                seen.add(iface)
+                ordered.append(iface)
+        return tuple(ordered)
+
     def start(self) -> None:
         """Start LTE monitoring in background thread"""
         if self._thread and self._thread.is_alive():
@@ -188,21 +201,80 @@ class LTEMonitor:
             rc, _, _ = _run(cmd, timeout=timeout + 2)
         return rc == 0
 
-    def _get_wwan_ip(self) -> str:
-        """Get IP address of wwan interface (for ModemManager mode)"""
+    def _get_interface_ip(self, interface: str) -> str:
+        """Get IPv4 address for a network interface."""
         try:
-            rc, stdout, _ = _run(["ip", "-4", "addr", "show", self.cfg.wwan_interface])
+            rc, stdout, _ = _run(["ip", "-4", "addr", "show", interface])
             if rc == 0:
                 for line in stdout.split('\n'):
                     line = line.strip()
-                    if line.startswith('inet '):
+                    if line.startswith('inet ') or ' inet ' in f' {line} ':
                         # Parse: inet 10.232.10.9/30 brd ...
                         parts = line.split()
-                        if len(parts) >= 2:
-                            return parts[1].split('/')[0]
+                        if "inet" in parts:
+                            idx = parts.index("inet")
+                            if len(parts) > idx + 1:
+                                return parts[idx + 1].split('/')[0]
         except Exception as e:
-            logger.debug(f"Failed to get wwan IP: {e}")
+            logger.debug(f"Failed to get IP for {interface}: {e}")
         return ''
+
+    def _get_wwan_ip(self) -> str:
+        """Get IP address of an LTE network interface."""
+        for interface in self._lte_interfaces():
+            ip = self._get_interface_ip(interface)
+            if ip:
+                return ip
+        return ''
+
+    def _get_lte_interface_with_ip(self) -> Tuple[str, str]:
+        """Return the first LTE interface candidate with an IPv4 address."""
+        for interface in self._lte_interfaces():
+            ip = self._get_interface_ip(interface)
+            if ip:
+                return interface, ip
+        return '', ''
+
+    def _has_default_route(self, interface: str) -> bool:
+        """Return true if the interface currently has a default IPv4 route."""
+        if not interface:
+            return False
+        rc, stdout, _ = _run(["ip", "-4", "route", "show", "default"], timeout=3)
+        if rc != 0:
+            return False
+        return any(f" dev {interface} " in f" {line} " for line in stdout.splitlines())
+
+    def _nm_connection_name(self, interface: str = "") -> str:
+        """Resolve the NetworkManager connection name for the LTE interface."""
+        import os
+
+        configured = os.environ.get("TSV6_LTE_NM_CONNECTION") or self.cfg.nm_connection
+        interfaces = [interface] if interface else list(self._lte_interfaces())
+        rc, stdout, _ = _run(["nmcli", "-t", "-f", "DEVICE,CONNECTION", "dev", "status"])
+        if rc == 0:
+            for line in stdout.splitlines():
+                device, _, connection = line.partition(":")
+                if device in interfaces and connection:
+                    return connection
+
+        if interface:
+            return configured
+
+        rc, stdout, _ = _run(["nmcli", "-t", "-f", "NAME", "connection", "show"])
+        if rc == 0:
+            for line in stdout.splitlines():
+                name = line.strip()
+                if name and "hologram" in name.lower():
+                    return name
+        return configured
+
+    def _cycle_nm_connection(self, timeout: int = 30) -> None:
+        """Cycle the active LTE NetworkManager connection when available."""
+        interface, _ = self._get_lte_interface_with_ip()
+        connection = self._nm_connection_name(interface)
+        _run(["sudo", "nmcli", "connection", "down", connection], timeout=10)
+        time.sleep(2)
+        _run(["sudo", "nmcli", "connection", "up", connection], timeout=timeout)
 
     def _get_modemmanager_status(self) -> Dict[str, Any]:
         """Get modem status via mmcli (for ModemManager mode)"""
@@ -248,9 +320,11 @@ class LTEMonitor:
         }
 
         try:
-            # Check if wwan interface has an IP
-            ip_addr = self._get_wwan_ip()
+            # Check if an LTE interface has an IP. SIM7600 RNDIS presents as
+            # usb0 on the live Pi, while some deployments use wwan0 or ppp0.
+            interface, ip_addr = self._get_lte_interface_with_ip()
             status['ip_address'] = ip_addr
+            status['interface'] = interface
             status['data_connected'] = bool(ip_addr)
 
             if ip_addr:
@@ -258,7 +332,7 @@ class LTEMonitor:
                 # Test actual connectivity with ping via wwan interface
                 status['ping_success'] = self._ping(
                     self.cfg.ping_target,
-                    interface=self.cfg.wwan_interface
+                    interface=interface
                 )
 
             # Get additional info from ModemManager (non-blocking, just for status)
@@ -278,7 +352,9 @@ class LTEMonitor:
                     'critical'
                 )
 
-            is_connected = status['data_connected'] and status['ping_success']
+            is_connected = status['data_connected'] and (
+                status['ping_success'] or self._has_default_route(interface)
+            )
             return is_connected, status
 
         except Exception as e:
@@ -371,9 +447,7 @@ class LTEMonitor:
             if self.cfg.use_modemmanager:
                 # ModemManager mode: cycle the NetworkManager connection
                 logger.info("Soft recovery via NetworkManager...")
-                rc, _, _ = _run(["sudo", "nmcli", "connection", "down", "hologram-lte"], timeout=10)
-                time.sleep(2)
-                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=30)
+                self._cycle_nm_connection(timeout=30)
                 time.sleep(5)
                 # Check if we got an IP
                 ip = self._get_wwan_ip()
@@ -433,7 +507,8 @@ class LTEMonitor:
                 rc, _, _ = _run(["sudo", "mmcli", "-m", "0", "-r"], timeout=30)
                 time.sleep(15)  # Wait for modem to restart
                 # Reconnect
-                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=60)
+                connection = self._nm_connection_name()
+                _run(["sudo", "nmcli", "connection", "up", connection], timeout=60)
                 time.sleep(10)
                 ip = self._get_wwan_ip()
                 if ip:
@@ -500,7 +575,8 @@ class LTEMonitor:
                 _run(["sudo", "systemctl", "restart", "ModemManager"], timeout=30)
                 time.sleep(20)  # Wait for service restart and modem detection
                 # Reconnect
-                rc, _, _ = _run(["sudo", "nmcli", "connection", "up", "hologram-lte"], timeout=60)
+                connection = self._nm_connection_name()
+                _run(["sudo", "nmcli", "connection", "up", connection], timeout=60)
                 time.sleep(10)
                 ip = self._get_wwan_ip()
                 if ip:
