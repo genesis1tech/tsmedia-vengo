@@ -284,7 +284,7 @@ class TestSIM7600ControllerAutoDetect:
         """Test auto-detection of serial port"""
         from src.tsv6.hardware.sim7600.controller import SIM7600Controller, SIM7600Config
 
-        # Simulate /dev/ttyUSB2 exists
+        # Simulate only the older fallback port exists
         def exists_side_effect(path):
             return path == '/dev/ttyUSB2'
 
@@ -294,6 +294,44 @@ class TestSIM7600ControllerAutoDetect:
         controller = SIM7600Controller(config=config)
 
         assert controller.port == '/dev/ttyUSB2'
+
+        controller.cleanup()
+
+    @patch('os.path.exists')
+    def test_auto_detect_prefers_stable_sim7600_symlink(self, mock_exists):
+        """Stable udev symlink beats ttyUSB numbering after USB reordering."""
+        from src.tsv6.hardware.sim7600.controller import SIM7600Controller, SIM7600Config
+
+        def exists_side_effect(path):
+            return path in {'/dev/ttySIM7600', '/dev/ttyUSB2'}
+
+        mock_exists.side_effect = exists_side_effect
+
+        config = SIM7600Config(simulation_mode=True)
+        controller = SIM7600Controller(config=config)
+
+        assert controller.port == '/dev/ttySIM7600'
+
+        controller.cleanup()
+
+    @patch('src.tsv6.hardware.sim7600.controller.glob.glob')
+    @patch('os.path.exists')
+    def test_auto_detect_prefers_simtech_interface_04_by_id(self, mock_exists, mock_glob):
+        """Interface 04 by-id path wins when the /dev/ttySIM7600 rule is absent."""
+        from src.tsv6.hardware.sim7600.controller import SIM7600Controller, SIM7600Config
+
+        by_id = '/dev/serial/by-id/usb-SimTech__Incorporated-if04-port0'
+        mock_glob.side_effect = lambda pattern: [by_id] if 'if04-port0' in pattern else []
+
+        def exists_side_effect(path):
+            return path in {by_id, '/dev/ttyUSB2'}
+
+        mock_exists.side_effect = exists_side_effect
+
+        config = SIM7600Config(simulation_mode=True)
+        controller = SIM7600Controller(config=config)
+
+        assert controller.port == by_id
 
         controller.cleanup()
 

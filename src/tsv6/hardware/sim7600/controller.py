@@ -13,6 +13,7 @@ import time
 import threading
 import logging
 import subprocess
+import glob
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Any, Callable
 from enum import Enum
@@ -180,27 +181,122 @@ class SIM7600Controller:
 
     def _auto_detect_port(self) -> str:
         """Auto-detect the serial port for the SIM7600 modem."""
-        # SIM7600 creates multiple USB serial ports:
-        # - ttyUSB0: Diagnostic
-        # - ttyUSB1: GPS NMEA output
-        # - ttyUSB2: AT commands
-        # - ttyUSB3: Modem (PPP)
-        ports = [
-            '/dev/ttyUSB2',       # Primary AT command port
-            '/dev/ttyUSB0',       # Fallback
-            '/dev/ttyAMA0',       # Hardware UART on Pi
-            '/dev/ttyS0',         # Alternate UART
-            '/dev/tsv6-lte',      # Custom udev symlink if configured
-            '/dev/serial/by-id/usb-SimTech__Incorporated_SimTech__Incorporated-if02-port0',
+        existing_ports = self._existing_lte_ports()
+
+        if not existing_ports:
+            logger.warning("No LTE modem port auto-detected, using /dev/ttySIM7600")
+            return '/dev/ttySIM7600'
+
+        if PYSERIAL_AVAILABLE and not self.config.simulation_mode:
+            for port in existing_ports:
+                if self._probe_at_port(port):
+                    logger.info(f"Auto-detected LTE modem AT port: {port}")
+                    return port
+
+            logger.warning(
+                "LTE serial candidates exist but did not answer AT; using first "
+                "identity-based candidate: %s",
+                existing_ports[0],
+            )
+            return existing_ports[0]
+
+        port = existing_ports[0]
+        logger.info(f"Auto-detected LTE modem port: {port}")
+        return port
+
+    def _existing_lte_ports(self) -> list[str]:
+        """Return currently present LTE candidate ports in preference order."""
+        return [port for port in self._lte_port_candidates() if os.path.exists(port)]
+
+    def _lte_port_candidates(self) -> list[str]:
+        """Return LTE serial candidates ordered by stable identity first."""
+        candidates = [
+            '/dev/ttySIM7600',  # udev symlink for SimTech interface 04
+            '/dev/tsv6-lte',    # legacy custom symlink
         ]
 
-        for port in ports:
-            if os.path.exists(port):
-                logger.info(f"Auto-detected LTE modem port: {port}")
-                return port
+        by_id_patterns = [
+            # SIM7600G/NA-H firmware observed on tsrpi7: interface 04 is AT primary.
+            '/dev/serial/by-id/usb-SimTech*if04-port0',
+            '/dev/serial/by-id/usb-SimTech*Incorporated*if04-port0',
+            '/dev/serial/by-id/usb-*SIM7600*if04-port0',
+        ]
+        for pattern in by_id_patterns:
+            candidates.extend(sorted(glob.glob(pattern)))
 
-        logger.warning("No LTE modem port auto-detected, using /dev/ttyUSB2")
-        return '/dev/ttyUSB2'
+        candidates.extend([
+            '/dev/ttyUSB3',       # SimTech interface 04 on current Pi image
+            '/dev/ttyUSB4',       # AT secondary / PPP
+            '/dev/ttyUSB2',       # Older image default; no longer preferred
+            '/dev/ttyUSB1',       # NMEA on current Pi image
+            '/dev/ttyUSB5',       # Last SimTech interface fallback
+            '/dev/ttyAMA0',       # Hardware UART on Pi
+            '/dev/ttyS0',         # Alternate UART
+        ])
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for port in candidates:
+            if port not in seen:
+                deduped.append(port)
+                seen.add(port)
+        return deduped
+
+    def _probe_at_port(self, port: str) -> bool:
+        """Return True when a candidate serial port answers a basic AT probe."""
+        try:
+            with serial.Serial(
+                port=port,
+                baudrate=self.config.baudrate,
+                timeout=0.8,
+                write_timeout=0.8,
+            ) as ser:
+                ser.reset_input_buffer()
+                ser.write(b'AT\r')
+                deadline = time.monotonic() + 1.0
+                response = b''
+                while time.monotonic() < deadline:
+                    response += ser.read(128)
+                    if b'OK' in response or b'ERROR' in response:
+                        break
+                return b'OK' in response
+        except Exception as exc:
+            logger.debug("LTE AT probe failed on %s: %s", port, exc)
+            return False
+
+    def _open_and_check_modem(self) -> bool:
+        """Open the current serial port and verify the modem responds."""
+        if not self._open_serial():
+            return False
+        if self._check_modem():
+            return True
+
+        try:
+            if self.serial:
+                self.serial.close()
+        except Exception:
+            pass
+        self.serial = None
+        return False
+
+    def _open_checked_serial_with_remap(self) -> bool:
+        """Open the modem, trying identity-mapped candidates after failures."""
+        if self.config.port:
+            return self._open_and_check_modem()
+
+        ports = self._existing_lte_ports()
+        if self.port not in ports:
+            ports.insert(0, self.port)
+
+        for port in ports:
+            old_port = self.port
+            self.port = port
+            if old_port != port:
+                logger.warning("LTE modem port remapped: %s -> %s", old_port, port)
+            if self._open_and_check_modem():
+                return True
+
+        return False
 
     def _set_state(self, new_state: ModemState) -> None:
         """Update modem state and trigger callback."""
@@ -233,13 +329,9 @@ class SIM7600Controller:
             try:
                 self._set_state(ModemState.INITIALIZING)
 
-                # Open serial port
-                if not self._open_serial():
-                    self._set_state(ModemState.ERROR)
-                    return False
-
-                # Basic modem check
-                if not self._check_modem():
+                # Open serial port and verify the modem. If USB enumeration
+                # changed, auto-map once before reporting failure.
+                if not self._open_checked_serial_with_remap():
                     self._set_state(ModemState.ERROR)
                     return False
 

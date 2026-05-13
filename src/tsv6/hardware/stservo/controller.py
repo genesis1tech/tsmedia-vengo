@@ -10,6 +10,7 @@ import os
 import time
 import threading
 import logging
+import glob
 from typing import Optional, Tuple, Callable
 from pathlib import Path
 
@@ -196,44 +197,49 @@ class STServoController:
 
     def _auto_detect_port(self) -> str:
         """Auto-detect the serial port for the USB adapter."""
-        # Check for stable by-id path first (QinHeng CH340 adapter)
+        ports = self._auto_detect_ports()
+        if ports:
+            port = ports[0]
+            if 'ttyUSB' in port:
+                logger.warning(f"Using {port} for servo - may conflict with LTE modem. "
+                               "Consider setting TSV6_SERVO_PORT explicitly.")
+            else:
+                logger.info(f"Auto-detected servo port: {port}")
+            return port
+
+        logger.warning("No serial port auto-detected, using /dev/ttyACM0")
+        return '/dev/ttyACM0'
+
+    def _auto_detect_ports(self) -> list[str]:
+        """Return servo candidates ordered by stable device identity first."""
         # This is the most reliable method as it identifies the specific device
-        import glob
+        # regardless of which physical USB port the adapter is plugged into.
+        candidates = ['/dev/tsv6-servo']
         by_id_patterns = [
             '/dev/serial/by-id/usb-1a86_USB_Single_Serial*',  # QinHeng CH340/CH341
             '/dev/serial/by-id/*CH340*',
             '/dev/serial/by-id/*CH341*',
         ]
         for pattern in by_id_patterns:
-            matches = glob.glob(pattern)
-            if matches:
-                port = matches[0]
-                logger.info(f"Auto-detected servo port via by-id: {port}")
-                return port
+            candidates.extend(sorted(glob.glob(pattern)))
 
         # Common port paths - prioritize ttyACM (typical for CH340 on newer kernels)
         # over ttyUSB (which is often used by LTE modems)
-        ports = [
-            '/dev/tsv6-servo',  # Custom udev symlink if configured
+        candidates.extend([
             '/dev/ttyACM0',     # CH340 often appears as ACM on newer kernels
             '/dev/ttyACM1',
             '/dev/ttyUSB0',     # Fallback - may conflict with LTE modem
             '/dev/ttyUSB1',
-        ]
+        ])
 
-        for port in ports:
-            if os.path.exists(port):
-                # Warn if using ttyUSB as it may conflict with LTE modem
-                if 'ttyUSB' in port:
-                    logger.warning(f"Using {port} for servo - may conflict with LTE modem. "
-                                   "Consider setting TSV6_SERVO_PORT explicitly.")
-                else:
-                    logger.info(f"Auto-detected serial port: {port}")
-                return port
-
-        # Fallback to default
-        logger.warning("No serial port auto-detected, using /dev/ttyACM0")
-        return '/dev/ttyACM0'
+        ports: list[str] = []
+        seen: set[str] = set()
+        for port in candidates:
+            if port in seen or not os.path.exists(port):
+                continue
+            ports.append(port)
+            seen.add(port)
+        return ports
 
     def _connect(self) -> bool:
         """Connect to the servo via serial port."""
@@ -241,56 +247,69 @@ class STServoController:
             return False
 
         try:
-            if not self._explicit_port:
-                self.port = self._auto_detect_port()
+            ports = [self._explicit_port] if self._explicit_port else self._auto_detect_ports()
+            if not ports:
+                ports = ['/dev/ttyACM0']
 
-            logger.info(f"Connecting to STServo on {self.port} at {self.baudrate} baud...")
+            for port in ports:
+                self.port = port
+                if self._connect_on_current_port():
+                    return True
 
-            self.port_handler = PortHandler(self.port)
-            self.port_handler.baudrate = self.baudrate
-
-            if not self.port_handler.openPort():
-                logger.error(f"Failed to open port {self.port}")
-                return False
-
-            self.servo = sms_sts(self.port_handler)
-
-            ping_result = self.servo.ping(self.servo_id)
-            comm_result = ping_result[1] if isinstance(ping_result, tuple) and len(ping_result) > 1 else 0
-            if comm_result != 0:
-                logger.error(
-                    f"STServo adapter opened on {self.port}, but servo ID {self.servo_id} "
-                    f"did not respond to ping (comm_result={comm_result}). "
-                    "Check servo power, TTL bus wiring, and servo ID."
-                )
-                try:
-                    self.port_handler.closePort()
-                except Exception:
-                    pass
-                self.servo = None
-                self.port_handler = None
-                return False
-
-            self._connected = True
-
-            # Enable torque
-            self._enable_torque(True)
-
-            # Move servo to closed position (0) on startup/wake-up
-            logger.info("Initializing servo to closed position (0)...")
-            self._set_position(self.closed_position)
-            self._wait_for_movement(timeout=2.0)
-
-            logger.info(f"STServo connected on {self.port} (ID: {self.servo_id})")
-            print(f"STServo connected on {self.port} (ID: {self.servo_id})")
-
-            return True
+            logger.error("Failed to connect to STServo on candidate ports: %s", ports)
+            return False
 
         except Exception as e:
             logger.error(f"Failed to connect to STServo: {e}")
             self._connected = False
             self.servo = None
             return False
+
+    def _connect_on_current_port(self) -> bool:
+        """Try one candidate port and verify the configured servo responds."""
+        logger.info(f"Connecting to STServo on {self.port} at {self.baudrate} baud...")
+        self._connected = False
+
+        self.port_handler = PortHandler(self.port)
+        self.port_handler.baudrate = self.baudrate
+
+        if not self.port_handler.openPort():
+            logger.error(f"Failed to open port {self.port}")
+            self.port_handler = None
+            return False
+
+        self.servo = sms_sts(self.port_handler)
+
+        ping_result = self.servo.ping(self.servo_id)
+        comm_result = ping_result[1] if isinstance(ping_result, tuple) and len(ping_result) > 1 else 0
+        if comm_result != 0:
+            logger.error(
+                f"STServo adapter opened on {self.port}, but servo ID {self.servo_id} "
+                f"did not respond to ping (comm_result={comm_result}). "
+                "Check servo power, TTL bus wiring, and servo ID."
+            )
+            try:
+                self.port_handler.closePort()
+            except Exception:
+                pass
+            self.servo = None
+            self.port_handler = None
+            return False
+
+        self._connected = True
+
+        # Enable torque
+        self._enable_torque(True)
+
+        # Move servo to closed position (0) on startup/wake-up
+        logger.info("Initializing servo to closed position (0)...")
+        self._set_position(self.closed_position)
+        self._wait_for_movement(timeout=2.0)
+
+        logger.info(f"STServo connected on {self.port} (ID: {self.servo_id})")
+        print(f"STServo connected on {self.port} (ID: {self.servo_id})")
+
+        return True
 
     @property
     def is_connected(self) -> bool:
