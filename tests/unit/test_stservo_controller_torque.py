@@ -183,8 +183,8 @@ def test_reconnects_after_adapter_returns(monkeypatch):
         sdk.ReadMoving.side_effect = lambda _id: (0, 0, 0)
 
         monkeypatch.setattr(
-            "tsv6.hardware.stservo.controller.STServoController._auto_detect_port",
-            lambda self: "/dev/ttyACM0",
+            "tsv6.hardware.stservo.controller.STServoController._auto_detect_ports",
+            lambda self: ["/dev/ttyACM0"],
         )
 
         from tsv6.hardware.stservo.controller import STServoController
@@ -198,3 +198,65 @@ def test_reconnects_after_adapter_returns(monkeypatch):
     assert ctrl.is_connected is True
     assert state["position"] == ctrl.open_position
     assert open_attempts["count"] == 2
+
+
+def test_auto_detect_prefers_stable_servo_identity(monkeypatch):
+    """QinHeng by-id path beats generic ttyUSB numbering after port swaps."""
+    from tsv6.hardware.stservo.controller import STServoController
+
+    by_id = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5AE6054653-if00"
+    monkeypatch.setattr(
+        "tsv6.hardware.stservo.controller.glob.glob",
+        lambda pattern: [by_id] if "USB_Single_Serial" in pattern else [],
+    )
+    monkeypatch.setattr(
+        "tsv6.hardware.stservo.controller.os.path.exists",
+        lambda path: path in {by_id, "/dev/ttyUSB0"},
+    )
+
+    ctrl = STServoController.__new__(STServoController)
+
+    assert ctrl._auto_detect_ports()[0] == by_id
+    assert ctrl._auto_detect_port() == by_id
+
+
+def test_auto_detect_tries_next_servo_candidate_after_ping_failure(monkeypatch):
+    """If the first serial adapter opens but is not the servo, try the next one."""
+    with patch("tsv6.hardware.stservo.controller.STSERVO_AVAILABLE", True), \
+         patch("tsv6.hardware.stservo.controller.PortHandler") as MockPort, \
+         patch("tsv6.hardware.stservo.controller.sms_sts") as MockSdk:
+
+        port_by_name = {}
+
+        def make_port(name):
+            port = MagicMock()
+            port.name = name
+            port.openPort.return_value = True
+            port.setBaudRate.return_value = True
+            port_by_name[name] = port
+            return port
+
+        MockPort.side_effect = make_port
+
+        def make_sdk(port):
+            sdk = MagicMock()
+            sdk.ping.return_value = (1, -6, 0) if port.name == "/dev/ttyUSB0" else (1, 0, 0)
+            sdk.write1ByteTxRx.return_value = (0, 0)
+            sdk.WritePosEx.return_value = (0, 0)
+            sdk.ReadPos.return_value = (4070, 0, 0)
+            sdk.ReadMoving.return_value = (0, 0, 0)
+            return sdk
+
+        MockSdk.side_effect = make_sdk
+        monkeypatch.setattr(
+            "tsv6.hardware.stservo.controller.STServoController._auto_detect_ports",
+            lambda self: ["/dev/ttyUSB0", "/dev/ttyACM0"],
+        )
+
+        from tsv6.hardware.stservo.controller import STServoController
+
+        ctrl = STServoController()
+
+    assert ctrl.is_connected is True
+    assert ctrl.port == "/dev/ttyACM0"
+    port_by_name["/dev/ttyUSB0"].closePort.assert_called_once()

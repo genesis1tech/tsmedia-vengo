@@ -21,7 +21,7 @@ Environment variables (PiSignage):
 
 Environment variables (LTE):
     TSV6_LTE_ENABLED            true|false (default: true for signage)
-    TSV6_LTE_PORT               /dev/ttyUSB2
+    TSV6_LTE_PORT               /dev/ttySIM7600
     TSV6_LTE_BAUD               115200
     TSV6_LTE_APN                APN string (set per SIM provider)
     TSV6_LTE_APN_USERNAME       (optional)
