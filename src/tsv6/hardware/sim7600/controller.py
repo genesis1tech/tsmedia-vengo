@@ -546,6 +546,10 @@ class SIM7600Controller:
 
     def _enable_rndis(self) -> bool:
         """Enable RNDIS USB network interface mode (or accept NDIS mode)."""
+        if self._os_lte_interface_ready():
+            logger.info("RNDIS/LTE network interface already active; skipping USB mode switch")
+            return True
+
         success, response = self._send_command(ATCommands.GET_USB_MODE)
         if success:
             pid, mode = ATResponseParser.parse_cusbpidswitch(response)
@@ -567,6 +571,48 @@ class SIM7600Controller:
                 self.serial.close()
             return self._open_serial()
         return False
+
+    def _os_lte_interface_ready(self) -> bool:
+        """Return True when Linux already has an LTE USB network interface online."""
+        try:
+            addr_result = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            route_result = subprocess.run(
+                ["ip", "-4", "route", "show", "default"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except Exception as exc:
+            logger.debug("LTE interface readiness check failed: %s", exc)
+            return False
+
+        if addr_result.returncode != 0:
+            return False
+
+        lte_ifaces = {"usb0", "wwan0", "ppp0"}
+        active_ifaces: set[str] = set()
+        for line in addr_result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[1] in lte_ifaces and parts[2] == "inet":
+                active_ifaces.add(parts[1])
+
+        if not active_ifaces:
+            return False
+
+        default_routes = route_result.stdout if route_result.returncode == 0 else ""
+        if any(f" dev {iface} " in f" {default_routes} " for iface in active_ifaces):
+            return True
+
+        # A configured LTE interface is still useful even when Wi-Fi has the
+        # default route; NetworkManager may switch metrics after startup.
+        return bool(active_ifaces)
 
     def _wait_for_registration(self, timeout: float = 60.0) -> bool:
         """Wait for network registration."""
@@ -602,6 +648,11 @@ class SIM7600Controller:
 
     def _establish_data_connection(self) -> bool:
         """Establish data connection via NDIS."""
+        if self._os_lte_interface_ready():
+            logger.info("LTE data interface already connected at OS level")
+            self._data_connected = True
+            return True
+
         # Attach to GPRS
         success, _ = self._send_command(ATCommands.ATTACH_GPRS)
         if not success:
