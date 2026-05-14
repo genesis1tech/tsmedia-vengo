@@ -505,7 +505,7 @@ class TestShowProductDisplay:
         _, kwargs = mock_renderer.show_product_display.call_args
         assert kwargs.get("nfc_url") is None
 
-    def test_https_image_url_passes_through_unchanged(
+    def test_uncached_https_image_url_passes_through_unchanged(
         self,
         tmp_backend,
         mock_protocol,
@@ -527,6 +527,9 @@ class TestShowProductDisplay:
         )
 
         webp_url = "https://s3.example.com/products/abc.webp"
+        tmp_backend._product_image_cache = MagicMock()
+        tmp_backend._product_image_cache.resolve_for_display.return_value = webp_url
+
         tmp_backend.show_product_display(
             product_image_path=webp_url,
             qr_url="https://example.com/qr",
@@ -534,8 +537,95 @@ class TestShowProductDisplay:
 
         _, kwargs = mock_renderer.show_product_display.call_args
         assert kwargs["image_path"] == webp_url, (
-            "Remote URLs must be forwarded as-is, not converted to Path"
+            "Uncached remote URLs must display immediately while cache warms"
         )
+        tmp_backend._product_image_cache.resolve_for_display.assert_called_once_with(webp_url)
+
+    def test_cached_https_image_url_uses_local_filename(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+    ):
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+        webp_url = "https://s3.example.com/products/abc.webp"
+        tmp_backend._product_image_cache = MagicMock()
+        tmp_backend._product_image_cache.resolve_for_display.return_value = ".product_cached.webp"
+
+        tmp_backend.show_product_display(
+            product_image_path=webp_url,
+            qr_url="https://example.com/qr",
+        )
+
+        _, kwargs = mock_renderer.show_product_display.call_args
+        assert kwargs["image_path"] == ".product_cached.webp"
+        tmp_backend._product_image_cache.resolve_for_display.assert_called_once_with(webp_url)
+
+    def test_empty_product_image_does_not_touch_cache(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+    ):
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+        tmp_backend._product_image_cache = MagicMock()
+
+        tmp_backend.show_product_display(
+            product_image_path="",
+            qr_url="https://example.com/qr",
+        )
+
+        _, kwargs = mock_renderer.show_product_display.call_args
+        assert kwargs["image_path"] is None
+        tmp_backend._product_image_cache.resolve_for_display.assert_not_called()
+
+    def test_local_product_image_does_not_touch_cache(
+        self,
+        tmp_backend,
+        mock_protocol,
+        mock_syncer,
+        mock_renderer,
+        mock_recorder,
+        mock_tracker,
+    ):
+        _connect_backend(
+            tmp_backend,
+            mock_protocol,
+            mock_syncer,
+            mock_renderer,
+            mock_recorder,
+            mock_tracker,
+        )
+        tmp_backend._product_image_cache = MagicMock()
+
+        tmp_backend.show_product_display(
+            product_image_path="/tmp/img.jpg",
+            qr_url="https://example.com/qr",
+        )
+
+        _, kwargs = mock_renderer.show_product_display.call_args
+        assert kwargs["image_path"] == Path("/tmp/img.jpg")
+        tmp_backend._product_image_cache.resolve_for_display.assert_not_called()
 
     def test_schedules_return_to_idle_after_success(
         self,
