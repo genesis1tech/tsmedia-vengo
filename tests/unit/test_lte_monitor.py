@@ -121,6 +121,57 @@ class TestLTEMonitor:
         assert 'soft_attempts' in status
         assert 'is_connected' in status
 
+    def test_modemmanager_accepts_usb0_with_default_route(self, mock_lte_controller):
+        """SIM7600 RNDIS can appear as usb0 instead of wwan0."""
+        from src.tsv6.utils import lte_monitor as lte_module
+        from src.tsv6.utils.lte_monitor import LTEMonitor, LTEMonitorConfig
+
+        def fake_run(cmd, timeout=5.0):
+            if cmd[:4] == ["ip", "-4", "addr", "show"]:
+                if cmd[-1] == "usb0":
+                    return 0, "3: usb0 inet 192.168.225.27/24 brd 192.168.225.255 scope global usb0", ""
+                return 1, "", ""
+            if cmd == ["ip", "-4", "route", "show", "default"]:
+                return 0, "default via 192.168.225.1 dev usb0 proto dhcp src 192.168.225.27 metric 100", ""
+            if cmd[:1] == ["mmcli"]:
+                return 1, "", ""
+            if "ping" in cmd[0]:
+                return 1, "", ""
+            return 1, "", ""
+
+        monitor = LTEMonitor(
+            lte_controller=mock_lte_controller,
+            config=LTEMonitorConfig(wwan_interface="wwan0")
+        )
+
+        with patch.object(lte_module, "_run", side_effect=fake_run):
+            connected, status = monitor._check_connectivity_modemmanager()
+
+        assert connected is True
+        assert status["interface"] == "usb0"
+        assert status["ip_address"] == "192.168.225.27"
+        assert status["ping_success"] is False
+
+    def test_nm_connection_name_uses_active_lte_device(self, mock_lte_controller):
+        from src.tsv6.utils import lte_monitor as lte_module
+        from src.tsv6.utils.lte_monitor import LTEMonitor, LTEMonitorConfig
+
+        monitor = LTEMonitor(
+            lte_controller=mock_lte_controller,
+            config=LTEMonitorConfig()
+        )
+
+        with patch.object(
+            lte_module,
+            "_run",
+            return_value=(
+                0,
+                "usb0:hologram-4g\nwlan0:G1Tech Wi-Fi Network 5GHz\n",
+                "",
+            ),
+        ):
+            assert monitor._nm_connection_name("usb0") == "hologram-4g"
+
 
 class TestConnectivityMode:
     """Test ConnectivityMode enum"""

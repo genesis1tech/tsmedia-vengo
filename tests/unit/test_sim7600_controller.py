@@ -335,6 +335,29 @@ class TestSIM7600ControllerAutoDetect:
 
         controller.cleanup()
 
+    @patch('subprocess.run')
+    def test_os_lte_interface_ready_detects_usb_default_route(self, mock_run):
+        """Connected usb0 should let startup skip redundant AT data dialing."""
+        from src.tsv6.hardware.sim7600.controller import SIM7600Controller, SIM7600Config
+
+        def run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {})()
+            result.returncode = 0
+            if "addr" in cmd:
+                result.stdout = "3: usb0 inet 192.168.225.27/24 brd 192.168.225.255 scope global usb0\\n"
+            else:
+                result.stdout = "default via 192.168.225.1 dev usb0 proto dhcp src 192.168.225.27 metric 100\\n"
+            return result
+
+        mock_run.side_effect = run_side_effect
+
+        config = SIM7600Config(simulation_mode=True)
+        controller = SIM7600Controller(config=config)
+
+        assert controller._os_lte_interface_ready() is True
+
+        controller.cleanup()
+
     @patch.dict('os.environ', {'TSV6_LTE_PORT': '/dev/custom-lte'})
     def test_env_var_override(self):
         """Test environment variable override"""
