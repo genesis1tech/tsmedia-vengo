@@ -84,28 +84,8 @@ echo "  → /etc/systemd/system.conf.d/tsv6-watchdog.conf"
 # ---------------------------------------------------------------------------
 # 4. Hardware watchdog (boot config)
 # ---------------------------------------------------------------------------
-echo "[4/9] Enabling hardware watchdog in boot config..."
-BOOT_CONFIG="/boot/firmware/config.txt"
-if [[ ! -f "$BOOT_CONFIG" ]]; then
-    BOOT_CONFIG="/boot/config.txt"
-fi
-
-if [[ -f "$BOOT_CONFIG" ]]; then
-    if grep -q "^dtparam=watchdog=on" "$BOOT_CONFIG"; then
-        echo "  → Already enabled in ${BOOT_CONFIG}"
-    elif grep -q "^#dtparam=watchdog" "$BOOT_CONFIG"; then
-        # Uncomment existing line
-        sed -i 's/^#dtparam=watchdog.*/dtparam=watchdog=on/' "$BOOT_CONFIG"
-        echo "  → Uncommented in ${BOOT_CONFIG}"
-    else
-        echo "" >> "$BOOT_CONFIG"
-        echo "# TSV6: Enable BCM2835 hardware watchdog" >> "$BOOT_CONFIG"
-        echo "dtparam=watchdog=on" >> "$BOOT_CONFIG"
-        echo "  → Added to ${BOOT_CONFIG}"
-    fi
-else
-    echo "  WARNING: Boot config not found, skipping hardware watchdog"
-fi
+echo "[4/9] Skipping direct hardware watchdog boot config edits..."
+echo "  → Boot config is managed by scripts/install-boot-config.sh"
 
 # ---------------------------------------------------------------------------
 # 5. Network watchdog script
@@ -228,7 +208,7 @@ case "$WIFI_DRIVER" in
     *)        echo "  [DRV] /etc/modprobe.d/tsv6-wifi.conf (default)" ;;
 esac
 echo "  [HW]  /etc/systemd/system.conf.d/tsv6-watchdog.conf"
-echo "  [HW]  ${BOOT_CONFIG:-/boot/firmware/config.txt} (dtparam=watchdog=on)"
+echo "  [HW]  config.txt watchdog setting is managed by scripts/install-boot-config.sh"
 echo "  [L2]  /usr/local/bin/tsv6-network-watchdog.sh"
 echo "  [L2]  /etc/systemd/system/tsv6-network-watchdog.service (disabled by default)"
 echo "  [PWR] /etc/systemd/system/tsv6-wifi-powersave-off.service"

@@ -1,8 +1,9 @@
 [Unit]
 Description=TSV6 Raspberry Pi Video Player
 Documentation=file:///home/%i/tsmedia-with-player/README.md
-After=NetworkManager.service time-sync.target
+After=NetworkManager.service time-sync.target tsv6-boot-config-guard@%i.service
 Wants=NetworkManager.service
+Requires=tsv6-boot-config-guard@%i.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

@@ -129,6 +129,18 @@ success "tsv6-xorg@$CURRENT_USER.service installed and enabled"
 # ============================================================================
 # Install tsv6.service (convert to template if needed)
 # ============================================================================
+log "Installing tsv6-boot-config-guard@.service..."
+
+if [ -f "$SCRIPT_DIR/tsv6-boot-config-guard@.service" ]; then
+    sudo cp "$SCRIPT_DIR/tsv6-boot-config-guard@.service" /etc/systemd/system/
+    sudo chmod 644 /etc/systemd/system/tsv6-boot-config-guard@.service
+    sudo systemctl enable "tsv6-boot-config-guard@$CURRENT_USER.service"
+    info "Installed tsv6-boot-config-guard@.service"
+else
+    error "tsv6-boot-config-guard@.service not found in $SCRIPT_DIR"
+    exit 1
+fi
+
 log "Installing tsv6.service..."
 
 if [ -f "$SCRIPT_DIR/tsv6.service" ]; then

@@ -1,0 +1,12 @@
+[Unit]
+Description=TSV6 Boot Config Guard for %i
+DefaultDependencies=no
+After=local-fs.target
+Before=tsv6@%i.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/%i/tsmedia-with-player/scripts/boot-config-guard.sh
+
+[Install]
+WantedBy=multi-user.target

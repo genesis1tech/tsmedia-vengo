@@ -478,65 +478,15 @@ class DisplayDriverMonitor:
     
     def _set_gpu_memory_split(self, memory_mb: int):
         """Set GPU memory split"""
-        try:
-            config_file = "/boot/config.txt"
-            if os.path.exists(config_file):
-                # Read current config
-                with open(config_file, 'r') as f:
-                    lines = f.readlines()
-                
-                # Update or add gpu_mem setting
-                found = False
-                for i, line in enumerate(lines):
-                    if line.startswith('gpu_mem='):
-                        lines[i] = f"gpu_mem={memory_mb}\n"
-                        found = True
-                        break
-                
-                if not found:
-                    lines.append(f"gpu_mem={memory_mb}\n")
-                
-                # Write back (requires sudo)
-                temp_file = "/tmp/config.txt.new"
-                with open(temp_file, 'w') as f:
-                    f.writelines(lines)
-                
-                subprocess.run(['sudo', 'cp', temp_file, config_file], timeout=10)
-                os.remove(temp_file)
-                
-        except Exception as e:
-            self.logger.error(f"Failed to set GPU memory split: {e}")
+        self.logger.warning(
+            "Skipping runtime boot config GPU memory edit; use scripts/install-boot-config.sh"
+        )
     
     def _set_safe_display_mode(self):
         """Set safe display mode in boot config"""
-        try:
-            config_file = "/boot/config.txt"
-            if os.path.exists(config_file):
-                safe_settings = [
-                    "hdmi_safe=1",
-                    "hdmi_force_hotplug=1",
-                    "config_hdmi_boost=4"
-                ]
-                
-                # Read current config
-                with open(config_file, 'r') as f:
-                    lines = f.readlines()
-                
-                # Add safe settings if not present
-                for setting in safe_settings:
-                    if not any(line.strip().startswith(setting.split('=')[0]) for line in lines):
-                        lines.append(f"{setting}\n")
-                
-                # Write back
-                temp_file = "/tmp/config.txt.safe"
-                with open(temp_file, 'w') as f:
-                    f.writelines(lines)
-                
-                subprocess.run(['sudo', 'cp', temp_file, config_file], timeout=10)
-                os.remove(temp_file)
-                
-        except Exception as e:
-            self.logger.error(f"Failed to set safe display mode: {e}")
+        self.logger.warning(
+            "Skipping runtime boot config safe-mode edit; use scripts/install-boot-config.sh"
+        )
     
     def _disable_gpu_acceleration(self):
         """Disable GPU acceleration to reduce driver load"""
