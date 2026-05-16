@@ -52,62 +52,11 @@ get_boot_cmdline_file() {
 }
 
 configure_gpu_memory() {
-    log "Configuring GPU memory allocation..."
-    local config_file
-    config_file="$(get_boot_config_file)"
-    backup_file "$config_file"
-    
-    # Increase GPU memory to 128MB for stable video processing
-    if ! grep -q "gpu_mem=128" "$config_file"; then
-        echo "gpu_mem=128" >> "$config_file"
-        log "Set GPU memory to 128MB"
-    fi
-    
-    # Disable GPU memory split dynamic allocation to prevent instability
-    if ! grep -q "gpu_mem_256=128" "$config_file"; then
-        echo "gpu_mem_256=128" >> "$config_file"
-        echo "gpu_mem_512=128" >> "$config_file"
-        echo "gpu_mem_1024=128" >> "$config_file"
-        log "Set fixed GPU memory allocation for all RAM sizes"
-    fi
+    log "Skipping direct boot config GPU memory edits; managed by scripts/install-boot-config.sh"
 }
 
 configure_vc4_stability() {
-    log "Configuring VC4 driver stability settings..."
-    local config_file
-    config_file="$(get_boot_config_file)"
-    
-    # Disable problematic VC4 features that cause atomic commit issues
-    if ! grep -q "dtoverlay=vc4-kms-v3d,cma-256" "$config_file"; then
-        echo "dtoverlay=vc4-kms-v3d,cma-256" >> "$config_file"
-        log "Configured VC4 with increased CMA allocation"
-    fi
-    
-    # Keep DSI active and enable HDMI for an external portable monitor.
-    sed -i '/^hdmi_ignore_hotplug=/d' "$config_file"
-    sed -i '/^hdmi_ignore_composite=/d' "$config_file"
-    sed -i '/^hdmi_blanking=/d' "$config_file"
-
-    if ! grep -q "hdmi_force_hotplug=1" "$config_file"; then
-        echo "hdmi_force_hotplug=1" >> "$config_file"
-        echo "hdmi_group=2" >> "$config_file"
-        echo "hdmi_mode=82" >> "$config_file"  # 1920x1080 60Hz
-        echo "hdmi_drive=2" >> "$config_file"
-        log "Enabled HDMI output for external portable monitor"
-    fi
-
-    # Keep display auto-detection on so HDMI hotplug works alongside explicit DSI.
-    sed -i '/^display_auto_detect=/d' "$config_file"
-    echo "display_auto_detect=1" >> "$config_file"
-    log "Enabled display auto-detection for DSI + HDMI"
-    
-    # Disable power management features that can cause GPU instability
-    if ! grep -q "avoid_warnings=1" "$config_file"; then
-        echo "avoid_warnings=1" >> "$config_file"
-        echo "disable_overscan=1" >> "$config_file"
-        echo "max_usb_current=1" >> "$config_file"
-        log "Disabled power management warnings and overscan"
-    fi
+    log "Skipping direct boot config VC4/display edits; managed by scripts/install-boot-config.sh"
 }
 
 configure_kernel_parameters() {

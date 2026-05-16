@@ -27,6 +27,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
@@ -41,15 +42,6 @@ fi
 
 log "TSV6 Raspberry Pi Configuration"
 echo "=================================="
-
-CONFIG_FILE="/boot/firmware/config.txt"
-
-# Backup existing config
-if [ -f "$CONFIG_FILE" ]; then
-    BACKUP_FILE="$CONFIG_FILE.backup.$(date +%Y%m%d_%H%M%S)"
-    sudo cp "$CONFIG_FILE" "$BACKUP_FILE"
-    info "Config backup created: $BACKUP_FILE"
-fi
 
 # ============================================================================
 # raspi-config Settings
@@ -83,63 +75,11 @@ sudo raspi-config nonint do_boot_splash 1 2>/dev/null || warning "Boot splash co
 success "raspi-config settings applied"
 
 # ============================================================================
-# config.txt Configuration
+# Managed boot config
 # ============================================================================
-log "Configuring $CONFIG_FILE..."
-
-# Remove old TSV6 configuration block if exists
-sudo sed -i '/# ==* TSV6/,/^$/d' "$CONFIG_FILE" 2>/dev/null || true
-
-# Remove old gpu_mem settings
-sudo sed -i '/^gpu_mem=/d' "$CONFIG_FILE"
-
-# Remove any older DSI-only HDMI disable settings before writing the TSV6 block.
-sudo sed -i '/^hdmi_ignore_hotplug=/d' "$CONFIG_FILE" 2>/dev/null || true
-sudo sed -i '/^hdmi_ignore_composite=/d' "$CONFIG_FILE" 2>/dev/null || true
-sudo sed -i '/^hdmi_blanking=/d' "$CONFIG_FILE" 2>/dev/null || true
-
-# Add DSI display configuration with Pi 5 enhancements and HDMI enabled.
-sudo tee -a "$CONFIG_FILE" > /dev/null << 'EOL'
-
-# ====================================================================
-# TSV6 Waveshare 7-inch DSI LCD Configuration (Raspberry Pi 5)
-# Reference: https://www.waveshare.com/wiki/7inch_DSI_LCD
-# ====================================================================
-dtoverlay=vc4-kms-dsi-7inch
-dtparam=i2c_arm=on
-dtparam=spi=on
-dtparam=audio=on
-disable_overscan=1
-framebuffer_width=800
-framebuffer_height=480
-
-# HDMI output for external portable monitor.
-# DSI settings above remain unchanged; HDMI is enabled as a second framebuffer.
-hdmi_force_hotplug=1
-hdmi_group=2
-hdmi_mode=82
-hdmi_drive=2
-
-# Power management for stable operation
-dtparam=pwr_led_gpio=off
-dtparam=act_led_gpio=off
-
-# Pi 5 specific optimizations
-dtparam=pciex1_gen=3
-
-# GPU memory allocation (256MB for Pi 5 8GB)
-gpu_mem=256
-max_framebuffers=2
-
-# Contiguous Memory Allocator for GPU
-cma=256M@256M
-
-# I2C bus 2 for recycling verification sensor (VL53L1X on GPIO 4=SDA, GPIO 5=SCL)
-dtoverlay=i2c2-pi5
-
-EOL
-
-success "config.txt updated with DSI display settings"
+log "Installing managed Raspberry Pi boot config..."
+sudo bash "$SCRIPT_DIR/scripts/install-boot-config.sh"
+success "Managed boot config installed"
 
 # ============================================================================
 # Network Wait Configuration

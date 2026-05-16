@@ -24,6 +24,7 @@
 ################################################################################
 
 set -e  # Exit on any error
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -248,18 +249,8 @@ sudo raspi-config nonint do_boot_behaviour B2 2>/dev/null || warning "Boot behav
 info "Disabling boot splash screen..."
 sudo raspi-config nonint do_boot_splash 1 2>/dev/null || warning "Boot splash config may not be supported"
 
-# GPU memory split - manually configure (deprecated in raspi-config)
-info "Configuring GPU memory split for display operation (Pi 5 optimized)..."
-CONFIG_FILE="/boot/firmware/config.txt"
-if [ -f "$CONFIG_FILE" ]; then
-    # Remove old gpu_mem settings
-    sudo sed -i '/^gpu_mem=/d' "$CONFIG_FILE"
-    # Add gpu_mem=256 for Pi 5 DSI display (enhanced for 8GB RAM)
-    echo "gpu_mem=256" | sudo tee -a "$CONFIG_FILE" > /dev/null
-    info "GPU memory set to 256MB (Pi 5 optimized)"
-else
-    warning "Config file not found at $CONFIG_FILE"
-fi
+# GPU memory split is owned by the managed boot config installer.
+info "Skipping direct GPU memory edit; managed boot config owns config.txt"
 
 # Network wait at boot - manually configure (deprecated in raspi-config)
 info "Disabling network wait at boot..."
@@ -268,59 +259,10 @@ if [ -f /etc/systemd/system/dhcpcd.service.d/wait.conf ]; then
 fi
 sudo systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
 
-# Configure Waveshare DSI display with Pi 5 optimizations
-info "Configuring Waveshare 7-inch DSI display plus HDMI output (Pi 5 optimized)..."
-CONFIG_FILE="/boot/firmware/config.txt"
-
-# Backup existing config
-if [[ -f "$CONFIG_FILE" ]]; then
-    sudo cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d_%H%M%S)"
-fi
-
-# Remove any older DSI-only HDMI disable settings before writing the TSV6 block.
-sudo sed -i '/^hdmi_ignore_hotplug=/d' "$CONFIG_FILE" 2>/dev/null || true
-sudo sed -i '/^hdmi_ignore_composite=/d' "$CONFIG_FILE" 2>/dev/null || true
-sudo sed -i '/^hdmi_blanking=/d' "$CONFIG_FILE" 2>/dev/null || true
-
-# Add DSI display configuration with Pi 5 enhancements and HDMI enabled.
-sudo tee -a "$CONFIG_FILE" > /dev/null << 'EOL'
-
-# ====================================================================
-# TSV6 Waveshare 7-inch DSI LCD Configuration (Raspberry Pi 5)
-# Reference: https://www.waveshare.com/wiki/7inch_DSI_LCD
-# ====================================================================
-dtoverlay=vc4-kms-dsi-7inch
-dtparam=i2c_arm=on
-dtparam=spi=on
-dtparam=audio=on
-disable_overscan=1
-framebuffer_width=800
-framebuffer_height=480
-
-# HDMI output for external portable monitor.
-# DSI settings above remain unchanged; HDMI is enabled as a second framebuffer.
-hdmi_force_hotplug=1
-hdmi_group=2
-hdmi_mode=82
-hdmi_drive=2
-
-# Power management for stable operation
-dtparam=pwr_led_gpio=off
-dtparam=act_led_gpio=off
-
-# Additional display optimizations for Pi 5
-# Pi 5 specific: Enable PCIe Gen 3 for faster I/O
-dtparam=pciex1_gen=3
-
-# GPU memory allocation (256MB for Pi 5 8GB)
-gpu_mem=256
-max_framebuffers=2
-
-# Contiguous Memory Allocator for GPU
-cma=256M@256M
-EOL
-
-info "DSI display configuration and HDMI output added to $CONFIG_FILE (Pi 5 optimized)"
+# Configure managed boot display config with Pi 5 optimizations.
+info "Installing managed boot display config (Pi 5 optimized)..."
+sudo bash "$SCRIPT_DIR/scripts/install-boot-config.sh"
+info "Managed boot display config installed"
 
 # Set hostname with timestamp for uniqueness
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -533,9 +475,6 @@ sudo systemctl set-default multi-user.target
 
 # Install TSV6 X11 server service
 info "Installing tsv6-xorg@ service for minimal X11..."
-
-# Get the script directory to find the service file
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -f "$SCRIPT_DIR/tsv6-xorg@.service" ]; then
     sudo cp "$SCRIPT_DIR/tsv6-xorg@.service" /etc/systemd/system/
@@ -905,7 +844,7 @@ else
 fi
 
 info "Checking display configuration..."
-if grep -q "dtoverlay=vc4-kms-dsi-7inch" /boot/firmware/config.txt; then
+if grep -q "dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a" /boot/firmware/config.txt; then
     info "Waveshare DSI overlay configured"
 else
     warning "Waveshare DSI overlay not found in config.txt"

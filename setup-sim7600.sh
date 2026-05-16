@@ -94,16 +94,7 @@ configure_serial() {
         sed -i 's/console=ttyAMA0,[0-9]* //g' /boot/cmdline.txt
     fi
 
-    # Enable UART in config.txt
-    if ! grep -q "^enable_uart=1" /boot/config.txt 2>/dev/null && ! grep -q "^enable_uart=1" /boot/firmware/config.txt 2>/dev/null; then
-        log_info "Enabling UART..."
-        # Try both locations (older vs newer Pi OS)
-        if [ -f /boot/firmware/config.txt ]; then
-            echo "enable_uart=1" >> /boot/firmware/config.txt
-        else
-            echo "enable_uart=1" >> /boot/config.txt
-        fi
-    fi
+    log_info "Skipping direct boot config UART edits; config.txt is managed by scripts/install-boot-config.sh"
 
     log_success "Serial port configured"
 }

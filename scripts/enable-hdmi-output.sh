@@ -1,23 +1,15 @@
 #!/bin/bash
 # Enable HDMI output alongside the existing Waveshare DSI display.
 #
-# This keeps the current DSI configuration intact. It removes old DSI-only HDMI
-# disable flags, adds a small TSV6 HDMI boot block, and tries to turn on a
-# connected HDMI monitor in the running X11 session.
+# Boot config writes are delegated to scripts/install-boot-config.sh. This
+# script can still turn on a connected HDMI monitor in the running X11 session.
 
 set -euo pipefail
 
 log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
 warn() { echo "[WARNING] $*" >&2; }
 
-if [ -f /boot/firmware/config.txt ]; then
-    CONFIG_FILE="/boot/firmware/config.txt"
-elif [ -f /boot/config.txt ]; then
-    CONFIG_FILE="/boot/config.txt"
-else
-    echo "Could not find /boot/firmware/config.txt or /boot/config.txt" >&2
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "$EUID" -eq 0 ]; then
     SUDO=""
@@ -25,38 +17,8 @@ else
     SUDO="sudo"
 fi
 
-log "Using boot config: $CONFIG_FILE"
-$SUDO cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d_%H%M%S)"
-
-log "Removing DSI-only HDMI disable flags"
-$SUDO sed -i '/^hdmi_ignore_hotplug=/d' "$CONFIG_FILE"
-$SUDO sed -i '/^hdmi_ignore_composite=/d' "$CONFIG_FILE"
-$SUDO sed -i '/^hdmi_blanking=/d' "$CONFIG_FILE"
-$SUDO sed -i '/^display_auto_detect=/d' "$CONFIG_FILE"
-
-log "Refreshing TSV6 HDMI enable block"
-$SUDO sed -i '/# BEGIN TSV6 HDMI Output Configuration/,/# END TSV6 HDMI Output Configuration/d' "$CONFIG_FILE"
-
-$SUDO tee -a "$CONFIG_FILE" > /dev/null <<'EOL'
-
-# BEGIN TSV6 HDMI Output Configuration
-# ====================================================================
-# TSV6 HDMI Output Configuration
-# Enables an external portable monitor alongside the existing DSI display.
-# DSI overlay, framebuffer, and portrait-mode settings are intentionally
-# left unchanged.
-# ====================================================================
-display_auto_detect=1
-hdmi_force_hotplug=1
-hdmi_group=2
-hdmi_mode=82
-hdmi_drive=2
-max_framebuffers=2
-# END TSV6 HDMI Output Configuration
-
-EOL
-
-log "Boot HDMI settings applied"
+log "Installing managed boot config with HDMI enabled"
+$SUDO bash "$SCRIPT_DIR/install-boot-config.sh"
 
 if command -v xrandr >/dev/null 2>&1; then
     export DISPLAY="${DISPLAY:-:0}"
